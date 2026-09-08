@@ -1,0 +1,12 @@
+---
+name: openspec-runner-coordinate
+description: Coordinate explicitly selected OpenSpec task batches with openspec-runner, inspect sessions and reports, and integrate reviewed results.
+---
+
+Run `openspec-runner status <change> --json` and show ready tasks with their assignments. Launch exactly the batch selected by the user using `openspec-runner launch <change> --tasks 2.1,2.2 --dry-run --json`, then the same command without --dry-run. Do not start a continuous scheduler. If session metadata is unsupported, obtain the intended default model and use --default-model, optionally --default-effort.
+
+Inside Herdr, the runner creates one workspace per task without moving focus. Outside Herdr, present the returned commands for separate user terminals. Do not substitute an unrequested background launcher. Use `attach` for existing sessions. A timeout or blocked/ambiguous launch is not permission to resubmit or start another session. Inspect saved pane identifiers; after restart, use the exact saved Codex resume command. A worker's structured report, not Herdr activity indicators, establishes a completed result.
+
+Review the report, verification evidence, commit, and worktree before integrating the user's selected results with `integrate <change> --tasks ...`. Integration changes checkboxes only in the dedicated integration worktree. Stop at conflicts or failed checks; inspect and resolve before `integrate --continue`, or explicitly abort with `integrate --abort`. Dependents remain blocked until integration completes.
+
+A worker reporting blocked or failed has stopped work. Resume an existing blocked session only to inspect it; request a new attempt with `retry` when the user wants another implementation attempt. Keep previous branches for inspection. Use `cleanup --tasks ...` only for explicitly selected integrated worktrees. Final integration-branch delivery and OpenSpec archival require explicit user action.

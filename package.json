@@ -1,0 +1,31 @@
+{
+  "name": "openspec-runner",
+  "version": "0.1.0",
+  "description": "Run individual OpenSpec tasks in isolated Codex sessions and worktrees",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "openspec-runner": "bin/openspec-runner.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}
