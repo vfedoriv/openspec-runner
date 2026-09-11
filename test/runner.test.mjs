@@ -191,7 +191,9 @@ test("model overrides and inherited effort follow the captured model", () => {
     { model: "other", reasoningEffort: "low" },
   );
   assert.throws(() => resolveSettings(a), /default-model/);
-  assert.ok(codexArgs(settings, "/a b", "thread-1").includes("thread-1"));
+  const args = codexArgs(settings, "/a b", "thread-1", "/git common");
+  assert.ok(args.includes("thread-1"));
+  assert.equal(args[args.indexOf("--add-dir") + 1], "/git common");
 });
 test("version-tested SQLite metadata reads current calling thread after model switch", async (t) => {
   const f = fixture(t);
@@ -375,6 +377,30 @@ test("repository lock prevents another coordinator from mutating state", (t) => 
     assert.throws(() => r.launch("demo", ["1.1"], settings), /locked/),
   );
 });
+test("repository lock distinguishes creation errors and preserves a replacement lock", (t) => {
+  const { runner: r } = fixture(t),
+    lockFile = join(r.repo.stateDir, "lock.json");
+  mkdirSync(r.repo.stateDir, { recursive: true });
+  chmodSync(r.repo.stateDir, 0o500);
+  try {
+    let error;
+    try {
+      locked(r.repo.stateDir, () => {});
+    } catch (caught) {
+      error = caught;
+    }
+    assert.ok(error);
+    assert.match(error.message, /Cannot create runner lock/);
+    assert.doesNotMatch(error.message, /Repository is locked/);
+    assert.ok(["EACCES", "EPERM"].includes(error.cause?.code));
+  } finally {
+    chmodSync(r.repo.stateDir, 0o700);
+  }
+  const replacement = JSON.stringify({ token: "replacement-owner" });
+  locked(r.repo.stateDir, () => writeFileSync(lockFile, replacement));
+  assert.equal(readFileSync(lockFile, "utf8"), replacement);
+  rmSync(lockFile);
+});
 test("Worktrunk uses explicit base and hooks disabled; partial creation reconciles before fallback", (t) => {
   const { root, bin, dir } = fixture(t);
   executable(
@@ -406,6 +432,10 @@ test("Herdr preserves focus, forwards Codex argv and records returned identifier
   assert.ok(calls[0].includes("--no-focus"));
   assert.ok(calls[1].includes(a.path));
   assert.ok(calls[1].includes("model-a"));
+  assert.equal(
+    calls[1][calls[1].indexOf("--add-dir") + 1],
+    r.repo.common,
+  );
   assert.equal(calls[2][1], "prompt");
   r.attach("demo", "1.1");
   assert.match(readFileSync(log, "utf8"), /focus/);
@@ -423,6 +453,46 @@ test("blocked Herdr startup is ambiguous and cannot automatically relaunch or re
   assert.equal(a.terminal.phase, "starting");
   assert.throws(() => r.launch("demo", ["1.1"], settings), /already has/);
   assert.doesNotMatch(readFileSync(log, "utf8"), /prompt/);
+});
+test("Herdr prompt can immediately begin without racing the coordinator lock", (t) => {
+  const { runner: r, bin, dir } = fixture(t, { terminal: "auto" });
+  process.env.HERDR_ENV = "1";
+  const workspaceFile = join(dir, "worker-path"),
+    cli = join(process.cwd(), "bin/openspec-runner.js");
+  executable(
+    join(bin, "herdr"),
+    `const fs=require('fs'),{execFileSync}=require('child_process'),a=process.argv.slice(2);if(a[0]==='workspace'){fs.writeFileSync(${JSON.stringify(workspaceFile)},a[a.indexOf('--cwd')+1]);console.log(JSON.stringify({result:{workspace:{workspace_id:'w1'},root_pane:{pane_id:'w1:p1'}}}))}else if(a[1]==='prompt'){const m=a[3].match(/begin (\\S+) (\\S+) --attempt (\\S+)/);execFileSync(process.execPath,[${JSON.stringify(cli)},'begin',m[1],m[2],'--attempt',m[3],'--session','immediate-session'],{cwd:fs.readFileSync(${JSON.stringify(workspaceFile)},'utf8'),stdio:'pipe'});console.log(JSON.stringify({result:{ok:true}}))}else console.log(JSON.stringify({result:{ok:true}}));`,
+  );
+  const a = r.launch("demo", ["1.1"], settings)[0],
+    saved = r.read("demo").attempts[0];
+  assert.equal(a.phase, "running");
+  assert.equal(saved.phase, "running");
+  assert.equal(saved.session, "immediate-session");
+  assert.equal(saved.terminal.phase, "submitted");
+});
+test("Herdr persists partial creation and prompt-submission failures", (t) => {
+  const partial = fixture(t, { terminal: "auto" });
+  process.env.HERDR_ENV = "1";
+  executable(
+    join(partial.bin, "herdr"),
+    `console.log(JSON.stringify({result:{workspace:{workspace_id:'partial-workspace'},root_pane:{}}}));`,
+  );
+  const created = partial.runner.launch("demo", ["1.1"], settings)[0];
+  assert.equal(created.terminal.workspace, "partial-workspace");
+  assert.equal(created.terminal.phase, "creating");
+  assert.match(created.error, /Unsupported Herdr creation response/);
+
+  const submission = fixture(t, { terminal: "auto" });
+  process.env.HERDR_ENV = "1";
+  executable(
+    join(submission.bin, "herdr"),
+    `const a=process.argv.slice(2);if(a[0]==='workspace')console.log(JSON.stringify({result:{workspace:{workspace_id:'w2'},root_pane:{pane_id:'w2:p2',terminal_id:'t2'}}}));else if(a[1]==='prompt')process.exit(9);else console.log(JSON.stringify({result:{ok:true}}));`,
+  );
+  const prompted = submission.runner.launch("demo", ["1.1"], settings)[0];
+  assert.equal(prompted.terminal.workspace, "w2");
+  assert.equal(prompted.terminal.pane, "w2:p2");
+  assert.equal(prompted.terminal.phase, "submitting");
+  assert.match(prompted.error, /herdr agent/);
 });
 test("installer owns exactly three skills and preserves existing OpenSpec skills/config", (t) => {
   const { root } = fixture(t);
@@ -483,6 +553,8 @@ test("manual resume keeps resolved model and effort after caller switches models
   assert.match(attached.command, /'resume' 'saved-session'/);
   assert.match(attached.command, /'model-a'/);
   assert.match(attached.command, /high/);
+  assert.match(attached.command, /'--add-dir'/);
+  assert.match(attached.command, new RegExp(r.repo.common.replaceAll("/", "\\/")));
 });
 test("uncommitted planning files and invalid selected base cannot launch", (t) => {
   const { runner: r, root } = fixture(t);

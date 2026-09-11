@@ -105,6 +105,20 @@ export class Runner {
   lock<T>(fn: () => T) {
     return locked(this.repo.stateDir, fn);
   }
+  private updateAttempt(
+    change: string,
+    id: string,
+    update: (attempt: TaskAttempt) => void,
+  ) {
+    return this.lock(() => {
+      const state = this.requireState(change),
+        current = state.attempts.find((attempt) => attempt.id === id);
+      if (!current) throw new Error(`Attempt is no longer registered: ${id}`);
+      update(current);
+      this.save(state);
+      return current;
+    });
+  }
   latest(s: State, id: string) {
     return s.attempts.filter((a) => a.task === id).at(-1);
   }
@@ -244,7 +258,7 @@ export class Runner {
     retry = false,
     defaults = new Map<string, string>(),
   ) {
-    return this.lock(() => {
+    const prepared = this.lock(() => {
       const preview = this.preview(change, ids, settings, base, retry),
         p = loadPlan(this.repo.root, change);
       let s = this.read(change);
@@ -271,18 +285,6 @@ export class Runner {
         this.save(s);
       }
       const state = s;
-      // Reconcile an interrupted initial integration-worktree creation before spawning tasks.
-      state.integration = createWorktree(
-        this.repo.root,
-        { ...state.integration, base: state.head },
-        "git",
-      );
-      this.save(state);
-      if (
-        !clean(state.integration.path) ||
-        git(state.integration.path, "rev-parse", "HEAD") !== state.head
-      )
-        throw new Error("Integration worktree differs from recorded head");
       const batch: TaskAttempt[] = preview.tasks.map((item) => {
         const id = randomUUID(),
           branch = `openspec-runner/${change}/${item.task}/${id}`;
@@ -307,47 +309,91 @@ export class Runner {
       });
       state.attempts.push(...batch);
       this.save(state);
-      for (const a of batch) {
-        try {
-          Object.assign(
-            a,
-            createWorktree(this.repo.root, a, p.config.worktrees),
+      return {
+        preview,
+        plan: p,
+        batch,
+        integration: { ...state.integration, base: state.head },
+      };
+    });
+
+    // Worktree and terminal commands can start processes that immediately acquire
+    // the repository lock, so all external preparation happens outside it.
+    const integration = createWorktree(
+      this.repo.root,
+      prepared.integration,
+      "git",
+    );
+    this.lock(() => {
+      const state = this.requireState(change);
+      state.integration = integration;
+      this.save(state);
+      if (
+        !clean(state.integration.path) ||
+        git(state.integration.path, "rev-parse", "HEAD") !== state.head
+      )
+        throw new Error("Integration worktree differs from recorded head");
+    });
+
+    for (const registered of prepared.batch) {
+      let attempt = registered;
+      try {
+        const workspace = createWorktree(
+          this.repo.root,
+          attempt,
+          prepared.plan.config.worktrees,
+        );
+        attempt = this.updateAttempt(change, attempt.id, (current) =>
+          Object.assign(current, workspace),
+        );
+        for (const command of prepared.plan.config.setup)
+          run(command[0], command.slice(1), attempt.path);
+        attempt = this.updateAttempt(change, attempt.id, (current) => {
+          current.setupDone = true;
+        });
+        if (prepared.preview.terminal === "manual") {
+          attempt = this.updateAttempt(change, attempt.id, (current) => {
+            current.phase = "manual";
+          });
+        } else {
+          attempt = this.updateAttempt(change, attempt.id, (current) => {
+            current.phase = "launching";
+          });
+          const terminal = { ...attempt.terminal };
+          startTerminal(
+            this.repo.root,
+            attempt.path,
+            this.repo.common,
+            attempt.id,
+            attempt.settings,
+            this.prompt(change, attempt),
+            terminal,
+            () => {
+              attempt = this.updateAttempt(change, attempt.id, (current) => {
+                current.terminal = { ...terminal };
+              });
+            },
           );
-          this.save(state);
-          for (const command of p.config.setup)
-            run(command[0], command.slice(1), a.path);
-          a.setupDone = true;
-          this.save(state);
-          if (preview.terminal === "manual") a.phase = "manual";
-          else {
-            a.phase = "launching";
-            this.save(state);
-            startTerminal(
-              this.repo.root,
-              a.path,
-              a.id,
-              a.settings,
-              this.prompt(change, a),
-              a.terminal,
-              () => this.save(state),
-            );
-          }
-          this.save(state);
-        } catch (e: any) {
-          a.error = e.message;
-          if (!a.terminal.phase) a.phase = "failed";
-          this.save(state);
         }
+      } catch (e: any) {
+        attempt = this.updateAttempt(change, attempt.id, (current) => {
+          current.error = e.message;
+          if (!current.terminal.phase) current.phase = "failed";
+        });
       }
-      return batch.map((a) => ({
+    }
+    const state = this.requireState(change);
+    return prepared.batch.map(({ id }) => {
+      const a = state.attempts.find((attempt) => attempt.id === id)!;
+      return {
         ...a,
         command: this.command(change, a),
         prompt: this.prompt(change, a),
-      }));
+      };
     });
   }
   recover(change: string, task: string) {
-    return this.lock(() => {
+    const prepared = this.lock(() => {
       const s = this.requireState(change),
         a = this.latest(s, task),
         p = loadPlan(this.repo.root, change);
@@ -362,33 +408,53 @@ export class Runner {
         throw new Error(
           "This attempt cannot safely replay preparation; use attach to inspect its existing session",
         );
-      Object.assign(a, createWorktree(this.repo.root, a, p.config.worktrees));
-      this.save(s);
-      if (!a.setupDone) {
-        // Explicit recovery may rerun setup; setup commands should be idempotent.
-        for (const command of p.config.setup)
-          run(command[0], command.slice(1), a.path);
-        a.setupDone = true;
-        this.save(s);
-      }
-      if (p.config.terminal === "manual" || process.env.HERDR_ENV !== "1")
-        a.phase = "manual";
-      else {
-        a.phase = "launching";
-        this.save(s);
-        startTerminal(
-          this.repo.root,
-          a.path,
-          a.id,
-          a.settings,
-          this.prompt(change, a),
-          a.terminal,
-          () => this.save(s),
-        );
-      }
-      this.save(s);
-      return { ...a, command: this.command(change, a) };
+      return { attempt: a, plan: p };
     });
+    let attempt = prepared.attempt;
+    const workspace = createWorktree(
+      this.repo.root,
+      attempt,
+      prepared.plan.config.worktrees,
+    );
+    attempt = this.updateAttempt(change, attempt.id, (current) =>
+      Object.assign(current, workspace),
+    );
+    if (!attempt.setupDone) {
+      // Explicit recovery may rerun setup; setup commands should be idempotent.
+      for (const command of prepared.plan.config.setup)
+        run(command[0], command.slice(1), attempt.path);
+      attempt = this.updateAttempt(change, attempt.id, (current) => {
+        current.setupDone = true;
+      });
+    }
+    if (
+      prepared.plan.config.terminal === "manual" ||
+      process.env.HERDR_ENV !== "1"
+    ) {
+      attempt = this.updateAttempt(change, attempt.id, (current) => {
+        current.phase = "manual";
+      });
+    } else {
+      attempt = this.updateAttempt(change, attempt.id, (current) => {
+        current.phase = "launching";
+      });
+      const terminal = { ...attempt.terminal };
+      startTerminal(
+        this.repo.root,
+        attempt.path,
+        this.repo.common,
+        attempt.id,
+        attempt.settings,
+        this.prompt(change, attempt),
+        terminal,
+        () => {
+          attempt = this.updateAttempt(change, attempt.id, (current) => {
+            current.terminal = { ...terminal };
+          });
+        },
+      );
+    }
+    return { ...attempt, command: this.command(change, attempt) };
   }
   prompt(change: string, a: TaskAttempt) {
     return `Use $openspec-runner-implement. Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nFirst run: openspec-runner begin ${change} ${a.task} --attempt ${a.id}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run openspec-runner report ${change} ${a.task} --attempt ${a.id} --file <report.json>. The report JSON must contain attempt, task, session (CODEX_THREAD_ID), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write report.json outside the worktree. Stop after reporting.`;
@@ -396,7 +462,7 @@ export class Runner {
   command(change: string, a: TaskAttempt) {
     return shellCommand([
       "codex",
-      ...codexArgs(a.settings, a.path, a.session),
+      ...codexArgs(a.settings, a.path, a.session, this.repo.common),
       ...(a.session ? [] : [this.prompt(change, a)]),
     ]);
   }

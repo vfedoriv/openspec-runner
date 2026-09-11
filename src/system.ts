@@ -4,7 +4,6 @@ import {
   readFileSync,
   writeFileSync,
   renameSync,
-  existsSync,
   unlinkSync,
   openSync,
   closeSync,
@@ -65,23 +64,29 @@ export function repository(cwd = process.cwd()) {
 }
 export function locked<T>(dir: string, fn: () => T): T {
   mkdirSync(dir, { recursive: true });
-  const file = resolve(dir, "lock.json");
+  const file = resolve(dir, "lock.json"),
+    token = JSON.stringify({
+      pid: process.pid,
+      host: hostname(),
+      token: randomUUID(),
+    });
   try {
-    writeFileSync(
-      file,
-      JSON.stringify({ pid: process.pid, host: hostname() }),
-      { flag: "wx", mode: 0o600 },
-    );
-  } catch {
+    writeFileSync(file, token, { flag: "wx", mode: 0o600 });
+  } catch (error: any) {
     // Stale-lock removal is explicit: unlinking automatically races another contender.
+    if (error?.code === "EEXIST")
+      throw new Error(
+        `Repository is locked: ${file}. If its owner is gone, remove the lock explicitly.`,
+      );
     throw new Error(
-      `Repository is locked: ${file}. If its owner is gone, remove the lock explicitly.`,
+      `Cannot create runner lock at ${file}: ${error?.code ?? error?.message}`,
+      { cause: error },
     );
   }
   try {
     return fn();
   } finally {
-    if (existsSync(file)) unlinkSync(file);
+    if (attempt(() => readFileSync(file, "utf8")) === token) unlinkSync(file);
   }
 }
 export const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;

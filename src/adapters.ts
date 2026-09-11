@@ -129,6 +129,7 @@ function herdr(root: string, args: string[]) {
 export function startTerminal(
   root: string,
   path: string,
+  commonGitDir: string,
   label: string,
   settings: Settings,
   prompt: string,
@@ -155,6 +156,7 @@ export function startTerminal(
   terminal.workspace = result.workspace?.workspace_id;
   terminal.pane = result.root_pane?.pane_id;
   terminal.terminal = result.root_pane?.terminal_id;
+  save();
   if (!terminal.workspace || !terminal.pane)
     throw new Error(
       "Unsupported Herdr creation response; inspect workspace list before recovery",
@@ -171,7 +173,7 @@ export function startTerminal(
     "--pane",
     terminal.pane,
     "--",
-    ...codexArgs(settings, path),
+    ...codexArgs(settings, path, undefined, commonGitDir),
   ]);
   terminal.phase = "submitting";
   save();

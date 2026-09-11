@@ -61,11 +61,13 @@ export function codexArgs(
   settings: Settings,
   cwd: string,
   session?: string,
+  commonGitDir?: string,
 ): string[] {
   return [
     ...(session ? ["resume", session] : []),
     "-C",
     cwd,
+    ...(commonGitDir ? ["--add-dir", commonGitDir] : []),
     "-m",
     settings.model,
     ...(settings.reasoningEffort
