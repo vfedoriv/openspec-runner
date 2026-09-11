@@ -234,17 +234,25 @@ export function assertCommitted(root: string, plan: Plan, ref = "HEAD") {
   if (git(root, "status", "--porcelain", "--", ...plan.files))
     throw new Error("Planning artifacts must be committed");
 }
+function openspecJson<T>(root: string, args: string[]): T {
+  const command = `openspec ${args.join(" ")}`,
+    output = run("openspec", args, root);
+  if (!output) throw new Error(`${command} returned empty stdout`);
+  try {
+    return JSON.parse(output) as T;
+  } catch (e: any) {
+    throw new Error(`${command} returned invalid JSON: ${e.message}`);
+  }
+}
 export function readiness(root: string, change: string) {
-  const status = JSON.parse(
-    run("openspec", ["status", "--change", change, "--json"], root),
-  );
-  const instructions = JSON.parse(
-    run(
-      "openspec",
-      ["instructions", "apply", "--change", change, "--json"],
+  const status = openspecJson(
       root,
+      ["status", "--change", change, "--json"],
     ),
-  );
+    instructions = openspecJson<any>(
+      root,
+      ["instructions", "apply", "--change", change, "--json"],
+    );
   if (!["ready", "all_done"].includes(instructions.state))
     throw new Error(
       `OpenSpec is not ready: ${instructions.instruction ?? instructions.state}`,

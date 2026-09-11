@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Runner } from "../dist/runner.js";
-import { tasksFrom, assignmentsFrom, loadPlan } from "../dist/plan.js";
+import {
+  tasksFrom,
+  assignmentsFrom,
+  loadPlan,
+  readiness,
+} from "../dist/plan.js";
 import {
   resolveSettings,
   sessionSettings,
@@ -121,6 +126,28 @@ test("task parser ignores fences and rejects unnumbered/duplicate checkboxes", (
   );
   assert.throws(() => tasksFrom("- [ ] nope"), /numbered/);
   assert.throws(() => tasksFrom("- [ ] 1.1 A\n- [ ] 1.1 B"), /Duplicate/);
+});
+test("OpenSpec readiness identifies empty and malformed JSON output", (t) => {
+  const { root, bin } = fixture(t),
+    openspec = join(bin, "openspec");
+  executable(openspec, "");
+  assert.throws(
+    () => readiness(root, "demo"),
+    /openspec status --change demo --json returned empty stdout/,
+  );
+  executable(openspec, "console.log('not-json');");
+  assert.throws(
+    () => readiness(root, "demo"),
+    /openspec status --change demo --json returned invalid JSON/,
+  );
+  executable(
+    openspec,
+    `console.log(process.argv[2] === 'status' ? JSON.stringify({}) : 'not-json');`,
+  );
+  assert.throws(
+    () => readiness(root, "demo"),
+    /openspec instructions apply --change demo --json returned invalid JSON/,
+  );
 });
 test("manifest validates coverage, dependencies, cycles and conservative parallel default", () => {
   const tasks = tasksFrom("- [ ] 1.1 A\n- [ ] 1.2 B");
