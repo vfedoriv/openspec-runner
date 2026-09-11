@@ -144,12 +144,12 @@ package. From the `openspec-runner` checkout:
 
 ```sh
 cd /path/to/openspec-runner
-npm ci
-npm run build
-npm link
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm add --global .
 ```
 
-`npm link` exposes the `openspec-runner` executable through your npm global
+`pnpm add --global .` exposes the `openspec-runner` executable through your pnpm global
 binary directory. Confirm that directory is on `PATH`:
 
 ```sh
@@ -463,6 +463,16 @@ verifyIntegration:
 Commands are argument arrays, not shell strings. Keep `setup` idempotent because
 recovery can explicitly rerun unfinished setup. Integration checks must not leave
 unexplained unstaged or untracked files.
+
+For pnpm-managed target projects, use a frozen lockfile while allowing pnpm to
+reuse its shared content-addressable store across task worktrees:
+
+```yaml
+setup:
+  - ["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]
+verifyIntegration:
+  - ["pnpm", "test"]
+```
 
 ### Per-change assignments: `execution.yaml`
 
@@ -790,10 +800,10 @@ explicit retry.
 From this repository:
 
 ```sh
-npm ci
-npm run build
-npm test
-npm pack --dry-run
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm test
+pnpm pack --dry-run
 ```
 
 Tests use temporary repositories and fake Codex, Worktrunk, and Herdr executables.
