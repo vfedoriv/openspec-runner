@@ -16,10 +16,11 @@
   "engines": {
     "node": ">=22.13"
   },
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test test/*.test.mjs",
-    "prepack": "npm run build"
+    "test": "pnpm run build && node --test test/*.test.mjs",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
     "yaml": "^2.8.3"
