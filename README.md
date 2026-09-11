@@ -149,23 +149,23 @@ pnpm run build
 pnpm add --global .
 ```
 
-`pnpm add --global .` exposes the `openspec-runner` executable through your pnpm global
-binary directory. Confirm that directory is on `PATH`:
+`pnpm add --global .` exposes the `openspec-runner` executable through your pnpm
+global binary directory. Confirm that directory is on `PATH`:
 
 ```sh
 openspec-runner --help
 ```
 
-If you do not want a global link and the target is an npm project, install from
-the local checkout instead:
+If you do not want a global install, add the local checkout to the target project
+instead:
 
 ```sh
 cd /path/to/target-project
-npm install --save-dev /path/to/openspec-runner
-npx openspec-runner --help
+pnpm add --save-dev /path/to/openspec-runner
+pnpm exec openspec-runner --help
 ```
 
-Use `npx openspec-runner` in place of `openspec-runner` below when using this
+Use `pnpm exec openspec-runner` in place of `openspec-runner` below when using this
 local dependency option.
 
 ### 2. Initialize the target project
@@ -380,7 +380,7 @@ A completed report has this shape:
   "outcome": "completed",
   "commit": "full-HEAD-commit-SHA",
   "summary": "Added token verification and covered rejection paths",
-  "verification": ["npm test -- token-verifier: 8 tests passed"]
+  "verification": ["pnpm test -- token-verifier: 8 tests passed"]
 }
 ```
 
@@ -454,25 +454,15 @@ maxParallel: 3
 worktrees: auto
 terminal: auto
 setup:
-  - ["npm", "ci"]
+  - ["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]
 verifyIntegration:
-  - ["npm", "test"]
-  - ["npm", "run", "build"]
+  - ["pnpm", "test"]
+  - ["pnpm", "run", "build"]
 ```
 
 Commands are argument arrays, not shell strings. Keep `setup` idempotent because
 recovery can explicitly rerun unfinished setup. Integration checks must not leave
 unexplained unstaged or untracked files.
-
-For pnpm-managed target projects, use a frozen lockfile while allowing pnpm to
-reuse its shared content-addressable store across task worktrees:
-
-```yaml
-setup:
-  - ["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]
-verifyIntegration:
-  - ["pnpm", "test"]
-```
 
 ### Per-change assignments: `execution.yaml`
 
