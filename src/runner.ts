@@ -7,6 +7,11 @@ import {
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { inspectCleanup, removeInspectedWorktree, type CleanupResult, type CleanupOptions } from "./cleanup.js";
+import { closeInspectedTerminal } from "./terminal-cleanup.js";
+import { superviseWorker } from "./worker.js";
+import { processStart } from "./processes.js";
 import {
   atomic,
   json,
@@ -65,6 +70,8 @@ export interface TaskAttempt extends Workspace {
   error?: string;
   cleaned?: boolean;
   setupDone?: boolean;
+  gitDir?: string;
+  worker?: { token: string; pid?: number; processStart?: string; exitedAt?: string; exitCode?: number | null; log: string };
 }
 interface Transaction {
   tasks: string[];
@@ -82,6 +89,10 @@ export interface State {
   baseline: string[];
   attempts: TaskAttempt[];
   transaction?: Transaction;
+  cleanupBatch?: string[];
+  planTasks?: string[];
+  completion?: { tasks: string[]; fingerprint: string; head: string };
+  cleanupResults?: CleanupResult[];
 }
 const active = (a: TaskAttempt) =>
   ["preparing", "manual", "launching", "running"].includes(a.phase);
@@ -147,6 +158,7 @@ export class Runner {
       integration: s?.integration,
       head: s?.head,
       transaction: s?.transaction,
+      cleanup: s?.cleanupResults,
       tasks: p.tasks.map((t) => ({
         ...t,
         assignment: p.assignments[t.id],
@@ -285,6 +297,8 @@ export class Runner {
         this.save(s);
       }
       const state = s;
+      delete state.completion;
+      state.planTasks = p.tasks.map(t => t.id);
       const batch: TaskAttempt[] = preview.tasks.map((item) => {
         const id = randomUUID(),
           branch = `openspec-runner/${change}/${item.task}/${id}`;
@@ -344,7 +358,7 @@ export class Runner {
           prepared.plan.config.worktrees,
         );
         attempt = this.updateAttempt(change, attempt.id, (current) =>
-          Object.assign(current, workspace),
+          Object.assign(current, workspace, { gitDir: git(workspace.path, "rev-parse", "--absolute-git-dir") }),
         );
         for (const command of prepared.plan.config.setup)
           run(command[0], command.slice(1), attempt.path);
@@ -373,6 +387,7 @@ export class Runner {
                 current.terminal = { ...terminal };
               });
             },
+            this.workerCommand(change, attempt),
           );
         }
       } catch (e: any) {
@@ -417,7 +432,7 @@ export class Runner {
       prepared.plan.config.worktrees,
     );
     attempt = this.updateAttempt(change, attempt.id, (current) =>
-      Object.assign(current, workspace),
+      Object.assign(current, workspace, { gitDir: git(workspace.path, "rev-parse", "--absolute-git-dir") }),
     );
     if (!attempt.setupDone) {
       // Explicit recovery may rerun setup; setup commands should be idempotent.
@@ -452,6 +467,7 @@ export class Runner {
             current.terminal = { ...terminal };
           });
         },
+        this.workerCommand(change, attempt),
       );
     }
     return { ...attempt, command: this.command(change, attempt) };
@@ -460,11 +476,64 @@ export class Runner {
     return `Use $openspec-runner-implement. Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nFirst run: openspec-runner begin ${change} ${a.task} --attempt ${a.id}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run openspec-runner report ${change} ${a.task} --attempt ${a.id} --file <report.json>. The report JSON must contain attempt, task, session (CODEX_THREAD_ID), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write report.json outside the worktree. Stop after reporting.`;
   }
   command(change: string, a: TaskAttempt) {
+    if (!a.session) return this.workerCommand(change, a);
     return shellCommand([
       "codex",
       ...codexArgs(a.settings, a.path, a.session, this.repo.common),
       ...(a.session ? [] : [this.prompt(change, a)]),
     ]);
+  }
+  workerCommand(change: string, a: TaskAttempt) {
+    return shellCommand([process.execPath, fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url)),
+      "worker", change, a.task, "--attempt", a.id]);
+  }
+  async worker(change: string, task: string, id: string) {
+    const prepared = this.lock(() => {
+      const s = this.requireState(change), a = this.latest(s, task);
+      if (!a || a.id !== id || !a.setupDone)
+        throw new Error("Worker attempt is not ready; inspect before retrying");
+      if (a.worker) {
+        if (a.worker.exitedAt) throw new Error("Worker already exited; inspect its saved report and log");
+        if (a.worker.pid && (!a.worker.processStart || processStart(a.worker.pid) === a.worker.processStart))
+          throw new Error("Worker is still running or its process identity is uncertain");
+        a.worker.exitedAt = new Date().toISOString();
+        a.worker.exitCode = null;
+        if (!a.report) {
+          a.phase = "failed";
+          a.error = "Worker supervisor disappeared without an accepted report; inspect the log and explicitly retry";
+        }
+        this.save(s);
+        return { a, recovered: true };
+      }
+      if (!active(a) || a.session)
+        throw new Error("Worker attempt is not ready; inspect before retrying");
+      a.worker = { token: randomUUID(), log: resolve(this.repo.stateDir, "logs", `${a.id}.log`) };
+      this.save(s);
+      return { a, recovered: false };
+    });
+    const a = prepared.a;
+    if (prepared.recovered)
+      return { attempt: id, exited: true, recovered: true, exitCode: null, log: a.worker!.log };
+    let exitCode: number | null = null;
+    let failure: unknown;
+    try {
+      exitCode = await superviseWorker(a, this.repo.common, this.prompt(change, a), pid => {
+        this.updateAttempt(change, id, current => {
+          current.worker!.pid = pid;
+          current.worker!.processStart = processStart(pid);
+        });
+      });
+    } catch (error) { failure = error; }
+    this.updateAttempt(change, id, current => {
+      current.worker!.exitedAt = new Date().toISOString();
+      current.worker!.exitCode = exitCode;
+      if (!current.report) {
+        current.phase = "failed";
+        current.error = "Codex exited without an accepted final report; inspect the log and explicitly retry";
+      }
+    });
+    if (failure) throw failure;
+    return { attempt: id, exited: true, exitCode, log: a.worker!.log };
   }
   begin(
     change: string,
@@ -496,7 +565,7 @@ export class Runner {
       if (
         !a ||
         a.id !== id ||
-        !["running", "blocked", "completed"].includes(a.phase)
+        !["running", "blocked", "completed", "failed"].includes(a.phase)
       )
         throw new Error("Attempt must register with begin before reporting");
       if (
@@ -570,6 +639,11 @@ export class Runner {
     const s = this.requireState(change),
       a = this.latest(s, task);
     if (!a) throw new Error("No task attempt");
+    if (a.cleaned || a.worker?.exitedAt || a.terminal.closed || a.report) {
+      return { attempt: a.id, session: a.session, terminal: a.terminal, branch: a.branch,
+        path: existsSync(a.path) ? a.path : undefined, log: a.worker?.log,
+        recovery: "Worker finished. Inspect the retained Codex session/log and branch; use retry for further implementation. Do not resume in a removed worktree." };
+    }
     if (a.terminal.pane && process.env.HERDR_ENV === "1") {
       const result = attempt(() => attachTerminal(this.repo.root, a.terminal));
       if (result) return { result, attempt: a.id };
@@ -588,7 +662,7 @@ export class Runner {
     };
   }
   integrate(change: string, ids: string[], mode?: "continue" | "abort") {
-    return this.lock(() => {
+    const result = this.lock(() => {
       const s = this.requireState(change),
         path = s.integration.path;
       if (mode === "abort") {
@@ -601,19 +675,22 @@ export class Runner {
           git(path, "merge", "--abort");
         else git(path, "reset", "--hard", s.transaction.before);
         delete s.transaction;
+        delete s.cleanupBatch;
         this.save(s);
         return { aborted: true, head: s.head };
       }
       const p = loadPlan(this.repo.root, change);
       this.drift(p, s);
       if (mode === "continue") {
-        if (!s.transaction) throw new Error("No interrupted integration");
-        ids = s.transaction.tasks;
+        if (!s.transaction && !s.cleanupBatch) throw new Error("No interrupted integration");
+        ids = s.cleanupBatch ?? s.transaction!.tasks;
       } else {
         if (s.transaction)
           throw new Error("Integration pending; use --continue or --abort");
         this.selection(p, ids);
       }
+      s.cleanupBatch = [...new Set([...(s.cleanupBatch ?? []), ...ids])];
+      this.save(s);
       for (const task of ids) {
         const a = this.latest(s, task);
         if (a?.phase === "integrated") continue;
@@ -712,27 +789,86 @@ export class Runner {
       }
       return { branch: s.integration.branch, path, head: s.head };
     });
+    if (mode === "abort") return result;
+    try {
+      const state = this.requireState(change), plan = loadPlan(this.repo.root, change);
+      if (state.cleanupBatch?.some(id => !this.satisfied(state, id))) return result;
+      if (plan.config.cleanup === "manual") {
+        this.lock(() => {
+          const saved = this.requireState(change);
+          delete saved.cleanupBatch;
+          this.save(saved);
+        });
+        return result;
+      }
+      const complete = plan.tasks.every(t => this.satisfied(state, t.id)) && !state.attempts.some(active);
+      const cleanup = this.cleanup(change, complete ? [] : [...new Set(state.attempts.filter(a => a.phase === "integrated").map(a => a.task))], { all: complete });
+      this.lock(() => { const s = this.requireState(change); delete s.cleanupBatch; this.save(s); });
+      return { ...result, cleanup };
+    } catch (error: any) {
+      return { ...result, cleanup: { warning: error.message } };
+    }
   }
-  cleanup(change: string, ids: string[]) {
+  cleanup(change: string, ids: string[], options: CleanupOptions = {}) {
     return this.lock(() => {
       const s = this.requireState(change);
-      if (!ids.length || new Set(ids).size !== ids.length)
+      if ((options.all && ids.length) || (options.confirm && (!options.attempt || options.dryRun)))
+        throw new Error("Use --all or --tasks; confirmation requires --attempt and cannot be a dry-run");
+      if (!options.all && (!ids.length || new Set(ids).size !== ids.length))
         throw new Error("Select task IDs explicitly");
-      const selected = ids.map((id) => {
+      if (s.transaction) throw new Error("Finish or abort pending integration before cleanup");
+      if (options.all) {
+        let tasks: string[];
+        if (s.completion?.head === s.head && s.completion.fingerprint === s.fingerprint) {
+          git(this.repo.root, "cat-file", "-e", `${s.head}^{commit}`);
+          tasks = s.completion.tasks;
+        } else {
+          const plan = loadPlan(s.integration.path, change);
+          if (plan.fingerprint !== s.fingerprint || git(s.integration.path, "rev-parse", "HEAD") !== s.head || !clean(s.integration.path))
+            throw new Error("Integration plan/head differs from recorded state; cannot prove completion");
+          tasks = plan.tasks.map(t => t.id);
+        }
+        if (!tasks.length || !tasks.every(id => this.satisfied(s, id)) || s.attempts.some(active))
+          throw new Error("All planned tasks must be satisfied with no active attempts before --all cleanup");
+        if (!options.dryRun) s.completion = { tasks, fingerprint: s.fingerprint, head: s.head };
+      }
+      const selected = options.all ? s.attempts : ids.map((id) => {
         const a = this.latest(s, id);
         if (!a || a.phase !== "integrated")
           throw new Error(`Only integrated tasks can be cleaned: ${id}`);
         return a;
       });
+      if (options.attempt && !selected.some(a => a.id === options.attempt)) throw new Error("Selected attempt is not eligible for this cleanup scope");
+      const results: CleanupResult[] = [];
       for (const a of selected) {
-        if (!a.cleaned && existsSync(a.path)) {
-          this.verifyResult(a, a.report!, change);
-          git(this.repo.root, "worktree", "remove", a.path);
+        if (options.attempt && a.id !== options.attempt) continue;
+        let inspected: CleanupResult;
+        try {
+          inspected = inspectCleanup(this.repo, s, a);
+          if (options.confirm && options.confirm !== inspected.token) throw new Error("Cleanup approval is stale; inspect and confirm the current state again");
+          if (!options.dryRun && (inspected.status === "eligible" || (inspected.status === "confirmation-required" && options.confirm))) {
+            const again = inspectCleanup(this.repo, s, a);
+            if (again.token !== inspected.token) throw new Error("Worktree or terminal changed during cleanup; inspect again");
+            closeInspectedTerminal(this.repo.root, a, inspected.terminal!, resolve(this.repo.stateDir, "logs", `${a.id}-terminal.json`));
+            a.terminal.closed = true;
+            this.save(s);
+            const after = inspectCleanup(this.repo, s, a);
+            if (after.status === "skipped" || after.contentsToken !== inspected.contentsToken)
+              throw new Error("Worktree changed while closing terminal; review again");
+            removeInspectedWorktree(this.repo.root, a, inspected, !!options.confirm);
+            inspected.status = "removed";
+          }
+          if (!options.dryRun && ["removed", "already-removed"].includes(inspected.status)) a.cleaned = true;
+        } catch (error: any) {
+          inspected = { attempt: a.id, task: a.task, path: a.path, status: "failed", reasons: [error.message] };
         }
-        a.cleaned = true;
-        this.save(s);
+        results.push(inspected);
+        if (!options.dryRun) {
+          s.cleanupResults = [...(s.cleanupResults ?? []).filter(r => r.attempt !== a.id), inspected];
+          this.save(s);
+        }
       }
-      return { cleaned: ids, branchesRetained: true };
+      return { cleaned: results.filter(r => ["removed", "already-removed"].includes(r.status)).map(r => r.task), branchesRetained: true, scope: { all: !!options.all, tasks: ids }, results };
     });
   }
   reconcile(change: string) {
@@ -788,6 +924,9 @@ export class Runner {
       for (const a of s.attempts)
         if (a.phase !== "integrated") a.phase = "stale";
       s.fingerprint = p.fingerprint;
+      s.planTasks = p.tasks.map(t => t.id);
+      delete s.completion;
+      delete s.cleanupBatch;
       s.head = git(s.integration.path, "rev-parse", "HEAD");
       this.save(s);
       return {

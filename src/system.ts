@@ -13,13 +13,14 @@ import { dirname, resolve } from "node:path";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 
-export function run(cmd: string, args: string[], cwd: string): string {
+export function run(cmd: string, args: string[], cwd: string, timeout?: number): string {
   try {
     return execFileSync(cmd, args, {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 16 * 1024 * 1024,
+      timeout,
     }).trim();
   } catch (e: any) {
     throw new Error(

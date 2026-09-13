@@ -27,6 +27,7 @@ export interface Config {
   maxParallel: number;
   worktrees: "auto" | "git" | "worktrunk";
   terminal: "auto" | "manual" | "herdr";
+  cleanup: "automatic" | "manual";
   setup: string[][];
   verifyIntegration: string[][];
 }
@@ -90,6 +91,7 @@ export function configFrom(raw: unknown): Config {
     "maxParallel",
     "worktrees",
     "terminal",
+    "cleanup",
     "setup",
     "verifyIntegration",
   ]);
@@ -99,6 +101,7 @@ export function configFrom(raw: unknown): Config {
     maxParallel: 4,
     worktrees: "auto",
     terminal: "auto",
+    cleanup: "automatic",
     setup: [],
     verifyIntegration: [],
     ...raw,
@@ -114,6 +117,8 @@ export function configFrom(raw: unknown): Config {
     !["auto", "manual", "herdr"].includes(c.terminal)
   )
     throw new Error("Invalid worktrees or terminal adapter");
+  if (!["automatic", "manual"].includes(c.cleanup))
+    throw new Error("Invalid cleanup policy; use automatic or manual");
   for (const commands of [c.setup, c.verifyIntegration])
     if (
       !Array.isArray(commands) ||

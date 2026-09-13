@@ -8,6 +8,7 @@ import {
   existsSync,
   chmodSync,
   rmSync,
+  renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,7 @@ import {
   assignmentsFrom,
   loadPlan,
   readiness,
+  configFrom,
 } from "../dist/plan.js";
 import {
   resolveSettings,
@@ -30,6 +32,16 @@ import { init } from "../dist/cli.js";
 import { locked } from "../dist/system.js";
 const settings = { model: "model-a", reasoningEffort: "high" };
 const basePath = process.env.PATH;
+// Model an acknowledged worker exit with an already closed, known Herdr pane.
+function exited(r, a, bin) {
+  process.env.HERDR_ENV = "1";
+  process.env.HERDR_SESSION = "cleanup-tests";
+  executable(join(bin, "herdr"), `console.log(JSON.stringify({result:{panes:[]}}));`);
+  const s = r.read("demo"), current = s.attempts.find(x => x.id === a.id);
+  current.worker = { token: "test", exitedAt: "2026-09-13T00:00:00Z", log: join(r.repo.stateDir, "logs", `${a.id}.log`) };
+  current.terminal = { owned: true, pane: a.id, terminal: a.id, workspace: "tests", sessionContext: "cleanup-tests" };
+  r.save(s);
+}
 function git(root, ...args) {
   return execFileSync("git", args, {
     cwd: root,
@@ -46,6 +58,7 @@ function fixture(t, options = {}) {
   t.after(() => {
     process.env.PATH = basePath;
     delete process.env.HERDR_ENV;
+    delete process.env.HERDR_SESSION;
     delete process.env.FAKE_HERDR_FAIL;
     rmSync(dir, { recursive: true, force: true });
   });
@@ -76,6 +89,7 @@ function fixture(t, options = {}) {
       version: 1,
       worktrees: options.worktrees ?? "git",
       terminal: options.terminal ?? "manual",
+      cleanup: options.cleanup ?? "automatic",
       setup: options.setup ?? [],
       verifyIntegration: options.checks ?? [],
       maxParallel: options.maxParallel ?? 4,
@@ -255,7 +269,9 @@ test("parallel tasks integrate sequentially, update only integration checkboxes,
   );
   const dependent = r.launch("demo", ["2.1"], settings)[0];
   assert.equal(dependent.base, state.head);
-  r.cleanup("demo", ["1.1"]);
+  const review = r.cleanup("demo", ["1.1"], { dryRun: true }).results[0];
+  assert.equal(review.status, "confirmation-required");
+  r.cleanup("demo", ["1.1"], { attempt: review.attempt, confirm: review.token });
   assert.equal(existsSync(batch[0].path), false);
   assert.equal(existsSync(batch[1].path), true);
 });
@@ -417,7 +433,7 @@ test("Worktrunk uses explicit base and hooks disabled; partial creation reconcil
   assert.equal(existsSync(join(dir, "fallback")), false);
   assert.equal(git(w.path, "rev-parse", "HEAD"), base);
 });
-test("Herdr preserves focus, forwards Codex argv and records returned identifiers", (t) => {
+test("Herdr preserves focus, starts supervised worker and records returned identifiers", (t) => {
   const { runner: r, bin, dir } = fixture(t, { terminal: "auto" });
   process.env.HERDR_ENV = "1";
   const log = join(dir, "herdr-log");
@@ -430,13 +446,11 @@ test("Herdr preserves focus, forwards Codex argv and records returned identifier
   assert.equal(a.terminal.phase, "submitted");
   const calls = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
   assert.ok(calls[0].includes("--no-focus"));
-  assert.ok(calls[1].includes(a.path));
-  assert.ok(calls[1].includes("model-a"));
-  assert.equal(
-    calls[1][calls[1].indexOf("--add-dir") + 1],
-    r.repo.common,
-  );
-  assert.equal(calls[2][1], "prompt");
+  assert.deepEqual(calls[1].slice(0, 3), ["pane", "run", "w9:p7"]);
+  assert.match(calls[1][3], /'worker' 'demo' '1.1'/);
+  assert.ok(calls[1][3].includes(a.id));
+  assert.equal(a.terminal.owned, true);
+  assert.equal(a.settings.model, "model-a");
   r.attach("demo", "1.1");
   assert.match(readFileSync(log, "utf8"), /focus/);
 });
@@ -454,14 +468,14 @@ test("blocked Herdr startup is ambiguous and cannot automatically relaunch or re
   assert.throws(() => r.launch("demo", ["1.1"], settings), /already has/);
   assert.doesNotMatch(readFileSync(log, "utf8"), /prompt/);
 });
-test("Herdr prompt can immediately begin without racing the coordinator lock", (t) => {
+test("Herdr worker can immediately begin without racing the coordinator lock", (t) => {
   const { runner: r, bin, dir } = fixture(t, { terminal: "auto" });
   process.env.HERDR_ENV = "1";
   const workspaceFile = join(dir, "worker-path"),
     cli = join(process.cwd(), "bin/openspec-runner.js");
   executable(
     join(bin, "herdr"),
-    `const fs=require('fs'),{execFileSync}=require('child_process'),a=process.argv.slice(2);if(a[0]==='workspace'){fs.writeFileSync(${JSON.stringify(workspaceFile)},a[a.indexOf('--cwd')+1]);console.log(JSON.stringify({result:{workspace:{workspace_id:'w1'},root_pane:{pane_id:'w1:p1'}}}))}else if(a[1]==='prompt'){const m=a[3].match(/begin (\\S+) (\\S+) --attempt (\\S+)/);execFileSync(process.execPath,[${JSON.stringify(cli)},'begin',m[1],m[2],'--attempt',m[3],'--session','immediate-session'],{cwd:fs.readFileSync(${JSON.stringify(workspaceFile)},'utf8'),stdio:'pipe'});console.log(JSON.stringify({result:{ok:true}}))}else console.log(JSON.stringify({result:{ok:true}}));`,
+    `const fs=require('fs'),{execFileSync}=require('child_process'),a=process.argv.slice(2);if(a[0]==='workspace'){fs.writeFileSync(${JSON.stringify(workspaceFile)},a[a.indexOf('--cwd')+1]);console.log(JSON.stringify({result:{workspace:{workspace_id:'w1'},root_pane:{pane_id:'w1:p1'}}}))}else if(a[1]==='run'){const m=a[3].match(/'worker' '([^']+)' '([^']+)' '--attempt' '([^']+)'/);execFileSync(process.execPath,[${JSON.stringify(cli)},'begin',m[1],m[2],'--attempt',m[3],'--session','immediate-session'],{cwd:fs.readFileSync(${JSON.stringify(workspaceFile)},'utf8'),stdio:'pipe'});console.log(JSON.stringify({result:{ok:true}}))}else console.log(JSON.stringify({result:{ok:true}}));`,
   );
   const a = r.launch("demo", ["1.1"], settings)[0],
     saved = r.read("demo").attempts[0];
@@ -486,13 +500,13 @@ test("Herdr persists partial creation and prompt-submission failures", (t) => {
   process.env.HERDR_ENV = "1";
   executable(
     join(submission.bin, "herdr"),
-    `const a=process.argv.slice(2);if(a[0]==='workspace')console.log(JSON.stringify({result:{workspace:{workspace_id:'w2'},root_pane:{pane_id:'w2:p2',terminal_id:'t2'}}}));else if(a[1]==='prompt')process.exit(9);else console.log(JSON.stringify({result:{ok:true}}));`,
+    `const a=process.argv.slice(2);if(a[0]==='workspace')console.log(JSON.stringify({result:{workspace:{workspace_id:'w2'},root_pane:{pane_id:'w2:p2',terminal_id:'t2'}}}));else if(a[1]==='run')process.exit(9);else console.log(JSON.stringify({result:{ok:true}}));`,
   );
   const prompted = submission.runner.launch("demo", ["1.1"], settings)[0];
   assert.equal(prompted.terminal.workspace, "w2");
   assert.equal(prompted.terminal.pane, "w2:p2");
-  assert.equal(prompted.terminal.phase, "submitting");
-  assert.match(prompted.error, /herdr agent/);
+  assert.equal(prompted.terminal.phase, "starting");
+  assert.match(prompted.error, /herdr pane/);
 });
 test("installer owns exactly three skills and preserves existing OpenSpec skills/config", (t) => {
   const { root } = fixture(t);
@@ -573,4 +587,228 @@ test("initial committed completed tasks satisfy dependencies", (t) => {
   git(root, "commit", "-m", "existing completed baseline");
   assert.equal(r.launch("demo", ["2.1"], settings)[0].task, "2.1");
   assert.deepEqual(r.read("demo").baseline, ["1.1", "1.2"]);
+});
+
+test("cleanup policy defaults to automatic and validates manual opt-out", () => {
+  assert.equal(configFrom({ version: 1 }).cleanup, "automatic");
+  assert.equal(configFrom({ version: 1, cleanup: "manual" }).cleanup, "manual");
+  assert.throws(() => configFrom({ version: 1, cleanup: "force" }), /cleanup policy/);
+});
+
+test("automatic batch cleanup retains history and final sweep removes obsolete retries", (t) => {
+  const { runner: r, bin, root } = fixture(t);
+  const old = r.launch("demo", ["1.1"], settings)[0];
+  new Runner(old.path).begin("demo", "1.1", old.id, "blocked-session");
+  writeFileSync(join(old.path, "old.txt"), "unique work");
+  git(old.path, "add", "."); git(old.path, "commit", "-m", "partial work");
+  const oldHead = git(old.path, "rev-parse", "HEAD");
+  new Runner(old.path).report("demo", "1.1", old.id, { attempt: old.id, task: old.task, session: "blocked-session", outcome: "blocked", summary: "blocked", verification: ["checked"] });
+  exited(r, old, bin);
+  const a = r.launch("demo", ["1.1"], settings, "HEAD", true)[0];
+  complete(r, a); exited(r, a, bin);
+  const first = r.integrate("demo", ["1.1"]);
+  assert.equal(first.cleanup.results[0].status, "removed");
+  assert.equal(existsSync(a.path), false);
+  assert.equal(existsSync(old.path), true);
+  assert.throws(() => r.cleanup("demo", [], { all: true }), /All planned tasks/);
+  const b = r.launch("demo", ["1.2"], settings)[0];
+  complete(r, b); exited(r, b, bin); r.integrate("demo", ["1.2"]);
+  const c = r.launch("demo", ["2.1"], settings)[0];
+  complete(r, c); exited(r, c, bin);
+  const final = r.integrate("demo", ["2.1"]);
+  assert.equal(final.cleanup.scope.all, true);
+  assert.equal(existsSync(old.path), false);
+  assert.equal(git(root, "rev-parse", old.branch), oldHead);
+  assert.equal(existsSync(r.read("demo").integration.path), true);
+  assert.equal(r.read("demo").attempts.every(a => a.cleaned), true);
+  assert.equal(r.attach("demo", "1.1").command, undefined);
+  assert.ok(r.attach("demo", "1.1").session);
+});
+
+test("dirty and locked worktrees require approval bound to contents and retain commits", (t) => {
+  const { runner: r, bin, root } = fixture(t, { cleanup: "manual" });
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  complete(r, a); exited(r, a, bin); r.integrate("demo", ["1.1"]);
+  writeFileSync(join(a.path, "untracked.txt"), "first");
+  git(root, "worktree", "lock", "--reason", "review", a.path);
+  const before = readFileSync(r.path("demo"), "utf8");
+  const review = r.cleanup("demo", ["1.1"], { dryRun: true }).results[0];
+  assert.equal(readFileSync(r.path("demo"), "utf8"), before);
+  assert.equal(review.status, "confirmation-required");
+  assert.match(review.changes, /untracked/);
+  writeFileSync(join(a.path, "untracked.txt"), "second");
+  assert.equal(r.cleanup("demo", ["1.1"], { attempt: a.id, confirm: review.token }).results[0].status, "failed");
+  assert.equal(existsSync(a.path), true);
+  const fresh = r.cleanup("demo", ["1.1"], { dryRun: true }).results[0];
+  assert.notEqual(fresh.token, review.token);
+  assert.equal(r.cleanup("demo", ["1.1"], { attempt: a.id, confirm: fresh.token }).results[0].status, "removed");
+  assert.ok(git(root, "rev-parse", a.branch));
+});
+
+test("cleanup handles moved HEAD, preserves its commit and refuses protected worktrees", (t) => {
+  const { runner: r, bin, root } = fixture(t, { cleanup: "manual" });
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  complete(r, a); exited(r, a, bin); r.integrate("demo", ["1.1"]);
+  git(a.path, "checkout", "--detach");
+  writeFileSync(join(a.path, "extra.txt"), "extra"); git(a.path, "add", "."); git(a.path, "commit", "-m", "extra");
+  const head = git(a.path, "rev-parse", "HEAD");
+  const review = r.cleanup("demo", ["1.1"], { dryRun: true }).results[0];
+  assert.equal(review.status, "confirmation-required");
+  assert.equal(r.cleanup("demo", ["1.1"], { attempt: a.id, confirm: review.token }).results[0].status, "removed");
+  assert.equal(git(root, "rev-parse", `openspec-runner/retained/${a.id}/${head}`), head);
+  const s = r.read("demo"); s.attempts[0].path = root; r.save(s);
+  assert.equal(r.cleanup("demo", ["1.1"]).results[0].status, "skipped");
+});
+
+test("partial batch retains worktrees until continuation completes", (t) => {
+  const { runner: r, bin } = fixture(t);
+  const batch = r.launch("demo", ["1.1", "1.2"], settings);
+  batch.forEach((a, i) => { complete(r, a, "shared.txt", `value ${i}\n`); exited(r, a, bin); });
+  assert.throws(() => r.integrate("demo", ["1.1", "1.2"]), /CONFLICT|conflict/);
+  assert.ok(batch.every(a => existsSync(a.path)));
+  const integration = r.read("demo").integration.path;
+  writeFileSync(join(integration, "shared.txt"), "resolved\n"); git(integration, "add", "shared.txt");
+  const continued = r.integrate("demo", [], "continue");
+  assert.ok(continued.cleanup.results.every(x => x.status === "removed"));
+  assert.ok(batch.every(a => !existsSync(a.path)));
+});
+
+test("archived changes can sweep leftovers using recorded completion and retry missing worktrees", (t) => {
+  const { runner: r, bin, root } = fixture(t, { cleanup: "manual" });
+  const batch = r.launch("demo", ["1.1", "1.2"], settings);
+  batch.forEach(a => { complete(r, a); exited(r, a, bin); });
+  r.integrate("demo", ["1.1", "1.2"]);
+  const a = r.launch("demo", ["2.1"], settings)[0];
+  complete(r, a); exited(r, a, bin); r.integrate("demo", ["2.1"]);
+  mkdirSync(join(root, "openspec/changes/archive"));
+  renameSync(join(root, "openspec/changes/demo"), join(root, "openspec/changes/archive/demo"));
+  const swept = r.cleanup("demo", [], { all: true });
+  assert.ok(swept.results.every(x => x.status === "removed"));
+  const s = r.read("demo"); delete s.attempts[0].cleaned; r.save(s);
+  assert.ok(r.cleanup("demo", [], { all: true }).results.every(x => x.status === "already-removed"));
+});
+
+test("cleanup failure cannot turn successful integration into failure", (t) => {
+  const { runner: r } = fixture(t);
+  const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
+  const cleanup = r.cleanup;
+  r.cleanup = () => { throw new Error("injected cleanup error"); };
+  const result = r.integrate("demo", ["1.1"]);
+  assert.match(result.cleanup.warning, /injected/);
+  assert.equal(r.read("demo").attempts[0].phase, "integrated");
+  const head = r.read("demo").head;
+  r.cleanup = cleanup;
+  r.integrate("demo", [], "continue");
+  assert.equal(r.read("demo").head, head);
+});
+
+test("supervised exec records actual exit after report and prevents duplicate worker launch", async (t) => {
+  const { runner: r, bin } = fixture(t);
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  const module = new URL("../dist/runner.js", import.meta.url).href;
+  executable(join(bin, "codex"), `
+    if(process.argv.includes('--help')) { console.log('--add-dir --model --cd'); }
+    else (async()=>{
+      const {Runner}=await import(${JSON.stringify(module)});
+      const r=new Runner(process.cwd());
+      r.begin('demo','1.1',${JSON.stringify(a.id)},'exec-session');
+      r.report('demo','1.1',${JSON.stringify(a.id)},{attempt:${JSON.stringify(a.id)},task:'1.1',session:'exec-session',outcome:'blocked',summary:'blocked fixture',verification:['checked']});
+      if(r.read('demo').attempts[0].worker.exitedAt) process.exit(7);
+      console.log('report returned before exit');
+    })().catch(e=>{console.error(e);process.exit(8)});
+  `);
+  const result = await r.worker("demo", "1.1", a.id);
+  assert.equal(result.exitCode, 0);
+  const saved = r.read("demo").attempts[0];
+  assert.equal(saved.phase, "blocked");
+  assert.ok(saved.worker.exitedAt);
+  assert.match(readFileSync(saved.worker.log, "utf8"), /report returned before exit/);
+  assert.equal(saved.session, "exec-session");
+  await assert.rejects(r.worker("demo", "1.1", a.id), /already exited/);
+});
+
+test("worker command recovers a lost supervisor exit receipt", async (t) => {
+  const { runner: r } = fixture(t);
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  const s = r.read("demo"), saved = s.attempts[0];
+  saved.worker = { token: "lost-parent", pid: 999999999, processStart: "old", log: join(r.repo.stateDir, "logs", `${a.id}.log`) };
+  saved.session = "saved-session";
+  saved.phase = "blocked";
+  saved.report = { attempt: a.id, task: a.task, session: saved.session, outcome: "blocked", summary: "reported", verification: ["checked"] };
+  r.save(s);
+  const recovered = await r.worker("demo", "1.1", a.id);
+  assert.equal(recovered.recovered, true);
+  assert.ok(r.read("demo").attempts[0].worker.exitedAt);
+  assert.equal(r.read("demo").attempts[0].phase, "blocked");
+});
+
+function liveTerminal(r, a, bin, dir, mode = "close") {
+  exited(r, a, bin);
+  const state = join(dir, "pane-state.json");
+  writeFileSync(state, JSON.stringify({ closed: false }));
+  const pane = { pane_id: a.id, terminal_id: a.id, workspace_id: "tests", cwd: a.path };
+  executable(join(bin, "herdr"), `
+    const fs=require('fs'),args=process.argv.slice(2),file=${JSON.stringify(state)},s=JSON.parse(fs.readFileSync(file));
+    let result;
+    if(args[1]==='list') result={panes:s.closed?[]:[${JSON.stringify(pane)}]};
+    else if(args[1]==='process-info') result={process_info:{pane_id:${JSON.stringify(a.id)},shell_pid:${process.pid},foreground_processes:[]}};
+    else if(args[1]==='read') result={text:'saved terminal log'};
+    else if(args[1]==='close') {
+      if(!fs.existsSync(${JSON.stringify(a.path)})) throw new Error('worktree removed before pane');
+      if(${JSON.stringify(mode)}==='fail') throw new Error('closure failed');
+      s.closed=true;fs.writeFileSync(file,JSON.stringify(s));
+      if(${JSON.stringify(mode)}==='edit') fs.writeFileSync(${JSON.stringify(join(a.path, "1.1.txt"))},'changed during closure');
+      result={ok:true};
+    } else throw new Error('unexpected '+args.join(' '));
+    console.log(JSON.stringify({result}));
+  `);
+  return state;
+}
+
+test("owned terminal closes before worktree removal and its log survives", (t) => {
+  const { runner: r, bin, dir } = fixture(t);
+  const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
+  const paneState = liveTerminal(r, a, bin, dir);
+  const result = r.integrate("demo", ["1.1"]);
+  assert.equal(result.cleanup.results[0].status, "removed", JSON.stringify(result));
+  assert.equal(JSON.parse(readFileSync(paneState)).closed, true);
+  assert.equal(existsSync(a.path), false);
+  assert.match(readFileSync(join(r.repo.stateDir, "logs", `${a.id}-terminal.json`), "utf8"), /saved terminal log/);
+});
+
+test("terminal closure failure and edits during closure preserve the worktree", (t) => {
+  for (const mode of ["fail", "edit"]) {
+    const { runner: r, bin, dir } = fixture(t);
+    const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
+    liveTerminal(r, a, bin, dir, mode);
+    const result = r.integrate("demo", ["1.1"]);
+    assert.equal(result.cleanup.results[0].status, "failed");
+    assert.equal(r.read("demo").attempts[0].phase, "integrated");
+    assert.equal(existsSync(a.path), true);
+  }
+});
+
+test("unacknowledged worker exit prevents terminal or worktree removal", (t) => {
+  const { runner: r, bin, dir } = fixture(t);
+  const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
+  const paneState = liveTerminal(r, a, bin, dir);
+  const s = r.read("demo"); delete s.attempts[0].worker.exitedAt; r.save(s);
+  const result = r.integrate("demo", ["1.1"]);
+  assert.equal(result.cleanup.results[0].status, "skipped");
+  assert.match(result.cleanup.results[0].reasons[0], /exit is not acknowledged/);
+  assert.equal(JSON.parse(readFileSync(paneState)).closed, false);
+  assert.equal(existsSync(a.path), true);
+});
+
+test("CLI dry-run and JSON confirmation expose exact candidates without terminal prompts", (t) => {
+  const { runner: r, root } = fixture(t, { cleanup: "manual" });
+  const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a); r.integrate("demo", ["1.1"]);
+  const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+  const before = readFileSync(r.path("demo"), "utf8");
+  const result = JSON.parse(execFileSync(process.execPath, [cli, "cleanup", "demo", "--tasks", "1.1", "--dry-run", "--json"], { cwd: root, encoding: "utf8" }));
+  assert.equal(result.results[0].status, "confirmation-required");
+  assert.equal(readFileSync(r.path("demo"), "utf8"), before);
+  assert.equal(existsSync(a.path), true);
+  const confirmed = JSON.parse(execFileSync(process.execPath, [cli, "cleanup", "demo", "--tasks", "1.1", "--attempt", a.id, "--confirm", result.results[0].token, "--json"], { cwd: root, encoding: "utf8" }));
+  assert.equal(confirmed.results[0].status, "removed");
 });

@@ -93,7 +93,7 @@ flowchart TB
 
     subgraph W[Git resources]
         H[Dedicated integration branch and worktree]
-        I[One retained branch and worktree per attempt]
+        I[One retained branch and temporary worktree per attempt]
     end
 
     A --> H
@@ -431,6 +431,7 @@ defaultModel: session
 maxParallel: 4
 worktrees: auto
 terminal: auto
+cleanup: automatic
 setup: []
 verifyIntegration: []
 ```
@@ -442,6 +443,7 @@ verifyIntegration: []
 | `maxParallel` | Repository-wide maximum active/reserved task attempts |
 | `worktrees` | `auto` uses compatible Worktrunk when available, otherwise Git |
 | `terminal` | `auto` uses Herdr inside Herdr, otherwise returns manual commands |
+| `cleanup` | `automatic` (default, including existing configs) cleans successful batches and completed changes; `manual` retains terminals/worktrees until explicit cleanup |
 | `setup` | Idempotent argument-array commands run while preparing task worktrees |
 | `verifyIntegration` | Argument-array commands run after merging into the integration worktree |
 
@@ -453,6 +455,7 @@ defaultModel: session
 maxParallel: 3
 worktrees: auto
 terminal: auto
+cleanup: automatic
 setup:
   - ["pnpm", "install", "--frozen-lockfile", "--prefer-offline"]
 verifyIntegration:
@@ -608,8 +611,8 @@ it.
 ### Inside Herdr
 
 For every task, the runner creates a labeled workspace without changing focus,
-starts Codex in the returned pane with explicit settings and working directory,
-and submits the single-task prompt. Workspace, pane, terminal, and worker session
+starts a supervised `codex exec` worker in the returned pane with explicit settings
+and working directory. Workspace, pane, terminal, and worker session
 IDs are saved when available.
 
 ```sh
@@ -632,16 +635,52 @@ An attempt without a saved Codex identity cannot be recreated blindly after an
 ambiguous startup. Inspect its saved workspace/pane or explicitly recover the
 appropriate lifecycle stage.
 
-### Worktree retention and cleanup
+### Worktree and terminal cleanup
 
-Branches and worktrees are retained for review. Remove only explicitly selected,
-successfully integrated, clean worktrees:
+With `cleanup: automatic` (the default for new and existing configuration), cleanup
+runs after each successful integration batch. When every planned task is satisfied,
+a second sweep considers all recorded attempts, including obsolete failed/blocked
+retries. Conflicts and failed checks retain the batch's worktrees for recovery.
+The integration worktree stays available for explicit branch delivery and archival.
+
+New workers use supervised `codex exec`: after an accepted final report they end
+their turn, exit, and the supervisor records the actual exit. Sessions persist in
+Codex and runner logs live under the Git common directory's `openspec-runner/logs`.
+Report acceptance alone is not proof of exit. A worker that exits without an
+accepted report is marked failed for explicit retry. No automatic process killing
+or guessed terminal input is used.
+
+Before removal, cleanup closes the verified runner-owned Herdr pane and saves
+available scrollback. It checks pane identity and foreground activity; on Linux
+it also checks shell descendants for background jobs. Unsupported inspection or
+uncertain identity leaves a pending action. Close manually opened terminals
+yourself before confirming their worktree removal.
+
+Dirty, locked, or changed worktrees require approval. The interactive CLI asks
+for each candidate; JSON/unattended calls return `confirmation-required` with
+reasons, changed paths, and an approval token for the coordinator to present to
+the user. No reply means keep. Approval covers only that attempt and inspected
+state; changed files, HEAD, lock, or terminal activity invalidate it. Main,
+invoking, integration, active, and unrelated worktrees are protected. Ignored
+build/dependency files disappear with the removed directory. Branches, commits,
+reports, and session identities remain.
+
+Inspect or retry cleanup, including after archival in the main checkout:
 
 ```sh
 openspec-runner cleanup user-auth --tasks 1.1,1.2
+openspec-runner cleanup user-auth --all --dry-run --json
+openspec-runner cleanup user-auth --all
+# After the user approves one reviewed candidate:
+openspec-runner cleanup user-auth --all --attempt ATTEMPT_ID --confirm TOKEN --json
 ```
 
-Cleanup retains branches and never removes pending or failed worktrees.
+`--all` requires proof that all planned tasks are satisfied and no attempts are
+active. Cleanup failures are reported separately and never turn successful
+integration into failure. Set `cleanup: manual` to retain terminals/worktrees
+until explicit cleanup; workers still exit after reporting. `attach` returns
+inspection details for finished workers instead of attempting to resume them
+in removed directories. Old interactive sessions require review before cleanup.
 
 ## Recovery and plan changes
 
@@ -705,6 +744,9 @@ Checkbox completion changes alone do not invalidate fingerprints.
 | `retry <change> <task>` | Create a new retained attempt |
 | `reconcile <change>` | Adopt committed plan edits and invalidate old results |
 | `cleanup <change> --tasks IDS` | Remove selected integrated clean worktrees |
+| `cleanup <change> --all [--dry-run] [--json]` | Inspect/retry the final sweep of all attempts |
+| `cleanup ... --attempt ID --confirm TOKEN` | Apply approval to one inspected candidate |
+| `worker <change> <task> --attempt ID` | Run the returned supervised worker command exactly once |
 | `begin <change> <task> --attempt ID [--session ID]` | Worker-only identity registration |
 | `report <change> <task> --attempt ID --file PATH` | Worker-only outcome submission |
 

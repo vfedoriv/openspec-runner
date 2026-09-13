@@ -34,6 +34,7 @@ defaultModel: session
 maxParallel: 4
 worktrees: auto       # Worktrunk when supported; otherwise Git
 terminal: auto       # Herdr in its session; otherwise manual commands
+cleanup: automatic  # Clean successful batches and sweep completed changes
 setup: []            # Optional commands, represented as argument arrays
 verifyIntegration: []
 ```
@@ -122,7 +123,9 @@ Keep execution state outside versioned planning files, with task-local reports a
 
 The integration command requires a completed report and a clean task worktree at the reported commit. It merges selected results sequentially into the dedicated integration worktree, runs configured integration checks, updates the corresponding checkbox, and records completion.
 
-Stop on conflicts or failed checks. Provide `integrate --continue` and `--abort`; dependent tasks stay blocked until integration finishes. Preserve task branches and worktrees for inspection.
+Stop on conflicts or failed checks. Provide `integrate --continue` and `--abort`; dependent tasks stay blocked until integration finishes. Preserve task branches. Keep batch worktrees and terminals until integration succeeds, then perform automatic cleanup. Once all planned tasks are satisfied, sweep obsolete attempts too. Dirty, locked, or changed resources require explicit approval bound to the inspected state. Retain the integration worktree for delivery.
+
+Workers run supervised `codex exec`, return their final report, and exit gracefully. Verify actual worker exit, then close owned terminals before removing worktrees. Preserve session identities and logs. JSON callers receive pending confirmation requests; the coordinator asks the user and applies only the selected approval tokens. `cleanup --all` retries the final sweep, and `cleanup: manual` opts out of automatic terminal/worktree removal.
 
 Make launch and integration recovery idempotent: persist attempt identity before starting external processes, record merge progress, and reconcile existing resources after interruption. Ambiguous launch outcomes must not automatically create another session.
 
@@ -141,4 +144,4 @@ Test with temporary Git repositories and fake Codex, Worktrunk, and Herdr execut
 
 Perform a real acceptance run: implement two independent tasks concurrently, detach and reattach Herdr, integrate both, then launch a dependent task. Confirm canonical checkbox updates occur only upon integration.
 
-Default to four concurrent tasks, conservative parallel permission, explicit batch launching, and retained worktrees. Ship the companion locally first; registry publication, continuous scheduling, external planning stores, native Windows, and additional agent providers are outside v1.
+Default to four concurrent tasks, conservative parallel permission, explicit batch launching, retained branches, and automatic two-phase worktree cleanup. Ship the companion locally first; registry publication, continuous scheduling, external planning stores, native Windows, and additional agent providers are outside v1.

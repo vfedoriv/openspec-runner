@@ -8,6 +8,8 @@ export interface Workspace {
   base: string;
 }
 export interface Terminal {
+  owned?: boolean;
+  closed?: boolean;
   workspace?: string;
   pane?: string;
   terminal?: string;
@@ -17,21 +19,23 @@ export interface Terminal {
 }
 export function worktrees(
   root: string,
-): Array<{ branch: string; path: string; head: string }> {
-  return git(root, "worktree", "list", "--porcelain")
-    .split("\n\n")
+): Array<{ branch: string; path: string; head: string; locked?: string; prunable?: string }> {
+  return git(root, "worktree", "list", "--porcelain", "-z")
+    .split("\0\0")
     .filter(Boolean)
     .map((block) => {
       const fields = Object.fromEntries(
-        block.split("\n").map((line) => {
+        block.split("\0").map((line) => {
           const i = line.indexOf(" ");
-          return [line.slice(0, i), line.slice(i + 1)];
+          return i < 0 ? [line, ""] : [line.slice(0, i), line.slice(i + 1)];
         }),
       );
       return {
         branch: fields.branch?.replace(/^refs\/heads\//, ""),
         path: fields.worktree,
         head: fields.HEAD,
+        locked: fields.locked,
+        prunable: fields.prunable,
       };
     });
 }
@@ -121,7 +125,7 @@ function herdr(root: string, args: string[]) {
     throw new Error(
       "Run this command inside the saved Herdr session, or use the returned manual resume command",
     );
-  const value = JSON.parse(run("herdr", args, root));
+  const value = JSON.parse(run("herdr", args, root, 10000));
   if (value.error || !value.result)
     throw new Error(`Herdr error: ${JSON.stringify(value)}`);
   return value.result;
@@ -135,6 +139,7 @@ export function startTerminal(
   prompt: string,
   terminal: Terminal,
   save: () => void,
+  workerCommand?: string,
 ) {
   if (terminal.phase)
     throw new Error(
@@ -156,12 +161,20 @@ export function startTerminal(
   terminal.workspace = result.workspace?.workspace_id;
   terminal.pane = result.root_pane?.pane_id;
   terminal.terminal = result.root_pane?.terminal_id;
+  terminal.owned = !!terminal.terminal;
   save();
   if (!terminal.workspace || !terminal.pane)
     throw new Error(
       "Unsupported Herdr creation response; inspect workspace list before recovery",
     );
   terminal.phase = "starting";
+  if (workerCommand) {
+    save();
+    herdr(root, ["pane", "run", terminal.pane, workerCommand]);
+    terminal.phase = "submitted";
+    save();
+    return;
+  }
   terminal.agent = `osr-${label.replace(/[^a-z0-9]/g, "").slice(-27)}`;
   save();
   herdr(root, [

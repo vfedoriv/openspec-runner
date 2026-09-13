@@ -6,6 +6,7 @@ import { Runner } from "./runner.js";
 import { loadPlan, readiness } from "./plan.js";
 import { json, repository } from "./system.js";
 import { models, sessionSettings, type Settings } from "./codex.js";
+import { createInterface } from "node:readline/promises";
 const help = `openspec-runner — explicit OpenSpec task batches in isolated Codex worktrees
 
 init                           Create runner.yaml and install three project skills
@@ -23,6 +24,10 @@ integrate <change> --tasks IDS  Sequentially merge completed results and check b
 recover <change> <task>         Resume interrupted preparation before session creation
 retry <change> <task>           Explicit new attempt after failed/blocked/stale result
 cleanup <change> --tasks IDS    Remove selected integrated worktrees; retain branches
+  --all                       Sweep every attempt after all planned tasks are satisfied
+  --dry-run --json             Inspect cleanup without changing resources
+  --attempt ID --confirm TOKEN Approve only the inspected attempt and contents
+worker <change> <task> --attempt ID  Run the assigned supervised Codex worker once
 reconcile <change>              Adopt committed planning edits; invalidate old results
 begin <change> <task> --attempt ID [--session ID]
 report <change> <task> --attempt ID --file PATH
@@ -37,7 +42,7 @@ export function init(cwd = process.cwd()) {
   if (!existsSync(config))
     writeFileSync(
       config,
-      "version: 1\ndefaultModel: session\nmaxParallel: 4\nworktrees: auto\nterminal: auto\nsetup: []\nverifyIntegration: []\n",
+      "version: 1\ndefaultModel: session\nmaxParallel: 4\nworktrees: auto\nterminal: auto\ncleanup: automatic\nsetup: []\nverifyIntegration: []\n",
       { flag: "wx" },
     );
   const names = [
@@ -77,6 +82,8 @@ export async function main(args = process.argv.slice(2)) {
         attempt: { type: "string" },
         session: { type: "string" },
         file: { type: "string" },
+        all: { type: "boolean" },
+        confirm: { type: "string" },
       },
     });
     const [command, change, task] = p;
@@ -87,6 +94,8 @@ export async function main(args = process.argv.slice(2)) {
     if (process.platform === "win32")
       throw new Error("Native Windows is outside v1; use WSL");
     let result: unknown;
+    if ((v.all || v.confirm) && command !== "cleanup") throw new Error("--all and --confirm require cleanup");
+    if (v["dry-run"] && !["cleanup", "launch", "retry"].includes(command)) throw new Error("--dry-run is supported only for cleanup and launch/retry");
     if (command === "init") result = init();
     else if (command === "models") result = await models();
     else {
@@ -204,7 +213,11 @@ export async function main(args = process.argv.slice(2)) {
           );
           break;
         case "cleanup":
-          result = r.cleanup(change, ids);
+          result = r.cleanup(change, ids, { all: v.all, dryRun: v["dry-run"], attempt: v.attempt, confirm: v.confirm });
+          break;
+        case "worker":
+          if (!task || !v.attempt) throw new Error("Specify task and --attempt");
+          result = await r.worker(change, task, v.attempt);
           break;
         case "reconcile":
           result = r.reconcile(change);
@@ -222,6 +235,22 @@ export async function main(args = process.argv.slice(2)) {
         default:
           throw new Error(`Unknown command: ${command}`);
       }
+      const cleanup = command === "cleanup" ? result as any : (result as any)?.cleanup;
+      if (!jsonOutput && !v["dry-run"] && !v.confirm && process.stdin.isTTY && cleanup?.results) {
+        const input = createInterface({ input: process.stdin, output: process.stdout });
+        try {
+          for (const item of cleanup.results) {
+            if (item.status !== "confirmation-required") continue;
+            console.log(`${item.path}\n${item.reasons.join("\n")}\n${item.changes ?? ""}\nIgnored build/dependency files also disappear. Branches and reports remain.`);
+            const answer = await input.question("Delete this worktree and close the reviewed terminal? Type delete to confirm; Enter keeps it: ");
+            if (answer.trim() === "delete") {
+              const approved = r.cleanup(change, cleanup.scope.tasks, { all: cleanup.scope.all, attempt: item.attempt, confirm: item.token });
+              Object.assign(item, approved.results[0]);
+            }
+          }
+        } finally { input.close(); }
+      }
+      if (command === "cleanup" && cleanup?.results?.some((x: any) => x.status === "failed")) process.exitCode = 1;
     }
     if (jsonOutput) console.log(JSON.stringify(result, null, 2));
     else if (Array.isArray(result) && result.some((x) => x.command))
