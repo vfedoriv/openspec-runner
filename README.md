@@ -28,6 +28,7 @@ automatically archive a change.
 - [Configuration](#configuration)
 - [Task lifecycle and integration](#task-lifecycle-and-integration)
 - [Sessions, terminals, and worktrees](#sessions-terminals-and-worktrees)
+  - [Worktree and terminal cleanup](#worktree-and-terminal-cleanup)
 - [Recovery and plan changes](#recovery-and-plan-changes)
 - [CLI reference](#cli-reference)
 - [State and safety guarantees](#state-and-safety-guarantees)
@@ -56,12 +57,18 @@ flowchart TB
     F --> G[Launch an approved<br/>ready batch]
     G --> H1[Worker: task 1]
     G --> H2[Worker: task 2]
-    H1 --> I[Review reports and commits]
-    H2 --> I
+    H1 --> X[Reports accepted and<br/>supervised workers exit]
+    H2 --> X
+    X --> I[Review reports and commits]
     I --> J[Integrate approved results]
-    J --> K{More ready tasks?}
-    K -- Yes --> F
-    K -- No --> L[Deliver integration branch]
+    J --> N[Close owned terminals and<br/>clean integrated worktrees]
+    N --> K{All planned tasks<br/>satisfied?}
+    K -- No --> F
+    K -- Yes --> O[Sweep obsolete attempts]
+    O --> Q{Any cleanup item<br/>needs confirmation?}
+    Q -- Yes --> R[User reviews each item]
+    R --> L[Deliver integration branch]
+    Q -- No --> L
     L --> M[Use normal OpenSpec validation<br/>and archival flow]
 ```
 
@@ -87,20 +94,33 @@ flowchart TB
         E[git-common-dir/openspec-runner]
         F[Attempts and structured reports]
         G[Repository-wide lock]
+        J[Worker logs and cleanup decisions]
         E --> F
         E --> G
+        E --> J
     end
 
     subgraph W[Git resources]
         H[Dedicated integration branch and worktree]
-        I[One retained branch and temporary worktree per attempt]
+        I[Retained branch per attempt]
+        K[Temporary task worktree]
+    end
+
+    subgraph T[Execution resources]
+        L[Supervised Codex worker]
+        M[Optional runner-owned Herdr pane]
     end
 
     A --> H
     B --> H
-    C --> I
-    D --> I
+    C --> K
+    D --> K
     F --> H
+    I --> K
+    K --> L
+    L --> M
+    J -. records exit and cleanup .-> L
+    M -. closes before removal .-> K
 ```
 
 ## Requirements
@@ -273,9 +293,13 @@ openspec-runner integrate user-auth --tasks 1.1,1.2
 ```
 
 Review the report, verification evidence, commit, and worktree before approving
-integration. Successful integration merges tasks sequentially, runs configured
-checks, updates the corresponding checkboxes, and commits those updates in the
-dedicated integration worktree.
+integration. Integration waits until every selected supervised worker has
+actually exited; an accepted report by itself is not sufficient. Successful
+integration merges tasks sequentially, runs configured checks, updates the
+corresponding checkboxes, and commits those updates in the dedicated integration
+worktree. It then returns a cleanup summary. With the default automatic policy,
+eligible task terminals and worktrees from that successful batch are cleaned at
+this point.
 
 ### 5. Continue with newly ready tasks
 
@@ -334,8 +358,8 @@ Use one coordinating session to own the batch lifecycle. It:
 - Treats structured worker reports, not terminal idle indicators, as completion.
 - Integrates only results selected after review.
 - Stops on conflicts or failed checks and uses explicit continue/abort recovery.
-- Retains old attempts and branches unless eligible worktrees are explicitly
-  cleaned up.
+- Reports automatic cleanup results and asks about candidates requiring a user
+  decision. Attempt branches and the integration worktree remain available.
 
 A useful prompt for later batches is:
 
@@ -357,7 +381,8 @@ single-task prompt sent to every worker. A worker must:
 4. Perform task-specific verification and commit the implementation.
 5. Keep a completed worktree clean at the reported commit.
 6. Write its report outside the worktree and submit it with `report`.
-7. Stop after reporting instead of continuing to another checkbox.
+7. After the report command returns successfully, end the turn so the supervised
+   worker exits instead of continuing to another checkbox.
 
 The runner-generated prompt supplies the change, task number, and attempt ID. The
 worker-facing sequence is conceptually:
@@ -412,11 +437,22 @@ sequenceDiagram
     W->>R: begin with worker identity
     W->>W: Implement, verify, and commit
     W->>R: Structured report
+    R-->>W: Report accepted
+    W-->>R: Worker process exits
     R-->>C: Result available for review
     U->>C: Approve selected integration
     C->>R: integrate selected tasks
     R->>R: Merge, verify, check checkbox, commit
-    R-->>C: New integration head and ready tasks
+    R->>R: Close owned panes and clean batch worktrees
+    alt Every planned task is satisfied
+        R->>R: Sweep obsolete attempts
+    end
+    R-->>C: New integration head, ready tasks, and cleanup results
+    opt Cleanup candidate requires confirmation
+        C-->>U: Show path, changes, terminal activity, and impact
+        U->>C: Keep or approve this exact candidate
+        C->>R: cleanup with attempt ID and inspection token
+    end
 ```
 
 ## Configuration
@@ -538,17 +574,26 @@ stateDiagram-v2
     Preparing --> Running: worker begins
     Preparing --> Recoverable: preparation interrupted
     Recoverable --> Preparing: recover
-    Running --> Reported: completed report
-    Running --> Failed: failed report
-    Running --> Blocked: blocked report
-    Reported --> Integrating: user approves
+    Running --> ReportAccepted: completed report accepted
+    Running --> Failed: failed report accepted
+    Running --> Blocked: blocked report accepted
+    ReportAccepted --> WorkerExited: supervised process exits
+    Failed --> FailedExited: supervised process exits
+    Blocked --> BlockedExited: supervised process exits
+    WorkerExited --> Integrating: user approves
     Integrating --> Integrated: merge and checks succeed
     Integrating --> Pending: conflict or failed check
     Pending --> Integrating: continue
-    Pending --> Reported: abort
-    Failed --> Ready: explicit retry
-    Blocked --> Ready: explicit retry
-    Integrated --> [*]
+    Pending --> WorkerExited: abort
+    FailedExited --> Ready: explicit retry
+    BlockedExited --> Ready: explicit retry
+    Integrated --> Cleaning: successful batch
+    Cleaning --> Cleaned: eligible resources removed
+    Cleaning --> ReviewRequired: confirmation needed
+    ReviewRequired --> Cleaned: user approves current inspection
+    ReviewRequired --> Retained: user keeps or does not respond
+    Retained --> Cleaning: explicit cleanup retry
+    Cleaned --> [*]
 ```
 
 ### Readiness and parallelism
@@ -619,17 +664,20 @@ IDs are saved when available.
 openspec-runner attach user-auth 1.1
 ```
 
-`attach` focuses the saved agent. Herdr preserves panes across client detach and
-reconnect. A server or machine restart may require the exact saved Codex resume
-command. Herdr idle/done indicators describe terminal activity, not task
-completion.
+While a worker is active, `attach` focuses its saved pane. After the worker exits
+or its worktree is removed, `attach` returns the retained session, branch, log,
+and available inspection details instead of trying to resume in a missing
+directory. Herdr preserves panes across client detach and reconnect. A server or
+machine restart may require the exact saved Codex resume command. Herdr idle/done
+indicators describe terminal activity, not task completion.
 
 ### Outside Herdr
 
-`launch` returns exact commands to run once in separate terminals. Each command
-includes the worker prompt and working directory. Do not replace it with an
-unrequested background process or invoke it twice. `attach` prints the saved
-resume command instead of focusing a pane.
+`launch` returns exact supervised worker commands to run once in separate
+terminals. Each command starts `openspec-runner worker`, which in turn runs one
+`codex exec` with the saved prompt and working directory. Do not replace it with
+an unrequested background process or invoke it twice. While the worker remains
+active, `attach` prints the saved resume command instead of focusing a pane.
 
 An attempt without a saved Codex identity cannot be recreated blindly after an
 ambiguous startup. Inspect its saved workspace/pane or explicitly recover the
@@ -637,11 +685,20 @@ appropriate lifecycle stage.
 
 ### Worktree and terminal cleanup
 
-With `cleanup: automatic` (the default for new and existing configuration), cleanup
-runs after each successful integration batch. When every planned task is satisfied,
-a second sweep considers all recorded attempts, including obsolete failed/blocked
-retries. Conflicts and failed checks retain the batch's worktrees for recovery.
-The integration worktree stays available for explicit branch delivery and archival.
+With `cleanup: automatic` (the default for new and existing configuration), the
+runner performs two cleanup phases:
+
+1. **After each integrated batch:** only after every selected merge and
+   integration check succeeds—including an `integrate --continue` recovery—the
+   runner considers that batch's integrated attempts. A conflict, failed check,
+   or unacknowledged worker exit retains the worktrees needed for recovery.
+2. **After the whole change is complete:** when every planned task was already
+   complete in the baseline or has been integrated, and no attempt or integration
+   transaction is active, the runner sweeps all recorded attempts. This catches
+   obsolete failed, blocked, stale, invalidated, and superseded retry worktrees.
+
+The integration worktree is excluded from both phases and stays available for
+explicit branch delivery and OpenSpec archival.
 
 New workers use supervised `codex exec`: after an accepted final report they end
 their turn, exit, and the supervisor records the actual exit. Sessions persist in
@@ -665,6 +722,17 @@ invoking, integration, active, and unrelated worktrees are protected. Ignored
 build/dependency files disappear with the removed directory. Branches, commits,
 reports, and session identities remain.
 
+Cleanup reports one status per attempt:
+
+| Status | Meaning and next action |
+|---|---|
+| `eligible` | Inspection found no review condition. A dry run would remove it; a real cleanup proceeds automatically. |
+| `removed` | The verified terminal was closed when applicable and the worktree was removed. |
+| `already-removed` | No registered worktree or residual path remains; no action is needed. |
+| `confirmation-required` | Removal could discard changes or close a reviewed terminal. Show the path, reasons, changes, and terminal details to the user, then keep it or submit its token. |
+| `skipped` | A hard protection or uncertain identity prevents automated removal. Resolve the stated reason before retrying; confirmation does not override this status. |
+| `failed` | Closing the terminal or removing the worktree failed. Integration remains successful; inspect the reason and retry cleanup. |
+
 Inspect or retry cleanup, including after archival in the main checkout:
 
 ```sh
@@ -674,6 +742,32 @@ openspec-runner cleanup user-auth --all
 # After the user approves one reviewed candidate:
 openspec-runner cleanup user-auth --all --attempt ATTEMPT_ID --confirm TOKEN --json
 ```
+
+For automation, first inspect with `--dry-run --json`. A review case resembles:
+
+```json
+{
+  "cleaned": false,
+  "branchesRetained": true,
+  "scope": { "all": true, "tasks": [] },
+  "results": [
+    {
+      "attempt": "attempt-id",
+      "task": "1.1",
+      "path": "/absolute/path/to/task-worktree",
+      "status": "confirmation-required",
+      "reasons": ["Deletion discards the listed tracked/untracked local changes"],
+      "changes": "?? notes.txt",
+      "terminal": { "kind": "manual", "reason": "Confirm the worker has exited and all manually opened terminals/processes using this worktree have been closed" },
+      "token": "state-bound-approval-token"
+    }
+  ]
+}
+```
+
+The token is deliberately bound to that inspection. Re-run the dry run and ask
+again if the worktree contents, HEAD, lock, integration state, or terminal state
+changes before confirmation. Never cache or broadly reuse cleanup tokens.
 
 `--all` requires proof that all planned tasks are satisfied and no attempts are
 active. Cleanup failures are reported separately and never turn successful
@@ -767,6 +861,10 @@ safe inspection point before worktrees, attempts, or sessions are created.
 - Concurrency and duplicate prevention use a repository-wide lock shared across
   worktrees and changes.
 - Ambiguous external side effects are recorded and not blindly repeated.
+- Automatic cleanup removes only verified runner-owned task worktrees; review
+  conditions require an exact, state-bound user confirmation.
+- Cleanup failure is reported independently and does not undo or misreport a
+  successful integration.
 - Final delivery, branch deletion, and OpenSpec archival are never implicit.
 
 The lock records PID and host. After a coordinator crash, confirm its owner is
@@ -820,6 +918,37 @@ explicitly permits `retry`.
 Inspect the returned integration worktree. Resolve and stage conflicts or fix the
 verification failure, then use `integrate --continue`. Use `integrate --abort`
 to discard the current pending transaction.
+
+### A task reported completion but integration says its worker has not exited
+
+The structured report was accepted, but the supervised `codex exec` process has
+not yet returned and recorded its exit. Inspect it with `status` and `attach`.
+Ask the worker to end its turn if it is still active; do not kill it or integrate
+the worktree while the exit is uncertain. Once the supervisor records the exit,
+run `integrate` again.
+
+### Cleanup requires confirmation
+
+Inspect the exact candidate and present its path, reasons, changed files, and
+terminal activity to the user:
+
+```sh
+openspec-runner cleanup <change> --all --dry-run --json
+```
+
+An empty response or a decision to keep means no deletion. After an explicit
+approval, submit only that attempt's current token. If confirmation fails because
+state changed, inspect again and request a new decision rather than reusing the
+old token.
+
+### Cleanup was skipped or failed
+
+Read the per-attempt `reasons` in JSON output. `skipped` usually means a protected
+path, active transaction, moved worktree, mismatched ownership, or unavailable
+terminal inspection; fix that condition before retrying. `failed` means an
+eligible or approved operation was attempted but did not finish. The integration
+commit remains valid in both cases, and the worktree is retained unless removal
+was acknowledged.
 
 ### Validation reports plan drift
 

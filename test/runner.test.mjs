@@ -788,14 +788,16 @@ test("terminal closure failure and edits during closure preserve the worktree", 
   }
 });
 
-test("unacknowledged worker exit prevents terminal or worktree removal", (t) => {
+test("unacknowledged worker exit prevents integration, terminal closure and removal", (t) => {
   const { runner: r, bin, dir } = fixture(t);
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
   const paneState = liveTerminal(r, a, bin, dir);
   const s = r.read("demo"); delete s.attempts[0].worker.exitedAt; r.save(s);
-  const result = r.integrate("demo", ["1.1"]);
-  assert.equal(result.cleanup.results[0].status, "skipped");
-  assert.match(result.cleanup.results[0].reasons[0], /exit is not acknowledged/);
+  assert.throws(
+    () => r.integrate("demo", ["1.1"]),
+    /supervised worker has not exited/,
+  );
+  assert.equal(r.read("demo").attempts[0].phase, "completed");
   assert.equal(JSON.parse(readFileSync(paneState)).closed, false);
   assert.equal(existsSync(a.path), true);
 });

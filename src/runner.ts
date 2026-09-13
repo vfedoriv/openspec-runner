@@ -696,6 +696,10 @@ export class Runner {
         if (a?.phase === "integrated") continue;
         if (!a || a.phase !== "completed" || !a.report)
           throw new Error(`Task ${task} needs a completed report`);
+        if (a.worker && !a.worker.exitedAt)
+          throw new Error(
+            `Task ${task} reported but its supervised worker has not exited yet`,
+          );
         if (a.fingerprint !== s.fingerprint)
           throw new Error("Task plan is stale; reconcile and retry");
         this.verifyResult(a, a.report, change);
