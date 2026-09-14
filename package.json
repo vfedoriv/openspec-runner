@@ -2,6 +2,7 @@
   "name": "openspec-runner",
   "version": "0.1.0",
   "description": "Run individual OpenSpec tasks in isolated Codex sessions and worktrees",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "bin": {
