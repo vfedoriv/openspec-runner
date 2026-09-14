@@ -1,7 +1,7 @@
 {
   "name": "openspec-runner",
   "version": "0.1.0",
-  "description": "Run individual OpenSpec tasks in isolated Codex sessions and worktrees",
+  "description": "Run reviewed OpenSpec task batches through Codex or Claude Code in isolated worktrees",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -12,6 +12,7 @@
     "bin",
     "dist",
     "skills",
+    "harnesses",
     "README.md"
   ],
   "engines": {

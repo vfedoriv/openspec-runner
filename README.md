@@ -131,7 +131,8 @@ The target project must have:
 - Node.js 22.13 or newer.
 - Git and a Git repository.
 - OpenSpec installed and initialized in the project.
-- Codex CLI installed, authenticated, and available on `PATH`.
+- At least one selected worker harness—Codex or Claude Code—installed,
+  authenticated, and available on `PATH`.
 - The planning artifacts committed before the first launch.
 
 Optional integrations:
@@ -149,7 +150,8 @@ Check the required tools before installation:
 node --version
 git --version
 openspec --version
-codex --version
+codex --version        # when using Codex
+claude --version       # when using Claude Code
 ```
 
 ## Install into a target project
@@ -195,6 +197,8 @@ Run `init` from anywhere inside the target Git repository:
 ```sh
 cd /path/to/target-project
 openspec-runner init
+# or: openspec-runner init --agent claude
+# or: openspec-runner init --agent all
 ```
 
 It creates this project-local installation:
@@ -206,11 +210,16 @@ target-project/
 │       ├── openspec-runner-plan/SKILL.md
 │       ├── openspec-runner-coordinate/SKILL.md
 │       └── openspec-runner-implement/SKILL.md
+├── .claude/
+│   └── skills/              # installed by init --agent claude|all
 └── openspec/
     └── runner.yaml
 ```
 
-`init` is safe to rerun after rebuilding or upgrading the runner:
+`init` is safe to rerun after rebuilding or upgrading the runner. `codex` remains
+the compatibility default; `claude` creates a version-2 config with an explicit
+`sonnet` default and `dontAsk` permissions; `all` installs both skill targets and
+allows `--default-agent codex|claude` for a new version-2 config:
 
 - It updates only the three runner-owned `SKILL.md` files.
 - It does not remove or replace unrelated project skills.
@@ -222,7 +231,7 @@ Review and commit the installed files so every task worktree receives the same
 skills and configuration:
 
 ```sh
-git add .agents/skills/openspec-runner-* openspec/runner.yaml
+git add .agents/skills/openspec-runner-* .claude/skills/openspec-runner-* openspec/runner.yaml
 git commit -m "Install OpenSpec runner skills"
 ```
 
@@ -503,6 +512,32 @@ Commands are argument arrays, not shell strings. Keep `setup` idempotent because
 recovery can explicitly rerun unfinished setup. Integration checks must not leave
 unexplained unstaged or untracked files.
 
+New projects can select a harness with version 2:
+
+```yaml
+version: 2
+defaultAgent: claude
+agents:
+  claude:
+    defaultModel: sonnet
+    permissionMode: dontAsk
+    allowedTools: []
+    # Optional reviewed supplement:
+    # planningRules: openspec/planning-rules/claude.md
+maxParallel: 4
+worktrees: auto
+terminal: auto
+cleanup: automatic
+setup: []
+verifyIntegration: []
+```
+
+`defaultAgent` is the project fallback; a launch batch may select another
+registered harness with `--agent`. Each batch is homogeneous, while separate
+batches may use different harnesses. `agents.<harness>` owns that harness's
+model, permission, and planning-rule settings. `allowedTools: []` grants
+nothing, and the runner never injects a permission bypass.
+
 ### Per-change assignments: `execution.yaml`
 
 Place `execution.yaml` beside the change's `tasks.md`:
@@ -532,20 +567,43 @@ Dependencies must reference existing tasks and the graph must be acyclic.
 Previously completed checkboxes in the initial committed baseline count as
 satisfied.
 
+Version 2 assigns one change-level harness and uses the common `effort` field:
+
+```yaml
+version: 2
+agent: claude
+tasks:
+  "1.1":
+    model: sonnet
+    parallel: true
+  "1.2":
+    model: sonnet
+    effort: high
+    parallel: true
+```
+
+Task-level `agent` fields are rejected. Version-1 files remain Codex-compatible
+and are normalized as Codex at runtime; old and new schemas are never silently
+translated between harnesses.
+
 ### Model and effort resolution
 
-Inspect currently advertised Codex models with:
+Inspect models and aliases through the selected harness with:
 
 ```sh
 openspec-runner models --json
+openspec-runner models --agent claude --json
+openspec-runner planning-rules --agent claude --json
 ```
 
 Model IDs are configurable and not hard-coded by the skills. At batch launch:
 
-- An omitted model or `session` inherits the calling session's captured model
-  and reasoning effort.
+- An omitted model uses the selected harness's configured/default model. `session`
+  means calling-session inheritance; it is supported for Codex and intentionally
+  unavailable for Claude until a stable reader exists.
 - An explicitly different model uses its advertised default effort unless
-  `reasoningEffort` is assigned.
+  an effort is assigned. Claude may intentionally omit effort and use its
+  CLI/model default.
 - An explicit assignment matching the inherited model inherits its effort.
 - If calling-session metadata is unavailable, supply explicit defaults:
 
@@ -555,12 +613,16 @@ openspec-runner launch user-auth --tasks 1.1 \
   --default-effort high
 ```
 
-The isolated metadata reader currently supports Codex CLI 0.153.x and the
+The isolated Codex metadata reader currently supports Codex CLI 0.153.x and the
 `state_5.sqlite` threads schema, tested with 0.153.4. It selects only `model`
 and `reasoning_effort` for `CODEX_THREAD_ID` through a read-only connection;
 it does not read messages, titles, authentication, or unrelated threads.
-Unsupported formats fail with an explicit-default instruction. Resolved settings
-are saved with attempts, so later model switches do not alter resume behavior.
+Unsupported formats fail with an explicit-default instruction. Claude uses print
+mode with structured `stream-json`, a preallocated `--session-id`, and exact
+`--resume` only after stream identity confirmation. Credentials remain in the
+user's CLI configuration and are never copied into runner state. Resolved
+settings and the immutable harness are saved with attempts, so later model or
+calling-session changes do not alter resume behavior.
 
 ## Task lifecycle and integration
 
@@ -656,9 +718,9 @@ it.
 ### Inside Herdr
 
 For every task, the runner creates a labeled workspace without changing focus,
-starts a supervised `codex exec` worker in the returned pane with explicit settings
-and working directory. Workspace, pane, terminal, and worker session
-IDs are saved when available.
+starts a supervised Codex or Claude worker in the returned pane with explicit
+settings and working directory. Workspace, pane, terminal, batch, harness, and
+worker session IDs are saved when available.
 
 ```sh
 openspec-runner attach user-auth 1.1
@@ -668,18 +730,20 @@ While a worker is active, `attach` focuses its saved pane. After the worker exit
 or its worktree is removed, `attach` returns the retained session, branch, log,
 and available inspection details instead of trying to resume in a missing
 directory. Herdr preserves panes across client detach and reconnect. A server or
-machine restart may require the exact saved Codex resume command. Herdr idle/done
+machine restart may require the exact saved Codex or Claude resume command. Herdr idle/done
 indicators describe terminal activity, not task completion.
 
 ### Outside Herdr
 
 `launch` returns exact supervised worker commands to run once in separate
 terminals. Each command starts `openspec-runner worker`, which in turn runs one
-`codex exec` with the saved prompt and working directory. Do not replace it with
+selected-harness CLI with the saved prompt and working directory. Claude prompts
+are sent through stdin in print/stream-json mode; its session UUID is checked
+against emitted stream events. Do not replace it with
 an unrequested background process or invoke it twice. While the worker remains
 active, `attach` prints the saved resume command instead of focusing a pane.
 
-An attempt without a saved Codex identity cannot be recreated blindly after an
+An attempt without a saved harness identity cannot be recreated blindly after an
 ambiguous startup. Inspect its saved workspace/pane or explicitly recover the
 appropriate lifecycle stage.
 
@@ -700,9 +764,10 @@ runner performs two cleanup phases:
 The integration worktree is excluded from both phases and stays available for
 explicit branch delivery and OpenSpec archival.
 
-New workers use supervised `codex exec`: after an accepted final report they end
-their turn, exit, and the supervisor records the actual exit. Sessions persist in
-Codex and runner logs live under the Git common directory's `openspec-runner/logs`.
+New workers use supervised Codex or Claude processes: after an accepted final
+report they end their turn, exit, and the supervisor records the actual exit.
+Sessions persist in the selected provider and runner logs live under the Git
+common directory's `openspec-runner/logs`.
 Report acceptance alone is not proof of exit. A worker that exits without an
 accepted report is marked failed for explicit retry. No automatic process killing
 or guessed terminal input is used.
@@ -821,11 +886,12 @@ Checkbox completion changes alone do not invalidate fingerprints.
 
 | Command | Purpose |
 |---|---|
-| `init` | Create `runner.yaml` when absent and install/update three project skills |
-| `models [--json]` | Query Codex model IDs and supported reasoning settings |
+| `init [--agent codex\|claude\|all]` | Create `runner.yaml` when absent and install selected project skills |
+| `models [--agent HARNESS] [--json]` | Query the selected harness model capabilities; Claude discovery is explicitly non-exhaustive |
+| `planning-rules --agent HARNESS [--json]` | Show bundled and configured versioned planning guidance with hashes |
 | `validate <change> [--json]` | Validate task numbering, coverage, dependencies, and OpenSpec readiness |
 | `status <change> [--json]` | Inspect readiness, attempts, reports, and sessions |
-| `launch <change> --tasks IDS` | Launch exactly the selected comma-separated tasks |
+| `launch <change> --tasks IDS [--agent HARNESS]` | Launch exactly the selected tasks through one harness |
 | `launch ... --dry-run --json` | Preview without creating resources |
 | `launch ... --default-model MODEL` | Override the inherited/default model |
 | `launch ... --default-effort EFFORT` | Override effort for inherited tasks |
@@ -850,6 +916,8 @@ safe inspection point before worktrees, attempts, or sessions are created.
 ## State and safety guarantees
 
 - Only explicit task selections launch, integrate, retry, or clean up.
+- Every batch records one immutable harness and every attempt records that batch;
+  a retry may select another harness only after the previous attempt is stopped.
 - The runner does not continuously schedule newly ready tasks.
 - Only integration updates canonical OpenSpec task checkboxes.
 - Workers cannot claim completion without verification evidence, a full commit
@@ -861,6 +929,8 @@ safe inspection point before worktrees, attempts, or sessions are created.
 - Concurrency and duplicate prevention use a repository-wide lock shared across
   worktrees and changes.
 - Ambiguous external side effects are recorded and not blindly repeated.
+- Claude workers use `--session-id` plus matching stream identity and terminal
+  evidence; a reserved UUID alone is not proof of a live session or completion.
 - Automatic cleanup removes only verified runner-owned task worktrees; review
   conditions require an exact, state-bound user confirmation.
 - Cleanup failure is reported independently and does not undo or misreport a
@@ -884,6 +954,23 @@ installing configuration or skills.
 Confirm the files exist under `.agents/skills/`, commit them, and start or
 refresh the Codex session from the target project. Rerun `openspec-runner init`
 after upgrading the runner checkout.
+
+### Claude Code cannot see the runner skills or start unattended
+
+Use `openspec-runner init --agent claude` (or `--agent all`) and commit
+`.claude/skills/`. Claude must be installed and authenticated separately. The
+runner uses `-p --output-format stream-json --verbose`, sends the prompt on
+stdin, and uses the configured permission mode and `allowedTools`; it never
+injects `--dangerously-skip-permissions`. A Claude worker cannot inherit a
+calling Codex model, so use `--default-model` or an explicit task model.
+
+### Claude reports a session or terminal-evidence error
+
+The UUID passed to `--session-id` is only a reservation. The stream must emit
+the same `session_id`, the worker must register it with `begin --session`, and a
+terminal result event must be observed before a completed report can be
+integrated. Inspect the retained log and retry explicitly after diagnosing a
+CLI, permission, or model failure.
 
 ### Launch cannot read the calling session model
 
@@ -921,7 +1008,7 @@ to discard the current pending transaction.
 
 ### A task reported completion but integration says its worker has not exited
 
-The structured report was accepted, but the supervised `codex exec` process has
+The structured report was accepted, but the supervised Codex or Claude process has
 not yet returned and recorded its exit. Inspect it with `status` and `attach`.
 Ask the worker to end its turn if it is still active; do not kill it or integrate
 the worktree while the exit is uncertain. Once the supervisor records the exit,

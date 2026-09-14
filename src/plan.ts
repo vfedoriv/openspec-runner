@@ -9,8 +9,11 @@ import { resolve, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { parse } from "yaml";
 import { git, run } from "./system.js";
+import { hasHarness, harnessIds } from "./harnesses/registry.js";
+import type { AgentConfig } from "./harnesses/types.js";
 export interface Assignment {
   model?: string;
+  effort?: string;
   reasoningEffort?: string;
   dependsOn: string[];
   parallel: boolean;
@@ -22,8 +25,10 @@ export interface Task {
   line: number;
 }
 export interface Config {
-  version: 1;
+  version: 1 | 2;
   defaultModel: string;
+  defaultAgent: string;
+  agents: Record<string, AgentConfig>;
   maxParallel: number;
   worktrees: "auto" | "git" | "worktrunk";
   terminal: "auto" | "manual" | "herdr";
@@ -38,6 +43,7 @@ export interface Plan {
   tasks: Task[];
   assignments: Record<string, Assignment>;
   config: Config;
+  agent: string;
   fingerprint: string;
   files: string[];
 }
@@ -49,7 +55,7 @@ function keys(x: Record<string, any>, allowed: string[]) {
       throw new Error(`Unknown configuration field: ${k}`);
 }
 function identifier(x: unknown): x is string {
-  return typeof x === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(x);
+  return typeof x === "string" && !!x.trim() && !/[\0\r\n]/.test(x);
 }
 export function tasksFrom(text: string): Task[] {
   const tasks: Task[] = [];
@@ -83,29 +89,101 @@ export function tasksFrom(text: string): Task[] {
   return tasks;
 }
 export function configFrom(raw: unknown): Config {
-  if (!object(raw) || raw.version !== 1)
-    throw new Error("runner.yaml requires version: 1");
-  keys(raw, [
-    "version",
-    "defaultModel",
-    "maxParallel",
-    "worktrees",
-    "terminal",
-    "cleanup",
-    "setup",
-    "verifyIntegration",
-  ]);
+  if (!object(raw) || ![1, 2].includes(raw.version))
+    throw new Error("runner.yaml requires version: 1 or 2");
+  const version = raw.version as 1 | 2;
+  keys(
+    raw,
+    version === 1
+      ? [
+          "version",
+          "defaultModel",
+          "maxParallel",
+          "worktrees",
+          "terminal",
+          "cleanup",
+          "setup",
+          "verifyIntegration",
+        ]
+      : [
+          "version",
+          "defaultAgent",
+          "agents",
+          "maxParallel",
+          "worktrees",
+          "terminal",
+          "cleanup",
+          "setup",
+          "verifyIntegration",
+        ],
+  );
+  if (version === 1) {
+    const c = {
+      version: 1 as const,
+      defaultModel: "session",
+      defaultAgent: "codex",
+      agents: { codex: { defaultModel: "session" } },
+      maxParallel: 4,
+      worktrees: "auto" as const,
+      terminal: "auto" as const,
+      cleanup: "automatic" as const,
+      setup: [] as string[][],
+      verifyIntegration: [] as string[][],
+      ...raw,
+    } as Config;
+    c.agents = { codex: { defaultModel: c.defaultModel } };
+    return validateConfig(c);
+  }
+  if (raw.defaultAgent !== undefined && !hasHarness(raw.defaultAgent))
+    throw new Error(
+      `Unknown defaultAgent ${String(raw.defaultAgent)}; available harnesses: ${harnessIds().join(", ")}`,
+    );
+  if (!object(raw.agents)) throw new Error("version 2 runner.yaml requires agents mapping");
+  const agents: Record<string, AgentConfig> = {};
+  for (const [id, value] of Object.entries(raw.agents)) {
+    if (!hasHarness(id))
+      throw new Error(`Unknown harness configuration: ${id}; available harnesses: ${harnessIds().join(", ")}`);
+    if (!object(value)) throw new Error(`Agent configuration must be a mapping: ${id}`);
+    keys(value, ["defaultModel", "permissionMode", "allowedTools", "planningRules"]);
+    const agent = {
+      defaultModel: value.defaultModel,
+      ...(value.permissionMode !== undefined ? { permissionMode: value.permissionMode } : {}),
+      ...(value.allowedTools !== undefined ? { allowedTools: value.allowedTools } : {}),
+      ...(value.planningRules !== undefined ? { planningRules: value.planningRules } : {}),
+    } as AgentConfig;
+    if (!identifier(agent.defaultModel)) throw new Error(`Invalid defaultModel for harness ${id}`);
+    if (agent.permissionMode !== undefined && !identifier(agent.permissionMode))
+      throw new Error(`Invalid permissionMode for harness ${id}`);
+    if (agent.permissionMode === "bypassPermissions")
+      throw new Error("bypassPermissions is not allowed; use an explicit reviewed permission policy");
+    if (agent.planningRules !== undefined && (!identifier(agent.planningRules) || agent.planningRules.startsWith("/")))
+      throw new Error(`Invalid planningRules path for harness ${id}`);
+    if (
+      agent.allowedTools !== undefined &&
+      (!Array.isArray(agent.allowedTools) || agent.allowedTools.some((x) => !identifier(x)))
+    )
+      throw new Error(`allowedTools must contain safe strings for harness ${id}`);
+    agents[id] = agent;
+  }
+  const defaultAgent = raw.defaultAgent as string | undefined;
+  if (!defaultAgent || !agents[defaultAgent])
+    throw new Error("version 2 runner.yaml defaultAgent must have an agents entry");
   const c = {
-    version: 1,
-    defaultModel: "session",
+    version: 2 as const,
+    defaultAgent,
+    defaultModel: agents[defaultAgent].defaultModel,
+    agents,
     maxParallel: 4,
-    worktrees: "auto",
-    terminal: "auto",
-    cleanup: "automatic",
-    setup: [],
-    verifyIntegration: [],
+    worktrees: "auto" as const,
+    terminal: "auto" as const,
+    cleanup: "automatic" as const,
+    setup: [] as string[][],
+    verifyIntegration: [] as string[][],
     ...raw,
   } as Config;
+  return validateConfig(c);
+}
+function validateConfig(c: Config): Config {
   if (
     !identifier(c.defaultModel) ||
     !Number.isInteger(c.maxParallel) ||
@@ -132,22 +210,47 @@ export function configFrom(raw: unknown): Config {
       throw new Error("Commands must be nonempty argument arrays");
   return c;
 }
+
+export function executionAgentFrom(raw: unknown): string {
+  if (!object(raw) || ![1, 2].includes(raw.version))
+    throw new Error("execution.yaml requires version: 1 or 2");
+  if (raw.version === 1) return "codex";
+  if (raw.agent === undefined) return "";
+  if (!hasHarness(raw.agent))
+    throw new Error(
+      `Unknown execution agent ${String(raw.agent)}; available harnesses: ${harnessIds().join(", ")}`,
+    );
+  return raw.agent;
+}
 export function assignmentsFrom(
   raw: unknown,
   tasks: Task[],
 ): Record<string, Assignment> {
-  if (!object(raw) || raw.version !== 1 || !object(raw.tasks))
-    throw new Error("execution.yaml requires version: 1 and tasks mapping");
-  keys(raw, ["version", "tasks"]);
+  if (!object(raw) || ![1, 2].includes(raw.version) || !object(raw.tasks))
+    throw new Error("execution.yaml requires version: 1 or 2 and tasks mapping");
+  const version = raw.version as 1 | 2;
+  keys(raw, version === 1 ? ["version", "tasks"] : ["version", "agent", "tasks"]);
+  if (version === 2) {
+    if (raw.agent !== undefined && !hasHarness(raw.agent))
+      throw new Error(
+        `Unknown execution agent ${String(raw.agent)}; available harnesses: ${harnessIds().join(", ")}`,
+      );
+  }
   const result: Record<string, Assignment> = {};
   for (const task of tasks) {
     const a = raw.tasks[task.id];
     if (!object(a)) throw new Error(`Missing assignment: ${task.id}`);
-    keys(a, ["model", "reasoningEffort", "dependsOn", "parallel"]);
+    keys(
+      a,
+      version === 1
+        ? ["model", "reasoningEffort", "dependsOn", "parallel"]
+        : ["model", "effort", "dependsOn", "parallel"],
+    );
     if (a.model !== undefined && !identifier(a.model))
       throw new Error(`Invalid model: ${task.id}`);
-    if (a.reasoningEffort !== undefined && !identifier(a.reasoningEffort))
-      throw new Error(`Invalid reasoningEffort: ${task.id}`);
+    const effort = version === 1 ? a.reasoningEffort : a.effort;
+    if (effort !== undefined && !identifier(effort))
+      throw new Error(`Invalid ${version === 1 ? "reasoningEffort" : "effort"}: ${task.id}`);
     if (a.parallel !== undefined && typeof a.parallel !== "boolean")
       throw new Error(`Invalid parallel permission: ${task.id}`);
     const deps = a.dependsOn ?? [];
@@ -159,7 +262,18 @@ export function assignmentsFrom(
       new Set(deps).size !== deps.length
     )
       throw new Error(`Invalid dependencies: ${task.id}`);
-    result[task.id] = { ...a, dependsOn: deps, parallel: a.parallel === true };
+    result[task.id] = {
+      ...(a.model !== undefined ? { model: a.model } : {}),
+      ...(version === 1
+        ? effort !== undefined
+          ? { reasoningEffort: effort }
+          : {}
+        : effort !== undefined
+          ? { effort }
+          : {}),
+      dependsOn: deps,
+      parallel: a.parallel === true,
+    };
   }
   for (const id of Object.keys(raw.tasks))
     if (!result[id]) throw new Error(`Unknown task assignment: ${id}`);
@@ -190,6 +304,7 @@ export function loadPlan(root: string, change: string): Plan {
     parse(readFileSync(resolve(directory, "execution.yaml"), "utf8")),
     tasks,
   );
+  const execution = parse(readFileSync(resolve(directory, "execution.yaml"), "utf8"));
   const files: string[] = [];
   function walk(dir: string) {
     for (const entry of readdirSync(dir).sort()) {
@@ -205,6 +320,20 @@ export function loadPlan(root: string, change: string): Plan {
   files.push("openspec/runner.yaml");
   if (existsSync(resolve(root, "openspec/config.yaml")))
     files.push("openspec/config.yaml");
+  // Project planning-rule supplements are reviewed planning inputs too. Keep
+  // them inside the repository and require ordinary committed-file checks to
+  // cover drift just like the runner and execution artifacts.
+  for (const agent of Object.values(config.agents)) {
+    if (!agent.planningRules) continue;
+    const supplement = resolve(root, agent.planningRules);
+    if (!supplement.startsWith(resolve(root) + sep))
+      throw new Error("Planning rules supplement must remain inside the repository");
+    if (!existsSync(supplement) || !lstatSync(supplement).isFile())
+      throw new Error(`Planning rules supplement does not exist: ${agent.planningRules}`);
+    if (lstatSync(supplement).isSymbolicLink())
+      throw new Error(`Planning rules supplement cannot be a symlink: ${supplement}`);
+    files.push(relative(root, supplement));
+  }
   const hash = createHash("sha256");
   for (const p of files.sort()) {
     let content = readFileSync(resolve(root, p), "utf8");
@@ -223,6 +352,7 @@ export function loadPlan(root: string, change: string): Plan {
     tasks,
     assignments,
     config,
+    agent: executionAgentFrom(execution) || config.defaultAgent,
     fingerprint: hash.digest("hex"),
     files,
   };

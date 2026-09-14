@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { git, run, attempt } from "./system.js";
+import type { HarnessSettings } from "./harnesses/types.js";
 import type { Settings } from "./codex.js";
 import { codexArgs } from "./codex.js";
 export interface Workspace {
@@ -135,11 +136,12 @@ export function startTerminal(
   path: string,
   commonGitDir: string,
   label: string,
-  settings: Settings,
+  settings: HarnessSettings,
   prompt: string,
   terminal: Terminal,
   save: () => void,
   workerCommand?: string,
+  agent = settings.harness ?? "codex",
 ) {
   if (terminal.phase)
     throw new Error(
@@ -175,6 +177,8 @@ export function startTerminal(
     save();
     return;
   }
+  if (agent !== "codex")
+    throw new Error("Only Codex's legacy Herdr agent fallback is supported; use the supervised worker command");
   terminal.agent = `osr-${label.replace(/[^a-z0-9]/g, "").slice(-27)}`;
   save();
   herdr(root, [
@@ -186,7 +190,7 @@ export function startTerminal(
     "--pane",
     terminal.pane,
     "--",
-    ...codexArgs(settings, path, undefined, commonGitDir),
+    ...codexArgs(settings as Settings, path, undefined, commonGitDir),
   ]);
   terminal.phase = "submitting";
   save();

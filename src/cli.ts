@@ -1,19 +1,24 @@
 import { parseArgs } from "node:util";
-import { mkdirSync, existsSync, copyFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Runner } from "./runner.js";
-import { loadPlan, readiness } from "./plan.js";
+import { loadPlan, readiness, configFrom } from "./plan.js";
 import { json, repository } from "./system.js";
-import { models, sessionSettings, type Settings } from "./codex.js";
+import { sessionSettings } from "./codex.js";
+import { getHarness, harnessIds, hasHarness, planningRules } from "./harnesses/registry.js";
+import type { HarnessSettings } from "./harnesses/types.js";
 import { createInterface } from "node:readline/promises";
-const help = `openspec-runner — explicit OpenSpec task batches in isolated Codex worktrees
+import { parse } from "yaml";
+const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
-init                           Create runner.yaml and install three project skills
-models [--json]                Query Codex model identifiers and reasoning settings
+init [--agent ID|all]          Create runner.yaml and install selected project skills
+models [--agent ID] [--json]   Query the selected harness model capabilities
+planning-rules --agent ID      Show versioned model/effort planning guidance
 validate <change> [--json]      Validate task metadata and OpenSpec readiness
 status <change> [--json]        Inspect dependencies, attempts, and session locations
 launch <change> --tasks IDS     Launch exactly these comma-separated task numbers
+  --agent ID                   Select one harness for this batch
   --dry-run --json             Preview without creating resources
   --default-model MODEL        Override captured calling-session default
   --default-effort EFFORT      Override inherited effort
@@ -27,7 +32,7 @@ cleanup <change> --tasks IDS    Remove selected integrated worktrees; retain bra
   --all                       Sweep every attempt after all planned tasks are satisfied
   --dry-run --json             Inspect cleanup without changing resources
   --attempt ID --confirm TOKEN Approve only the inspected attempt and contents
-worker <change> <task> --attempt ID  Run the assigned supervised Codex worker once
+worker <change> <task> --attempt ID  Run the assigned supervised worker once
 reconcile <change>              Adopt committed planning edits; invalidate old results
 begin <change> <task> --attempt ID [--session ID]
 report <change> <task> --attempt ID --file PATH
@@ -35,32 +40,54 @@ report <change> <task> --attempt ID --file PATH
 Run coordination inside Herdr for persistent automatic sessions. Otherwise launch
 prints commands to run once in your terminals. Delivery and archival are explicit.
 `;
-export function init(cwd = process.cwd()) {
+export function init(
+  cwd = process.cwd(),
+  selected: "codex" | "claude" | "all" = "codex",
+  defaultAgent?: string,
+) {
+  if (!["codex", "claude", "all"].includes(selected))
+    throw new Error("init --agent must be codex, claude, or all");
+  if (defaultAgent && !hasHarness(defaultAgent))
+    throw new Error(`Unknown default agent ${defaultAgent}; available: ${harnessIds().join(", ")}`);
+  if (defaultAgent && selected !== "all")
+    throw new Error("--default-agent is supported with init --agent all");
   const { root } = repository(cwd),
     config = resolve(root, "openspec/runner.yaml");
   mkdirSync(dirname(config), { recursive: true });
-  if (!existsSync(config))
+  if (!existsSync(config)) {
+    const created = selected === "codex"
+      ? "version: 1\ndefaultModel: session\nmaxParallel: 4\nworktrees: auto\nterminal: auto\ncleanup: automatic\nsetup: []\nverifyIntegration: []\n"
+      : selected === "claude"
+        ? "version: 2\ndefaultAgent: claude\nagents:\n  claude:\n    defaultModel: sonnet\n    permissionMode: dontAsk\n    allowedTools: []\nmaxParallel: 4\nworktrees: auto\nterminal: auto\ncleanup: automatic\nsetup: []\nverifyIntegration: []\n"
+        : `version: 2\ndefaultAgent: ${defaultAgent ?? "codex"}\nagents:\n  codex:\n    defaultModel: session\n  claude:\n    defaultModel: sonnet\n    permissionMode: dontAsk\n    allowedTools: []\nmaxParallel: 4\nworktrees: auto\nterminal: auto\ncleanup: automatic\nsetup: []\nverifyIntegration: []\n`;
     writeFileSync(
       config,
-      "version: 1\ndefaultModel: session\nmaxParallel: 4\nworktrees: auto\nterminal: auto\ncleanup: automatic\nsetup: []\nverifyIntegration: []\n",
+      created,
       { flag: "wx" },
     );
+  }
   const names = [
     "openspec-runner-plan",
     "openspec-runner-coordinate",
     "openspec-runner-implement",
   ];
-  for (const name of names) {
-    const target = resolve(root, ".agents/skills", name);
+  const targets = selected === "all" ? ["codex", "claude"] : [selected];
+  const skills: string[] = [];
+  for (const targetAgent of targets) for (const name of names) {
+    const targetRoot = targetAgent === "claude" ? ".claude/skills" : ".agents/skills";
+    const target = resolve(root, targetRoot, name);
     mkdirSync(target, { recursive: true });
-    copyFileSync(
-      fileURLToPath(new URL(`../skills/${name}/SKILL.md`, import.meta.url)),
-      resolve(target, "SKILL.md"),
-    );
+    const source = fileURLToPath(new URL(`../skills/${name}/SKILL.md`, import.meta.url));
+    const rendered = readFileSync(source, "utf8")
+      .replaceAll("Codex", targetAgent === "claude" ? "Claude Code" : "Codex")
+      .replaceAll("CODEX_THREAD_ID", targetAgent === "claude" ? "the exact Claude session UUID" : "CODEX_THREAD_ID");
+    writeFileSync(resolve(target, "SKILL.md"), rendered);
+    skills.push(target);
   }
   return {
     config,
-    skills: names.map((n) => resolve(root, ".agents/skills", n)),
+    agents: targets,
+    skills,
   };
 }
 export async function main(args = process.argv.slice(2)) {
@@ -76,6 +103,8 @@ export async function main(args = process.argv.slice(2)) {
         "dry-run": { type: "boolean" },
         "default-model": { type: "string" },
         "default-effort": { type: "string" },
+        agent: { type: "string" },
+        "default-agent": { type: "string" },
         base: { type: "string" },
         continue: { type: "boolean" },
         abort: { type: "boolean" },
@@ -93,11 +122,55 @@ export async function main(args = process.argv.slice(2)) {
     }
     if (process.platform === "win32")
       throw new Error("Native Windows is outside v1; use WSL");
+    if (args.filter((arg) => arg === "--agent" || arg.startsWith("--agent=")).length > 1)
+      throw new Error("Specify --agent at most once");
+    if (v.agent !== undefined && !hasHarness(v.agent) && v.agent !== "all")
+      throw new Error(`Unknown agent ${v.agent}; available: ${harnessIds().join(", ")}`);
+    if (v.agent !== undefined && ["worker", "begin", "report"].includes(command))
+      throw new Error("Worker lifecycle commands use the saved batch harness; do not pass --agent");
     let result: unknown;
     if ((v.all || v.confirm) && command !== "cleanup") throw new Error("--all and --confirm require cleanup");
     if (v["dry-run"] && !["cleanup", "launch", "retry"].includes(command)) throw new Error("--dry-run is supported only for cleanup and launch/retry");
-    if (command === "init") result = init();
-    else if (command === "models") result = await models();
+    if (v["default-agent"] !== undefined && command !== "init")
+      throw new Error("--default-agent is supported only by init");
+    if (command === "init") result = init(process.cwd(), (v.agent as "codex" | "claude" | "all" | undefined) ?? "codex", v["default-agent"]);
+    else if (command === "models") {
+      let configuredVersion: 1 | 2 | undefined;
+      let defaultAgent: string | undefined;
+      if (!v.agent) {
+        try {
+          const root = repository(process.cwd()).root;
+          const path = resolve(root, "openspec/runner.yaml");
+          if (existsSync(path)) {
+            const config = configFrom(parse(readFileSync(path, "utf8")));
+            configuredVersion = config.version;
+            defaultAgent = config.defaultAgent;
+          }
+        } catch {
+          // Outside a configured project, preserve the unqualified Codex command.
+        }
+      }
+      const adapter = getHarness(v.agent ?? defaultAgent ?? "codex");
+      const discovered = await adapter.models();
+      result = v.agent || configuredVersion === 2
+        ? discovered
+        : adapter.id === "codex"
+          ? discovered.models
+          : discovered;
+    } else if (command === "planning-rules") {
+      if (!v.agent || v.agent === "all") throw new Error("planning-rules requires --agent HARNESS");
+      let root = process.cwd();
+      try { root = repository(process.cwd()).root; } catch {
+        // Bundled rules are useful while planning before a repository exists.
+      }
+      let agentConfig;
+      const configPath = resolve(root, "openspec/runner.yaml");
+      if (existsSync(configPath)) {
+        const config = configFrom(parse(readFileSync(configPath, "utf8")));
+        agentConfig = config.agents[v.agent];
+      }
+      result = planningRules(v.agent, root, agentConfig);
+    }
     else {
       if (!change) throw new Error("Specify a change name");
       const r = new Runner(),
@@ -107,6 +180,8 @@ export async function main(args = process.argv.slice(2)) {
           const plan = loadPlan(r.repo.root, change);
           result = {
             valid: true,
+            agent: plan.agent,
+            harness: plan.agent,
             tasks: plan.tasks,
             assignments: plan.assignments,
             fingerprint: plan.fingerprint,
@@ -120,32 +195,41 @@ export async function main(args = process.argv.slice(2)) {
         case "launch":
         case "retry": {
           const plan = loadPlan(r.repo.root, change),
-            selected = command === "retry" ? [task] : ids;
+            selected = command === "retry" ? [task] : ids,
+            selectedAgent = v.agent ?? plan.agent ?? plan.config.defaultAgent ?? "codex",
+            adapter = getHarness(selectedAgent),
+            agentConfig = plan.config.agents[selectedAgent];
           if (selected.some((x) => !x))
             throw new Error("Specify a task for retry");
-          let inherited: Settings | undefined;
-          const configured = v["default-model"] ?? plan.config.defaultModel;
+          let inherited: HarnessSettings | undefined;
+          const configured = v["default-model"] ?? agentConfig?.defaultModel ?? plan.config.defaultModel;
           if (configured !== "session")
             inherited = {
               model: configured,
-              reasoningEffort: v["default-effort"],
+              ...(selectedAgent === "codex" && v["default-effort"] ? { reasoningEffort: v["default-effort"] } : {}),
+              ...(selectedAgent !== "codex" && v["default-effort"] ? { effort: v["default-effort"] } : {}),
             };
           else {
-            try {
-              inherited = await sessionSettings();
-            } catch (e) {
-              if (
-                selected.some(
-                  (id) =>
-                    !plan.assignments[id]?.model ||
-                    plan.assignments[id].model === "session",
+            if (selectedAgent === "codex") {
+              try {
+                inherited = await sessionSettings();
+              } catch (e) {
+                if (
+                  selected.some(
+                    (id) =>
+                      !plan.assignments[id]?.model ||
+                      plan.assignments[id].model === "session",
+                  )
                 )
-              )
-                throw e;
+                  throw e;
+              }
+            } else if (selected.some((id) => !plan.assignments[id]?.model || plan.assignments[id].model === "session")) {
+              throw new Error("Claude calling-session model inheritance is unsupported; pass --default-model or assign explicit models");
             }
           }
           if (inherited && v["default-effort"])
-            inherited.reasoningEffort = v["default-effort"];
+            if (selectedAgent === "codex") inherited.reasoningEffort = v["default-effort"];
+            else inherited.effort = v["default-effort"];
           // Explicit different models must use their own advertised default, never global config effort.
           const defaults = new Map<string, string>();
           const preview = r.preview(
@@ -154,11 +238,12 @@ export async function main(args = process.argv.slice(2)) {
             inherited,
             v.base,
             command === "retry",
+            selectedAgent,
           );
-          if (preview.tasks.some((t) => !t.settings.reasoningEffort)) {
-            for (const m of (await models()) as any[])
-              if (typeof m.defaultReasoningEffort === "string")
-                defaults.set(m.model, m.defaultReasoningEffort);
+          if (selectedAgent === "codex" && preview.tasks.some((t) => !t.settings.reasoningEffort)) {
+            const discovered = await adapter.models();
+            for (const m of (discovered.models ?? []) as any[])
+              if (typeof m.defaultReasoningEffort === "string") defaults.set(m.model, m.defaultReasoningEffort);
             for (const t of preview.tasks)
               if (
                 !t.settings.reasoningEffort &&
@@ -168,20 +253,37 @@ export async function main(args = process.argv.slice(2)) {
                   `No default effort advertised for ${t.settings.model}; set reasoningEffort in execution.yaml or --default-effort for inherited tasks`,
                 );
           }
-          if (v["dry-run"])
+          if (v["dry-run"]) {
+            const capabilities = await adapter.capabilities(r.repo.root);
             result = {
               ...preview,
+              capabilities,
+              permissionPolicy: {
+                permissionMode: agentConfig?.permissionMode ?? (selectedAgent === "claude" ? "dontAsk" : undefined),
+                allowedTools: agentConfig?.allowedTools ?? [],
+              },
               tasks: preview.tasks.map((t) => ({
                 ...t,
                 settings: {
-                  ...t.settings,
+                ...t.settings,
                   reasoningEffort:
                     t.settings.reasoningEffort ??
                     defaults.get(t.settings.model),
                 },
               })),
             };
-          else
+          } else {
+            const capabilities = await adapter.capabilities(r.repo.root);
+            if (!capabilities.supported)
+              throw new Error(`${adapter.displayName} is not ready: ${capabilities.reasons.join("; ")}`);
+            if (selectedAgent === "claude" && preview.tasks.some((entry) => entry.settings.effort) && !capabilities.features.effort)
+              throw new Error("Claude CLI does not advertise --effort; omit effort or install a compatible CLI");
+            if (selectedAgent === "claude" && capabilities.supportedEfforts?.length) {
+              const supportedEfforts = capabilities.supportedEfforts;
+              const unsupported = preview.tasks.map((entry) => entry.settings.effort).filter((effort) => effort && !supportedEfforts.includes(effort));
+              if (unsupported.length)
+                throw new Error(`Claude CLI does not support effort ${unsupported[0]}; supported values: ${supportedEfforts.join(", ")}`);
+            }
             result = r.launch(
               change,
               selected,
@@ -189,7 +291,9 @@ export async function main(args = process.argv.slice(2)) {
               v.base,
               command === "retry",
               defaults,
+              selectedAgent,
             );
+          }
           break;
         }
         case "recover":

@@ -30,7 +30,8 @@ import {
   tasksFrom,
   type Plan,
 } from "./plan.js";
-import { codexArgs, resolveSettings, type Settings } from "./codex.js";
+import type { HarnessSettings } from "./harnesses/types.js";
+import { getHarness } from "./harnesses/registry.js";
 import {
   createWorktree,
   startTerminal,
@@ -52,7 +53,15 @@ export interface TaskAttempt extends Workspace {
   task: string;
   description: string;
   fingerprint: string;
-  settings: Settings;
+  settings: HarnessSettings;
+  /** Immutable harness selected for the batch containing this attempt. */
+  agent?: string;
+  harness?: string;
+  batch?: string;
+  expectedSession?: string;
+  observedSession?: string;
+  identityConfirmed?: boolean;
+  terminalEvidence?: { type: string; subtype?: string; metadata?: Record<string, unknown> };
   parallel: boolean;
   phase:
     | "preparing"
@@ -81,13 +90,14 @@ interface Transaction {
   marker: string;
 }
 export interface State {
-  version: 1;
+  version: 1 | 2;
   change: string;
   fingerprint: string;
   integration: Workspace;
   head: string;
   baseline: string[];
   attempts: TaskAttempt[];
+  batches?: Array<{ id: string; harness: string; attempts: string[] }>;
   transaction?: Transaction;
   cleanupBatch?: string[];
   planTasks?: string[];
@@ -96,6 +106,78 @@ export interface State {
 }
 const active = (a: TaskAttempt) =>
   ["preparing", "manual", "launching", "running"].includes(a.phase);
+
+function record(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasKnownHarness(id: string): boolean {
+  try {
+    getHarness(id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Decode both persisted formats without writing during read-only commands. */
+export function decodeState(raw: unknown): State {
+  if (!record(raw) || (raw.version !== 1 && raw.version !== 2))
+    throw new Error(
+      `Unsupported runner state version: ${record(raw) ? String(raw.version) : "unknown"}`,
+    );
+  if (typeof raw.change !== "string" || !Array.isArray(raw.attempts))
+    throw new Error("Invalid runner state: change and attempts are required");
+  const attempts = raw.attempts.map((attempt: any) => {
+    if (!record(attempt) || typeof attempt.id !== "string" || typeof attempt.task !== "string")
+      throw new Error("Invalid runner state attempt identity");
+    if (attempt.agent !== undefined && attempt.harness !== undefined && attempt.agent !== attempt.harness)
+      throw new Error(`Attempt has conflicting harness identities: ${attempt.id}`);
+    return {
+      ...attempt,
+      agent: attempt.agent ?? attempt.harness ?? "codex",
+      harness: attempt.harness ?? attempt.agent ?? "codex",
+    } as TaskAttempt;
+  });
+  if (new Set(attempts.map((attempt) => attempt.id)).size !== attempts.length)
+    throw new Error("Duplicate runner state attempt ID");
+  const batches = raw.version === 1
+    ? attempts.map((attempt) => ({
+        id: `legacy-${attempt.id}`,
+        harness: "codex",
+        attempts: [attempt.id],
+      }))
+    : raw.batches;
+  if (!Array.isArray(batches)) throw new Error("Version 2 runner state requires batches");
+  const byId = new Map<string, { id: string; harness: string; attempts: string[] }>();
+  for (const batch of batches) {
+    if (!record(batch) || typeof batch.id !== "string" || typeof batch.harness !== "string" || !Array.isArray(batch.attempts))
+      throw new Error("Invalid runner state batch");
+    if (!hasKnownHarness(batch.harness)) throw new Error(`Unknown harness in runner state: ${batch.harness}`);
+    if (byId.has(batch.id)) throw new Error(`Duplicate runner state batch: ${batch.id}`);
+    byId.set(batch.id, batch as { id: string; harness: string; attempts: string[] });
+  }
+  const memberships = new Map<string, string>();
+  for (const batch of byId.values()) {
+    for (const id of batch.attempts) {
+      if (memberships.has(id)) throw new Error(`Attempt belongs to multiple batches: ${id}`);
+      memberships.set(id, batch.id);
+    }
+  }
+  for (const current of attempts) {
+    const batchId = current.batch ?? memberships.get(current.id);
+    if (!batchId) throw new Error(`Attempt is not assigned to a batch: ${current.id}`);
+    const batch = byId.get(batchId);
+    if (!batch || batch.harness !== (current.agent ?? "codex"))
+      throw new Error(`Attempt/batch harness mismatch: ${current.id}`);
+    current.batch = batchId;
+    if (!batch.attempts.includes(current.id)) batch.attempts.push(current.id);
+  }
+  const attemptIds = new Set(attempts.map((current) => current.id));
+  for (const [id] of memberships)
+    if (!attemptIds.has(id)) throw new Error(`Batch references unknown attempt: ${id}`);
+  return { ...raw, version: 2, attempts, batches: [...byId.values()] } as State;
+}
 export class Runner {
   repo: ReturnType<typeof repository>;
   constructor(cwd = process.cwd()) {
@@ -108,10 +190,22 @@ export class Runner {
   }
   read(change: string): State | undefined {
     const p = this.path(change);
-    return existsSync(p) ? json<State>(p) : undefined;
+    return existsSync(p) ? decodeState(json<unknown>(p)) : undefined;
   }
   save(s: State) {
-    atomic(this.path(s.change), s);
+    const path = this.path(s.change);
+    if (existsSync(path)) {
+      try {
+        const previous = json<any>(path);
+        const backup = `${path}.v1-backup`;
+        if (previous.version === 1 && !existsSync(backup))
+          writeFileSync(backup, JSON.stringify(previous, null, 2) + "\n", { mode: 0o600 });
+      } catch {
+        // The decoder remains the authority for reporting malformed state.
+      }
+    }
+    const normalized = decodeState({ ...s, version: s.version });
+    atomic(path, { ...normalized, version: 2 });
   }
   lock<T>(fn: () => T) {
     return locked(this.repo.stateDir, fn);
@@ -154,6 +248,9 @@ export class Runner {
       s = this.read(change);
     return {
       change,
+      agent: p.agent,
+      harness: p.agent,
+      batches: s?.batches,
       drift: !!s && s.fingerprint !== p.fingerprint,
       integration: s?.integration,
       head: s?.head,
@@ -185,14 +282,19 @@ export class Runner {
     )
       throw new Error("Select unique existing task IDs with --tasks 2.1,2.2");
   }
+  harness(p: Plan, selected?: string) {
+    return getHarness(selected ?? p.agent ?? p.config.defaultAgent ?? "codex");
+  }
   preview(
     change: string,
     ids: string[],
-    settings?: Settings,
+    settings?: HarnessSettings,
     base = "HEAD",
     retry = false,
+    agent?: string,
   ) {
     const p = loadPlan(this.repo.root, change);
+    const harness = this.harness(p, agent), selectedAgent = harness.id;
     this.selection(p, ids);
     const s = this.read(change);
     if (s) {
@@ -209,7 +311,7 @@ export class Runner {
     const allStates = existsSync(this.repo.stateDir)
       ? readdirSync(this.repo.stateDir)
           .filter((n) => n.endsWith(".json") && n !== "lock.json")
-          .map((n) => json<State>(join(this.repo.stateDir, n)))
+          .map((n) => decodeState(json<unknown>(join(this.repo.stateDir, n))))
       : [];
     const running = allStates.flatMap((s) => s.attempts.filter(active));
     for (const id of ids) {
@@ -227,6 +329,8 @@ export class Runner {
         );
       if (retry && !old)
         throw new Error("retry requires an existing unsuccessful attempt");
+      if (retry && old?.worker && !old.worker.exitedAt)
+        throw new Error("Retry requires the previous supervised worker to have stopped");
       if (
         !p.assignments[id].dependsOn.every((d) =>
           s ? this.satisfied(s, d) : p.tasks.find((t) => t.id === d)?.completed,
@@ -236,7 +340,11 @@ export class Runner {
     }
     const selected = ids.map((id) => ({
       task: id,
-      settings: resolveSettings(p.assignments[id], settings),
+      settings: harness.resolveSettings(
+        p.assignments[id],
+        settings,
+        p.config.agents[selectedAgent],
+      ),
       parallel: p.assignments[id].parallel,
     }));
     if (running.length + ids.length > p.config.maxParallel)
@@ -254,6 +362,8 @@ export class Runner {
       );
     return {
       change,
+      agent: selectedAgent,
+      harness: selectedAgent,
       base: head,
       terminal:
         p.config.terminal === "manual" || process.env.HERDR_ENV !== "1"
@@ -265,20 +375,21 @@ export class Runner {
   launch(
     change: string,
     ids: string[],
-    settings?: Settings,
+    settings?: HarnessSettings,
     base = "HEAD",
     retry = false,
     defaults = new Map<string, string>(),
+    agent?: string,
   ) {
     const prepared = this.lock(() => {
-      const preview = this.preview(change, ids, settings, base, retry),
+      const preview = this.preview(change, ids, settings, base, retry, agent),
         p = loadPlan(this.repo.root, change);
       let s = this.read(change);
       if (!s) {
         const token = randomUUID().slice(0, 8),
           branch = `openspec-runner/${change}/${token}/integration`;
         s = {
-          version: 1,
+          version: 2,
           change,
           fingerprint: p.fingerprint,
           integration: {
@@ -293,12 +404,16 @@ export class Runner {
           head: preview.base,
           baseline: p.tasks.filter((t) => t.completed).map((t) => t.id),
           attempts: [],
+          batches: [],
         };
         this.save(s);
       }
       const state = s;
       delete state.completion;
       state.planTasks = p.tasks.map(t => t.id);
+      const batchId = randomUUID();
+      state.batches ??= [];
+      state.batches.push({ id: batchId, harness: preview.agent, attempts: [] });
       const batch: TaskAttempt[] = preview.tasks.map((item) => {
         const id = randomUUID(),
           branch = `openspec-runner/${change}/${item.task}/${id}`;
@@ -313,6 +428,10 @@ export class Runner {
               item.settings.reasoningEffort ??
               defaults.get(item.settings.model),
           },
+          agent: preview.agent,
+          harness: preview.agent,
+          batch: batchId,
+          ...(preview.agent === "claude" ? { expectedSession: randomUUID() } : {}),
           parallel: item.parallel,
           branch,
           path: resolve(this.repo.stateDir, "worktrees", id),
@@ -322,6 +441,7 @@ export class Runner {
         };
       });
       state.attempts.push(...batch);
+      state.batches.find((candidate) => candidate.id === batchId)!.attempts.push(...batch.map((a) => a.id));
       this.save(state);
       return {
         preview,
@@ -388,6 +508,7 @@ export class Runner {
               });
             },
             this.workerCommand(change, attempt),
+            attempt.agent,
           );
         }
       } catch (e: any) {
@@ -468,20 +589,29 @@ export class Runner {
           });
         },
         this.workerCommand(change, attempt),
+        attempt.agent,
       );
     }
     return { ...attempt, command: this.command(change, attempt) };
   }
   prompt(change: string, a: TaskAttempt) {
-    return `Use $openspec-runner-implement. Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nFirst run: openspec-runner begin ${change} ${a.task} --attempt ${a.id}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run openspec-runner report ${change} ${a.task} --attempt ${a.id} --file <report.json>. The report JSON must contain attempt, task, session (CODEX_THREAD_ID), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write report.json outside the worktree. Stop after reporting.`;
+    const claude = a.agent === "claude";
+    const begin = claude
+      ? `openspec-runner begin ${change} ${a.task} --attempt ${a.id} --session ${a.expectedSession}`
+      : `openspec-runner begin ${change} ${a.task} --attempt ${a.id}`;
+    const identity = claude ? "the exact Claude stream session_id" : "the actual CODEX_THREAD_ID";
+    return `Use $openspec-runner-implement. Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run openspec-runner report ${change} ${a.task} --attempt ${a.id} --file <report.json>. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write report.json outside the worktree. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.`;
   }
   command(change: string, a: TaskAttempt) {
     if (!a.session) return this.workerCommand(change, a);
-    return shellCommand([
-      "codex",
-      ...codexArgs(a.settings, a.path, a.session, this.repo.common),
-      ...(a.session ? [] : [this.prompt(change, a)]),
-    ]);
+    if (a.agent === "claude" && !a.identityConfirmed) return undefined;
+    const invocation = getHarness(a.agent ?? "codex").resumeInvocation(
+      a.settings,
+      a.path,
+      this.repo.common,
+      a.session,
+    );
+    return shellCommand([invocation.executable, ...invocation.args]);
   }
   workerCommand(change: string, a: TaskAttempt) {
     return shellCommand([process.execPath, fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url)),
@@ -517,19 +647,25 @@ export class Runner {
     let exitCode: number | null = null;
     let failure: unknown;
     try {
-      exitCode = await superviseWorker(a, this.repo.common, this.prompt(change, a), pid => {
-        this.updateAttempt(change, id, current => {
-          current.worker!.pid = pid;
-          current.worker!.processStart = processStart(pid);
-        });
-      });
+      exitCode = await superviseWorker(
+        a,
+        this.repo.common,
+        this.prompt(change, a),
+        (pid) => {
+          this.updateAttempt(change, id, (current) => {
+            current.worker!.pid = pid;
+            current.worker!.processStart = processStart(pid);
+          });
+        },
+        (update) => this.updateAttempt(change, id, update),
+      );
     } catch (error) { failure = error; }
     this.updateAttempt(change, id, current => {
       current.worker!.exitedAt = new Date().toISOString();
       current.worker!.exitCode = exitCode;
       if (!current.report) {
         current.phase = "failed";
-        current.error = "Codex exited without an accepted final report; inspect the log and explicitly retry";
+        current.error = `${getHarness(current.agent ?? "codex").displayName} exited without an accepted final report; inspect the log and explicitly retry`;
       }
     });
     if (failure) throw failure;
@@ -539,19 +675,22 @@ export class Runner {
     change: string,
     task: string,
     id: string,
-    session = process.env.CODEX_THREAD_ID,
+    requestedSession?: string,
   ) {
     return this.lock(() => {
       const s = this.requireState(change),
         a = this.latest(s, task);
       if (!a || a.id !== id || !active(a) || !a.setupDone)
         throw new Error("Attempt is not ready to begin");
+      const session = requestedSession ?? (a.agent === "codex" ? process.env.CODEX_THREAD_ID : undefined);
       if (!session || !/^[a-zA-Z0-9_-]+$/.test(session))
-        throw new Error("begin requires CODEX_THREAD_ID or --session");
+        throw new Error("begin requires a session identity or --session");
       if (this.repo.root !== a.path)
         throw new Error("begin must run inside the assigned task worktree");
+      if (a.agent === "claude" && a.expectedSession !== session)
+        throw new Error("Claude begin session does not match the reserved session UUID");
       if (a.session && a.session !== session)
-        throw new Error("Another Codex session already owns this attempt");
+        throw new Error("Another harness session already owns this attempt");
       a.session = session;
       a.phase = "running";
       this.save(s);
@@ -657,8 +796,10 @@ export class Runner {
       terminal: a.terminal,
       command: this.command(change, a),
       recovery: a.session
-        ? "Explicitly run this command to resume the saved Codex session."
-        : "Run this initial command once; the worker must register with begin.",
+        ? a.agent === "claude" && !a.identityConfirmed
+          ? "No executable Claude resume command is available until the saved stream identity is confirmed; inspect the retained worker/log."
+          : `Explicitly run this command to resume the saved ${getHarness(a.agent ?? "codex").displayName} session.`
+        : "Run this initial worker command once; the worker must register with begin.",
     };
   }
   integrate(change: string, ids: string[], mode?: "continue" | "abort") {
@@ -700,6 +841,21 @@ export class Runner {
           throw new Error(
             `Task ${task} reported but its supervised worker has not exited yet`,
           );
+        if (a.worker && a.worker.exitCode !== undefined && a.worker.exitCode !== 0)
+          throw new Error(
+            `Task ${task} worker exited with code ${a.worker.exitCode}; inspect diagnostics before integrating`,
+          );
+        if (a.agent === "claude" && (!a.identityConfirmed || !a.terminalEvidence))
+          throw new Error(`Task ${task} lacks confirmed Claude stream evidence`);
+        const evidence = a.terminalEvidence;
+        if (
+          a.agent === "claude" &&
+          evidence &&
+          (evidence.metadata?.is_error === true || evidence.subtype?.startsWith("error"))
+        )
+          throw new Error(`Task ${task} has a failed Claude terminal result; inspect diagnostics before integrating`);
+        if (a.agent === "claude" && !a.worker?.exitedAt)
+          throw new Error(`Task ${task} requires a supervised Claude exit receipt before integrating`);
         if (a.fingerprint !== s.fingerprint)
           throw new Error("Task plan is stale; reconcile and retry");
         this.verifyResult(a, a.report, change);
