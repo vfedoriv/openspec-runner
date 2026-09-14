@@ -6,7 +6,7 @@
 
 ## Project Structure & Module Organization
 
-`src/` contains the TypeScript implementation. `cli.ts` parses commands, `runner.ts` coordinates task attempts and integration, `plan.ts` reads OpenSpec artifacts, and `system.ts`, `adapters.ts`, and `codex.ts` isolate external tooling. `bin/openspec-runner.js` is the executable entry point. TypeScript builds into `dist/`; treat it as generated output. Tests live in `test/*.test.mjs` and exercise the compiled modules. Reusable agent workflows are under `skills/`, while `README.md` and `OPENSPEC_PLANNER.md` describe user-facing operation and design.
+`src/` contains the TypeScript implementation. `cli.ts` parses commands, `runner.ts` coordinates task attempts and integration, `plan.ts` reads OpenSpec artifacts, and `system.ts`, `adapters.ts`, and `codex.ts` isolate external tooling. `bin/openspec-runner.js` is the executable entry point. TypeScript builds into `dist/`; treat it as generated output. Tests live in `test/*.test.mjs` and exercise the compiled modules. Reusable agent workflows are under `skills/`, while `README.md` describes user-facing operation and design.
 
 ## Build, Test, and Development Commands
 
