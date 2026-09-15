@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "6adb34a87df0fcd544e97d79dbbc99a752d883ed",
-    "indexed_at": "2026-09-14T20:47:46Z",
+    "commit": "69fc45309e255771339602a9789e6be0dded3276",
+    "indexed_at": "2026-09-15T07:33:44Z",
     "project": "home-vitaliy-workspace-openspec-runner",
-    "nodes": 205,
-    "edges": 567,
-    "original_size": 1769472,
-    "compressed_size": 221257,
-    "compression_level": 9
+    "nodes": 320,
+    "edges": 918,
+    "original_size": 2686976,
+    "compressed_size": 354709,
+    "compression_level": 3
 }
