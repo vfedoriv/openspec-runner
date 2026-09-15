@@ -2,8 +2,9 @@
 
 `openspec-runner` adds explicit, reviewable parallel execution to an existing
 [OpenSpec](https://github.com/Fission-AI/OpenSpec) workflow. It turns selected
-checkboxes from an OpenSpec change into isolated Codex sessions, Git branches,
-and worktrees, then integrates only the results you approve.
+checkboxes from an OpenSpec change into isolated Codex or Claude Code worker
+sessions, Git branches, and worktrees, then integrates only the results you
+approve.
 
 The package installs three project-local agent skills:
 
@@ -13,10 +14,10 @@ The package installs three project-local agent skills:
 | `$openspec-runner-coordinate` | Your coordinating session | Validate, preview, launch, inspect, retry, and integrate explicitly selected task batches |
 | `$openspec-runner-implement` | One isolated worker per task | Implement exactly one checkbox, verify it, commit it, and submit a structured report |
 
-The skills guide Codex; the `openspec-runner` CLI enforces durable state,
-dependency, worktree, report, and integration rules. The runner does not replace
-OpenSpec, modify OpenSpec core, change Codex authentication or permissions, or
-automatically archive a change.
+The skills guide both supported worker harnesses; the `openspec-runner` CLI
+enforces durable state, dependency, worktree, report, and integration rules.
+The runner does not replace OpenSpec, modify OpenSpec core, change Codex or
+Claude Code authentication or permissions, or automatically archive a change.
 
 ## Contents
 
@@ -87,7 +88,7 @@ flowchart TB
         A[openspec/changes/CHANGE/tasks.md]
         B[openspec/changes/CHANGE/execution.yaml]
         C[openspec/runner.yaml]
-        D[.agents/skills/openspec-runner-*]
+        D[Agent skills for Codex<br/>and Claude Code]
     end
 
     subgraph R[Runtime state outside versioned planning files]
@@ -107,7 +108,7 @@ flowchart TB
     end
 
     subgraph T[Execution resources]
-        L[Supervised Codex worker]
+        L[Supervised Codex or<br/>Claude Code worker]
         M[Optional runner-owned Herdr pane]
     end
 
@@ -244,7 +245,8 @@ Assume an existing OpenSpec change named `user-auth`.
 
 ### 1. Plan the execution
 
-In your main Codex session, ask it to use the planning skill:
+In your planning session (Codex or Claude Code), ask it to use the planning
+skill:
 
 ```text
 Use $openspec-runner-plan for the user-auth change. Complete any missing OpenSpec
@@ -286,9 +288,17 @@ openspec-runner launch user-auth --tasks 1.1,1.2
 ```
 
 Inside Herdr, each task starts in its own persistent workspace. Outside Herdr,
-the command prints one shell-quoted Codex command per task; run each command once
-in a separate terminal. Reserved attempts already consume concurrency slots, so
-do not rerun `launch` just because a terminal has not started yet.
+the command prints one shell-quoted supervised worker command per task; run each
+command once in a separate terminal. Reserved attempts already consume
+concurrency slots, so do not rerun `launch` just because a terminal has not
+started yet.
+
+The selected harness comes from `defaultAgent`, the change-level `agent`, or
+`--agent`. For example, an approved Claude Code batch can be launched with:
+
+```sh
+openspec-runner launch user-auth --tasks 1.1,1.2 --agent claude
+```
 
 ### 4. Review and integrate
 
@@ -383,7 +393,8 @@ for my choice before integrating or launching.
 Normally you do not invoke this yourself. The runner includes it in the
 single-task prompt sent to every worker. A worker must:
 
-1. Register its actual Codex identity from its assigned worktree with `begin`.
+1. Register its worker identity from the assigned worktree with `begin`: Codex
+   uses its actual `CODEX_THREAD_ID`; Claude Code uses the reserved stream UUID.
 2. Read the change artifacts and implement only its assigned checkbox.
 3. Leave `tasks.md`, `execution.yaml`, `runner.yaml`, and other shared
    planning artifacts unchanged.
@@ -410,7 +421,7 @@ A completed report has this shape:
 {
   "attempt": "supplied-attempt-id",
   "task": "1.1",
-  "session": "actual-CODEX_THREAD_ID",
+  "session": "worker-session-id",
   "outcome": "completed",
   "commit": "full-HEAD-commit-SHA",
   "summary": "Added token verification and covered rejection paths",
@@ -418,10 +429,11 @@ A completed report has this shape:
 }
 ```
 
-`outcome` may be `completed`, `failed`, or `blocked`. Verification must be
-a nonempty array of concrete evidence. Completed reports require the full commit
-SHA. A blocked or failed worker has stopped implementing; start a new attempt
-only with explicit `retry`.
+`outcome` may be `completed`, `failed`, or `blocked`. Verification must be a
+nonempty array of concrete evidence. Completed reports require the full commit
+SHA. Codex reports its registered thread identity; Claude Code reports the
+matching stream `session_id`. A blocked or failed worker has stopped
+implementing; start a new attempt only with explicit `retry`.
 
 ### Skill handoff sequence
 
@@ -853,9 +865,9 @@ openspec-runner recover user-auth 1.1
 ```
 
 Recovery reuses the attempt identity, branch, and worktree. It may rerun unfinished
-setup commands. Ambiguous Herdr creation, Codex startup, or prompt submission
-never causes automatic resubmission. Worktrunk partial creation is reconciled
-against Git's worktree list before fallback.
+setup commands. Ambiguous Herdr creation, selected-harness startup, or prompt
+submission never causes automatic resubmission. Worktrunk partial creation is
+reconciled against Git's worktree list before fallback.
 
 ### Failed, blocked, stale, or invalidated attempts
 
@@ -1054,19 +1066,23 @@ pnpm test
 pnpm pack --dry-run
 ```
 
-Tests use temporary repositories and fake Codex, Worktrunk, and Herdr executables.
+Tests use temporary repositories and fake Codex, Claude Code, Worktrunk, and
+Herdr executables.
 The compatibility test uses installed OpenSpec when available and otherwise
 skips. Coverage includes model inheritance, validation, concurrency, duplicate
 prevention, setup recovery, paths containing spaces, partial worktree creation,
 Herdr IDs and argument forwarding, stale reports, plan drift, integration
 conflicts, failed checks, and interrupted integration commits.
 
-Live acceptance is still recommended in a disposable Herdr repository: plan two
-independent tasks and one dependent task, launch the independent workers, detach
-and reattach, inspect reports, integrate them, then launch the dependent task.
-Confirm that only integration changes canonical checkboxes.
+Live acceptance is still recommended in a disposable repository: run the same
+scenario once with Codex and once with Claude Code. Plan two independent tasks
+and one dependent task, launch the independent workers, detach and reattach,
+inspect reports, integrate them, then launch the dependent task. Confirm that
+only integration changes canonical checkboxes.
 
 Adapter references: [Codex CLI](https://learn.chatgpt.com/docs/developer-commands?surface=cli),
+[Claude Code headless mode](https://code.claude.com/docs/en/headless),
+[Claude Code permission modes](https://code.claude.com/docs/en/permission-modes),
 [Worktrunk](https://github.com/max-sixty/worktrunk),
 [Herdr automation](https://herdr.dev/docs/agent-automation/), and
 [Herdr persistence](https://herdr.dev/docs/persistence-remote/).
