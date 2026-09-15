@@ -48,7 +48,7 @@ test("Claude settings preserve omitted effort and never inherit a calling model 
   );
   assert.deepEqual(
     claudeArgs({ harness: "claude", model: "claude-sonnet-4-6", effort: "high", options: { permissionMode: "dontAsk", allowedTools: [] } }, "/tmp/work", "/tmp/common", uuid),
-    ["-p", "--output-format", "stream-json", "--verbose", "--effort", "high", "--model", "claude-sonnet-4-6", "--session-id", uuid, "--permission-mode", "dontAsk", "--add-dir", "/tmp/common"],
+    ["-p", "--output-format", "stream-json", "--verbose", "--effort", "high", "--model", "claude-sonnet-4-6", "--session-id", uuid, "--permission-mode", "dontAsk", "--add-dir", "/tmp/common", "--add-dir", "/tmp/work", "--add-dir", "/tmp"],
   );
 });
 
@@ -108,6 +108,10 @@ test("a supervised Claude worker records matching stream identity and exit evide
   git("commit", "-m", "base");
   const runner = new Runner(root);
   const initial = runner.launch("demo", ["1.1"])[0];
+  assert.equal(initial.path, join(root, ".openspec-runner", "worktrees", initial.id));
+  assert.equal(initial.path.startsWith(join(root, ".git")), false);
+  assert.match(initial.prompt, /\.openspec-runner\/worktrees\/reports/);
+  assert.equal(git("status", "--short"), "");
   const script = readFileSync(join(bin, "claude"), "utf8").replaceAll("ATTEMPT", initial.id);
   writeFileSync(join(bin, "claude"), script);
   chmodSync(join(bin, "claude"), 0o755);

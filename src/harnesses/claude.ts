@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve, sep } from "node:path";
+import { resolve, sep, dirname } from "node:path";
 import type { Assignment } from "../plan.js";
 import type {
   AgentConfig,
@@ -90,12 +90,19 @@ function commonArgs(
     typeof options.permissionMode === "string" ? options.permissionMode : "dontAsk",
     "--add-dir",
     commonGitDir,
+    "--add-dir",
+    cwd,
+    "--add-dir",
+    dirname(cwd),
   ];
   if (settings.effort) args.splice(args.indexOf("--model"), 0, "--effort", settings.effort);
   const allowed = Array.isArray(options.allowedTools)
     ? options.allowedTools.filter((x): x is string => typeof x === "string")
     : [];
-  if (allowed.length) args.push("--allowedTools", ...allowed);
+  // Claude accepts a comma- or space-separated value for this variadic
+  // option. A single comma-separated argv value avoids shell-like parsing of
+  // patterns such as Bash(git *), while retaining argument-array safety.
+  if (allowed.length) args.push("--allowedTools", allowed.join(","));
   return args;
 }
 

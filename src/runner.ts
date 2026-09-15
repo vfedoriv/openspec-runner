@@ -5,7 +5,7 @@ import {
   mkdirSync,
   readdirSync,
 } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { inspectCleanup, removeInspectedWorktree, type CleanupResult, type CleanupOptions } from "./cleanup.js";
@@ -182,6 +182,23 @@ export class Runner {
   repo: ReturnType<typeof repository>;
   constructor(cwd = process.cwd()) {
     this.repo = repository(cwd);
+  }
+  private ensureRuntimeExcluded() {
+    const exclude = resolve(this.repo.common, "info", "exclude"),
+      marker = ".openspec-runner/",
+      current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+    if (current.split("\n").some((line) => line.trim() === marker)) return;
+    const prefix = current && !current.endsWith("\n") ? "\n" : "";
+    writeFileSync(
+      exclude,
+      `${current}${prefix}# OpenSpec runner runtime worktrees\n${marker}\n`,
+    );
+  }
+  private worktreePath(...parts: string[]) {
+    // Claude Code protects .git paths from automatic edits. Keep durable
+    // runner state in repo.common, but put agent workspaces and report inputs
+    // in a sibling runtime directory inside the repository root.
+    return resolve(this.repo.root, ".openspec-runner", "worktrees", ...parts);
   }
   path(change: string) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(change))
@@ -384,6 +401,7 @@ export class Runner {
     const prepared = this.lock(() => {
       const preview = this.preview(change, ids, settings, base, retry, agent),
         p = loadPlan(this.repo.root, change);
+      this.ensureRuntimeExcluded();
       let s = this.read(change);
       if (!s) {
         const token = randomUUID().slice(0, 8),
@@ -394,11 +412,7 @@ export class Runner {
           fingerprint: p.fingerprint,
           integration: {
             branch,
-            path: resolve(
-              this.repo.stateDir,
-              "worktrees",
-              `${change}-${token}-integration`,
-            ),
+            path: this.worktreePath(`${change}-${token}-integration`),
             base: preview.base,
           },
           head: preview.base,
@@ -434,7 +448,7 @@ export class Runner {
           ...(preview.agent === "claude" ? { expectedSession: randomUUID() } : {}),
           parallel: item.parallel,
           branch,
-          path: resolve(this.repo.stateDir, "worktrees", id),
+          path: this.worktreePath(id),
           base: state.head,
           phase: "preparing",
           terminal: {},
@@ -600,7 +614,22 @@ export class Runner {
       ? `openspec-runner begin ${change} ${a.task} --attempt ${a.id} --session ${a.expectedSession}`
       : `openspec-runner begin ${change} ${a.task} --attempt ${a.id}`;
     const identity = claude ? "the exact Claude stream session_id" : "the actual CODEX_THREAD_ID";
-    return `Use $openspec-runner-implement. Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run openspec-runner report ${change} ${a.task} --attempt ${a.id} --file <report.json>. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write report.json outside the worktree. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.`;
+    const reportPath = resolve(
+        dirname(a.path),
+        "reports",
+        `${a.id}-input.json`,
+      ),
+      reportCommand = shellCommand([
+        "openspec-runner",
+        "report",
+        change,
+        a.task,
+        "--attempt",
+        a.id,
+        "--file",
+        reportPath,
+      ]);
+    return `Use $openspec-runner-implement. Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.`;
   }
   command(change: string, a: TaskAttempt) {
     if (!a.session) return this.workerCommand(change, a);
