@@ -526,6 +526,23 @@ test("installer owns exactly three skills and preserves existing OpenSpec skills
     readFileSync(join(root, "openspec/runner.yaml"), "utf8"),
     before,
   );
+  const all = init(root, "all");
+  assert.equal(all.skills.length, 6);
+  for (const name of [
+    "openspec-runner-plan",
+    "openspec-runner-coordinate",
+    "openspec-runner-implement",
+  ]) {
+    const codex = readFileSync(join(root, ".agents/skills", name, "SKILL.md"), "utf8"),
+      claude = readFileSync(join(root, ".claude/skills", name, "SKILL.md"), "utf8");
+    assert.equal(claude, codex);
+  }
+  const implementation = readFileSync(
+    join(root, ".claude/skills/openspec-runner-implement/SKILL.md"),
+    "utf8",
+  );
+  assert.match(implementation, /Codex registers its actual `CODEX_THREAD_ID`/);
+  assert.match(implementation, /Claude registers the reserved UUID/);
 });
 test("interruption after merge commit reconciles state without creating a duplicate commit", (t) => {
   const { runner: r } = fixture(t);

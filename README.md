@@ -10,14 +10,26 @@ The package installs three project-local agent skills:
 
 | Skill | Where it runs | Responsibility |
 |---|---|---|
-| `$openspec-runner-plan` | Your planning session | Create or complete normal OpenSpec artifacts, assign models and dependencies, and write `execution.yaml` |
-| `$openspec-runner-coordinate` | Your coordinating session | Validate, preview, launch, inspect, retry, and integrate explicitly selected task batches |
-| `$openspec-runner-implement` | One isolated worker per task | Implement exactly one checkbox, verify it, commit it, and submit a structured report |
+| `openspec-runner-plan` | Your planning session | Create or complete normal OpenSpec artifacts, assign models and dependencies, and write `execution.yaml` |
+| `openspec-runner-coordinate` | Your coordinating session | Validate, preview, launch, inspect, retry, and integrate explicitly selected task batches |
+| `openspec-runner-implement` | One isolated worker per task | Implement exactly one checkbox, verify it, commit it, and submit a structured report |
 
 The skills guide both supported worker harnesses; the `openspec-runner` CLI
 enforces durable state, dependency, worktree, report, and integration rules.
 The runner does not replace OpenSpec, modify OpenSpec core, change Codex or
 Claude Code authentication or permissions, or automatically archive a change.
+
+Explicit skill invocation differs by harness:
+
+| Harness | Syntax |
+|---|---|
+| Codex | `Use $openspec-runner-plan ...` |
+| Claude Code | `/openspec-runner-plan ...` |
+
+Use the corresponding skill name for coordination or implementation. Claude
+Code can also load a matching skill automatically from its description, but
+this guide uses `/skill-name` when explicit invocation matters. Codex examples
+use the `$skill-name` mention syntax.
 
 ## Contents
 
@@ -42,9 +54,9 @@ Keep using OpenSpec to describe a change and produce its normal proposal, design
 specification, and `tasks.md` artifacts. The runner begins where those tasks need
 execution metadata and isolated implementation.
 
-The initial OpenSpec artifacts do not need to be committed before using
-`$openspec-runner-plan`. The planning skill may complete those artifacts and
-will add `execution.yaml`, so review and commit the complete planning result
+The initial OpenSpec artifacts do not need to be committed before using the
+`openspec-runner-plan` skill. The planning skill may complete those artifacts
+and will add `execution.yaml`, so review and commit the complete planning result
 after the skill finishes. That commit is required before coordination can
 preview or launch any task.
 
@@ -245,13 +257,22 @@ Assume an existing OpenSpec change named `user-auth`.
 
 ### 1. Plan the execution
 
-In your planning session (Codex or Claude Code), ask it to use the planning
-skill:
+Invoke the planning skill with the syntax for your coordinator.
+
+Codex:
 
 ```text
 Use $openspec-runner-plan for the user-auth change. Complete any missing OpenSpec
 artifacts, then propose task dependencies, model assignments, effort, and safe
 parallel groups. Do not launch anything yet.
+```
+
+Claude Code:
+
+```text
+/openspec-runner-plan user-auth. Complete any missing OpenSpec artifacts, then
+propose task dependencies, model assignments, effort, and safe parallel groups.
+Do not launch anything yet.
 ```
 
 Review the proposed table. After approval, the skill writes
@@ -263,9 +284,18 @@ step 2.
 
 ### 2. Inspect and preview a ready batch
 
+Codex:
+
 ```text
 Use $openspec-runner-coordinate for user-auth. Show ready tasks and preview tasks
 1.1 and 1.2. Do not launch until I approve the preview.
+```
+
+Claude Code:
+
+```text
+/openspec-runner-coordinate user-auth. Show ready tasks and preview tasks 1.1
+and 1.2. Do not launch until I approve the preview.
 ```
 
 The coordinating session runs the equivalent of:
@@ -302,9 +332,11 @@ openspec-runner launch user-auth --tasks 1.1,1.2 --agent claude
 
 ### 4. Review and integrate
 
-Each worker uses `$openspec-runner-implement` through the runner-generated
-prompt. It implements one checkbox, verifies and commits it, then submits a
-structured report. Back in the coordinating session:
+Each worker uses the `openspec-runner-implement` skill through a
+harness-specific runner-generated prompt: `$openspec-runner-implement` for
+Codex and `/openspec-runner-implement` for Claude Code. It implements one
+checkbox, verifies and commits it, then submits a structured report. Back in
+the coordinating session:
 
 ```sh
 openspec-runner status user-auth --json
@@ -336,7 +368,7 @@ and use your normal OpenSpec validation and archival process.
 
 ## Use the three skills together
 
-### Planning skill: `$openspec-runner-plan`
+### Planning skill: `openspec-runner-plan`
 
 Use this while creating a change or adding runner metadata to an existing change.
 It:
@@ -366,7 +398,7 @@ when planning starts. After planning finishes, commit `tasks.md`,
 `execution.yaml`, and every other changed OpenSpec artifact before moving to
 coordination.
 
-### Coordination skill: `$openspec-runner-coordinate`
+### Coordination skill: `openspec-runner-coordinate`
 
 Use one coordinating session to own the batch lifecycle. It:
 
@@ -382,16 +414,27 @@ Use one coordinating session to own the batch lifecycle. It:
 
 A useful prompt for later batches is:
 
+Codex:
+
 ```text
 Use $openspec-runner-coordinate for user-auth. Inspect current status, show the
 reports for completed workers, and propose the next dependency-ready batch. Wait
 for my choice before integrating or launching.
 ```
 
-### Implementation skill: `$openspec-runner-implement`
+Claude Code:
+
+```text
+/openspec-runner-coordinate user-auth. Inspect current status, show the reports
+for completed workers, and propose the next dependency-ready batch. Wait for my
+choice before integrating or launching.
+```
+
+### Implementation skill: `openspec-runner-implement`
 
 Normally you do not invoke this yourself. The runner includes it in the
-single-task prompt sent to every worker. A worker must:
+single-task prompt sent to every worker, using Codex's `$skill-name` syntax or
+Claude Code's `/skill-name` syntax as appropriate. A worker must:
 
 1. Register its worker identity from the assigned worktree with `begin`: Codex
    uses its actual `CODEX_THREAD_ID`; Claude Code uses the reserved stream UUID.
@@ -972,9 +1015,11 @@ after upgrading the runner checkout.
 Use `openspec-runner init --agent claude` (or `--agent all`) and commit
 `.claude/skills/`. Claude must be installed and authenticated separately. The
 runner uses `-p --output-format stream-json --verbose`, sends the prompt on
-stdin, and uses the configured permission mode and `allowedTools`; it never
-injects `--dangerously-skip-permissions`. A Claude worker cannot inherit a
-calling Codex model, so use `--default-model` or an explicit task model.
+stdin, and starts the prompt with `/openspec-runner-implement`. It deliberately
+does not use `--bare`, which skips project skill discovery. The runner uses the
+configured permission mode and `allowedTools`; it never injects
+`--dangerously-skip-permissions`. A Claude worker cannot inherit a calling
+Codex model, so use `--default-model` or an explicit task model.
 
 ### Claude reports a session or terminal-evidence error
 

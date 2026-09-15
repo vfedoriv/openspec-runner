@@ -110,6 +110,11 @@ test("a supervised Claude worker records matching stream identity and exit evide
   const initial = runner.launch("demo", ["1.1"])[0];
   assert.equal(initial.path, join(root, ".openspec-runner", "worktrees", initial.id));
   assert.equal(initial.path.startsWith(join(root, ".git")), false);
+  assert.match(initial.prompt, /^\/openspec-runner-implement\b/);
+  assert.match(
+    runner.prompt("demo", { ...initial, agent: "codex" }),
+    /^Use \$openspec-runner-implement\./,
+  );
   assert.match(initial.prompt, /\.openspec-runner\/worktrees\/reports/);
   assert.equal(git("status", "--short"), "");
   const script = readFileSync(join(bin, "claude"), "utf8").replaceAll("ATTEMPT", initial.id);

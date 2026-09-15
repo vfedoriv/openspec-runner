@@ -78,10 +78,7 @@ export function init(
     const target = resolve(root, targetRoot, name);
     mkdirSync(target, { recursive: true });
     const source = fileURLToPath(new URL(`../skills/${name}/SKILL.md`, import.meta.url));
-    const rendered = readFileSync(source, "utf8")
-      .replaceAll("Codex", targetAgent === "claude" ? "Claude Code" : "Codex")
-      .replaceAll("CODEX_THREAD_ID", targetAgent === "claude" ? "the exact Claude session UUID" : "CODEX_THREAD_ID");
-    writeFileSync(resolve(target, "SKILL.md"), rendered);
+    writeFileSync(resolve(target, "SKILL.md"), readFileSync(source, "utf8"));
     skills.push(target);
   }
   return {

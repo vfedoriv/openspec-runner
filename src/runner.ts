@@ -610,6 +610,9 @@ export class Runner {
   }
   prompt(change: string, a: TaskAttempt) {
     const claude = a.agent === "claude";
+    const skillInvocation = claude
+      ? "/openspec-runner-implement"
+      : "Use $openspec-runner-implement.";
     const begin = claude
       ? `openspec-runner begin ${change} ${a.task} --attempt ${a.id} --session ${a.expectedSession}`
       : `openspec-runner begin ${change} ${a.task} --attempt ${a.id}`;
@@ -629,7 +632,7 @@ export class Runner {
         "--file",
         reportPath,
       ]);
-    return `Use $openspec-runner-implement. Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.`;
+    return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.`;
   }
   command(change: string, a: TaskAttempt) {
     if (!a.session) return this.workerCommand(change, a);
