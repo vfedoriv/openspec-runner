@@ -1,9 +1,10 @@
 import { atomic, run } from "./system.js";
 import type { TaskAttempt } from "./runner.js";
 import { shellProcesses } from "./processes.js";
+import { closeOrcaTerminal, inspectOrcaTerminal } from "./orca.js";
 
 export interface TerminalInspection {
-  kind: "none" | "manual" | "herdr";
+  kind: "none" | "manual" | "herdr" | "orca";
   closed?: boolean;
   blocked?: boolean;
   reason?: string;
@@ -18,6 +19,7 @@ function herdr(root: string, args: string[]): any {
   return value.result;
 }
 export function inspectTerminal(root: string, a: TaskAttempt): TerminalInspection {
+  if (a.terminal.backend === "orca") return inspectOrcaTerminal(root, a);
   const t = a.terminal;
   if (a.worker && !a.worker.exitedAt)
     return { kind: t.pane ? "herdr" : "manual", blocked: true, reason: "Worker exit is not acknowledged; inspect the saved process/session first" };
@@ -55,6 +57,7 @@ export function inspectTerminal(root: string, a: TaskAttempt): TerminalInspectio
 }
 export function closeInspectedTerminal(root: string, a: TaskAttempt, inspected: TerminalInspection, log: string) {
   if (inspected.blocked) throw new Error(inspected.reason);
+  if (inspected.kind === "orca") return closeOrcaTerminal(root, a, log);
   if (inspected.closed || inspected.kind !== "herdr") return;
   // Save scrollback before the terminal disappears. Codex rollouts remain in Codex storage.
   atomic(log, herdr(root, ["pane", "read", inspected.pane!, "--lines", "2000"]));

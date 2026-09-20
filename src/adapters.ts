@@ -3,12 +3,18 @@ import { git, run, attempt } from "./system.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import type { Settings } from "./codex.js";
 import { codexArgs } from "./codex.js";
+import { attachOrcaTerminal, orcaContext, startOrcaTerminal, type OrcaContext } from "./orca.js";
+import { createOrcaWorktree, type OrcaWorkspace } from "./orca-worktrees.js";
 export interface Workspace {
   branch: string;
   path: string;
   base: string;
+  orcaWorktree?: OrcaWorkspace;
 }
 export interface Terminal {
+  backend?: "herdr" | "orca";
+  orca?: OrcaContext;
+  incarnation?: string;
   owned?: boolean;
   closed?: boolean;
   workspace?: string;
@@ -17,6 +23,16 @@ export interface Terminal {
   agent?: string;
   sessionContext?: string;
   phase?: string;
+}
+export function terminalAdapter(root: string, selected: "auto" | "manual" | "herdr" | "orca"): "manual" | "herdr" | "orca" {
+  if (selected === "manual") return "manual";
+  if (selected === "orca" || (selected === "auto" && !!process.env.ORCA_TERMINAL_HANDLE)) {
+    orcaContext(root);
+    return "orca";
+  }
+  if (selected === "herdr" && process.env.HERDR_ENV !== "1")
+    throw new Error("Herdr launching requires HERDR_ENV=1 inside a Herdr session");
+  return process.env.HERDR_ENV === "1" ? "herdr" : "manual";
 }
 export function worktrees(
   root: string,
@@ -43,8 +59,9 @@ export function worktrees(
 export function createWorktree(
   root: string,
   spec: Workspace,
-  adapter: "auto" | "git" | "worktrunk",
+  adapter: "auto" | "git" | "worktrunk" | "orca",
 ): Workspace {
+  if (adapter === "orca") return createOrcaWorktree(root, spec);
   const existing = worktrees(root).find((w) => w.branch === spec.branch);
   if (existing) {
     if (existing.head !== spec.base)
@@ -142,7 +159,12 @@ export function startTerminal(
   save: () => void,
   workerCommand?: string,
   agent = settings.harness ?? "codex",
+  backend: "herdr" | "orca" = "herdr",
 ) {
+  if (backend === "orca") {
+    if (!workerCommand) throw new Error("Orca requires the supervised worker command");
+    return startOrcaTerminal(root, path, label, terminal, save, workerCommand);
+  }
   if (terminal.phase)
     throw new Error(
       "Launch already attempted. Inspect saved pane/session with attach; no automatic resubmission.",
@@ -199,6 +221,7 @@ export function startTerminal(
   save();
 }
 export function attachTerminal(root: string, terminal: Terminal) {
+  if (terminal.backend === "orca") return attachOrcaTerminal(root, terminal);
   const current = process.env.HERDR_SESSION ?? process.env.HERDR_SOCKET_PATH;
   if (terminal.sessionContext && terminal.sessionContext !== current)
     throw new Error(

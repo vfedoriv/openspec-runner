@@ -36,6 +36,7 @@ import {
   createWorktree,
   startTerminal,
   attachTerminal,
+  terminalAdapter,
   type Workspace,
   type Terminal,
 } from "./adapters.js";
@@ -373,19 +374,12 @@ export class Runner {
       throw new Error(
         "Exclusive task must run alone; all overlapping tasks must permit parallel execution",
       );
-    if (p.config.terminal === "herdr" && process.env.HERDR_ENV !== "1")
-      throw new Error(
-        "Herdr launching requires HERDR_ENV=1 inside a Herdr session",
-      );
     return {
       change,
       agent: selectedAgent,
       harness: selectedAgent,
       base: head,
-      terminal:
-        p.config.terminal === "manual" || process.env.HERDR_ENV !== "1"
-          ? "manual"
-          : "herdr",
+      terminal: terminalAdapter(this.repo.root, p.config.terminal),
       tasks: selected,
     };
   }
@@ -523,6 +517,7 @@ export class Runner {
             },
             this.workerCommand(change, attempt),
             attempt.agent,
+            prepared.preview.terminal,
           );
         }
       } catch (e: any) {
@@ -577,10 +572,8 @@ export class Runner {
         current.setupDone = true;
       });
     }
-    if (
-      prepared.plan.config.terminal === "manual" ||
-      process.env.HERDR_ENV !== "1"
-    ) {
+    const backend = terminalAdapter(this.repo.root, prepared.plan.config.terminal);
+    if (backend === "manual") {
       attempt = this.updateAttempt(change, attempt.id, (current) => {
         current.phase = "manual";
       });
@@ -604,6 +597,7 @@ export class Runner {
         },
         this.workerCommand(change, attempt),
         attempt.agent,
+        backend,
       );
     }
     return { ...attempt, command: this.command(change, attempt) };
@@ -815,13 +809,16 @@ export class Runner {
         path: existsSync(a.path) ? a.path : undefined, log: a.worker?.log,
         recovery: "Worker finished. Inspect the retained Codex session/log and branch; use retry for further implementation. Do not resume in a removed worktree." };
     }
+    if (a.terminal.backend === "orca") {
+      return { result: attachTerminal(this.repo.root, a.terminal), attempt: a.id };
+    }
     if (a.terminal.pane && process.env.HERDR_ENV === "1") {
       const result = attempt(() => attachTerminal(this.repo.root, a.terminal));
       if (result) return { result, attempt: a.id };
     }
     if (!a.session && a.phase !== "manual")
       throw new Error(
-        "Ambiguous startup without a registered session. Inspect saved Herdr identifiers; do not create another session automatically.",
+        "Ambiguous startup without a registered session. Inspect saved terminal identifiers; do not create another session automatically.",
       );
     return {
       attempt: a.id,

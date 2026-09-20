@@ -4,6 +4,7 @@ import { resolve, sep } from "node:path";
 import { attempt, git, repository } from "./system.js";
 import { inspectTerminal, type TerminalInspection } from "./terminal-cleanup.js";
 import { worktrees } from "./adapters.js";
+import { inspectOrcaWorktree } from "./orca-worktrees.js";
 import type { State, TaskAttempt } from "./runner.js";
 
 export interface CleanupResult {
@@ -72,6 +73,8 @@ export function inspectCleanup(repo: ReturnType<typeof repository>, s: State, a:
   if (changes) issues.push("Deletion discards the listed tracked/untracked local changes");
   const terminal = inspectTerminal(repo.root, a);
   if (terminal.blocked) return { ...skip(terminal.reason!), terminal };
+  try { inspectOrcaWorktree(repo.root, a, a.terminal.backend === "orca" ? a.terminal.pane : undefined); }
+  catch (error: any) { return skip(error.message); }
   if (terminal.reason) issues.push(terminal.reason);
   const hash = createHash("sha256");
   hash.update(JSON.stringify({ id: a.id, path: a.path, gitDir, stat: lstatSync(a.path).ino,
@@ -115,6 +118,7 @@ export function inspectCleanup(repo: ReturnType<typeof repository>, s: State, a:
 
 export function removeInspectedWorktree(root: string, a: TaskAttempt, inspected: CleanupResult, approved: boolean) {
   if (inspected.status === "confirmation-required" && !approved) throw new Error("User confirmation required");
+  inspectOrcaWorktree(root, a);
   // A retained ref protects detached/moved HEADs; normal attempt branches already protect their commit.
   if (
     attempt(() =>

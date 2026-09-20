@@ -155,7 +155,11 @@ Optional integrations:
   available and otherwise falls back to Git worktrees.
 - [Herdr](https://herdr.dev/docs/agent-automation/) for automatic persistent
   terminal sessions. With `terminal: auto`, it is used when `HERDR_ENV=1`;
-  otherwise the runner prints exact commands for separate terminals.
+  Orca takes precedence when both environments are present.
+- [stablyai/orca](https://github.com/stablyai/orca) for worktree creation and
+  persistent terminals. Select `worktrees: orca` and `terminal: orca`, or use
+  terminal auto-detection inside an Orca terminal. Outside either
+  environment, the runner prints exact commands for separate terminals.
 
 Check the required tools before installation:
 
@@ -317,7 +321,8 @@ batch. It runs:
 openspec-runner launch user-auth --tasks 1.1,1.2
 ```
 
-Inside Herdr, each task starts in its own persistent workspace. Outside Herdr,
+Inside Herdr, each task starts in its own persistent workspace; inside Orca,
+each starts in its own terminal. Outside these environments,
 the command prints one shell-quoted supervised worker command per task; run each
 command once in a separate terminal. Reserved attempts already consume
 concurrency slots, so do not rerun `launch` just because a terminal has not
@@ -541,8 +546,8 @@ verifyIntegration: []
 | `version` | Configuration schema version; currently `1` |
 | `defaultModel` | `session` to inherit the coordinating Codex session, or an explicit model identifier |
 | `maxParallel` | Repository-wide maximum active/reserved task attempts |
-| `worktrees` | `auto` uses compatible Worktrunk when available, otherwise Git |
-| `terminal` | `auto` uses Herdr inside Herdr, otherwise returns manual commands |
+| `worktrees` | `auto` uses compatible Worktrunk when available, otherwise Git; explicit `git`, `worktrunk`, and `orca` are supported |
+| `terminal` | `auto` uses Orca when `ORCA_TERMINAL_HANDLE` is present, then Herdr inside Herdr, otherwise returns manual commands; explicit `orca`, `herdr`, and `manual` are supported |
 | `cleanup` | `automatic` (default, including existing configs) cleans successful batches and completed changes; `manual` retains terminals/worktrees until explicit cleanup |
 | `setup` | Idempotent argument-array commands run while preparing task worktrees |
 | `verifyIntegration` | Argument-array commands run after merging into the integration worktree |
@@ -788,7 +793,57 @@ directory. Herdr preserves panes across client detach and reconnect. A server or
 machine restart may require the exact saved Codex or Claude resume command. Herdr idle/done
 indicators describe terminal activity, not task completion.
 
-### Outside Herdr
+### Inside Orca (stablyai/orca)
+
+Use the [Orca desktop app](https://github.com/stablyai/orca) from
+[onorca.dev](https://www.onorca.dev/). Register its `orca` CLI in the app's
+settings and add the target repository to Orca. In `openspec/runner.yaml`, select:
+
+```yaml
+worktrees: orca
+terminal: orca
+```
+
+Check `orca status --host local --json` before launching. Explicit `terminal:
+orca` works from any shell with access to the ready local runtime. `terminal:
+auto` detects Orca through `ORCA_TERMINAL_HANDLE`. Each selected task gets a
+dedicated background terminal running the saved supervised Codex or Claude
+worker command. It does not send prompts into an existing interactive agent.
+
+The worktree adapter calls `orca worktree create --base-branch <commit> --setup
+skip --no-parent`. It records Orca's actual branch and path, which follow the
+app's workspace and branch-prefix settings, and verifies the base against local
+Git. A unique attempt marker in the worktree comment supports reconciliation
+after a partial creation failure; retain that comment until preparation finishes.
+The internal integration worktree continues to use Git directly. Runner `setup`
+commands still run normally; Orca setup commands are skipped.
+
+`attach` focuses the saved terminal handle. Runtime and PTY incarnation identities
+prevent attaching to or closing a replacement terminal. Ambiguous terminal
+creation is never automatically resubmitted. After a runtime restart, inspect
+the saved attempt and logs manually; the runner does not adopt fresh handles.
+
+Cleanup saves output and closes only its verified terminal after both the worker
+receipt and Orca confirm exit. Other Orca terminals in the task worktree block
+removal, including initial shell/default tabs that Orca may create. Inspect and
+close those in the app, then retry runner cleanup. Worktree removal uses Git to
+retain branches: Orca's `worktree rm` can delete them. Orca may need a workspace
+refresh to reflect the external removal. No unrelated terminals are closed.
+
+`worktrees: auto` retains its Worktrunk/Git behavior. The two adapter settings
+are independent; Orca terminals also work with Git/Worktrunk worktrees once
+Orca can resolve their paths. This integration requires a local runtime on the
+same host and filesystem as the runner. Remote/SSH targets and WSL-to-Windows
+app bridging are unsupported. Native Windows remains outside runner support;
+use Linux, macOS, or an Orca runtime inside the same WSL environment.
+
+The CLI contract was checked against upstream revision
+[`fa0010e8`](https://github.com/stablyai/orca/tree/fa0010e8d6b2a7ad946fe1f1b005c6a8497c6c17).
+Older runtimes without host coverage or terminal incarnation information fail
+closed. Previous tmux-based `fmfsaisai/orca` support has been replaced; its saved
+terminal records require manual inspection and are not migrated into desktop Orca.
+
+### Outside Herdr or Orca
 
 `launch` returns exact supervised worker commands to run once in separate
 terminals. Each command starts `openspec-runner worker`, which in turn runs one
@@ -908,7 +963,7 @@ openspec-runner recover user-auth 1.1
 ```
 
 Recovery reuses the attempt identity, branch, and worktree. It may rerun unfinished
-setup commands. Ambiguous Herdr creation, selected-harness startup, or prompt
+setup commands. Ambiguous Herdr/Orca creation, selected-harness startup, or prompt
 submission never causes automatic resubmission. Worktrunk partial creation is
 reconciled against Git's worktree list before fallback.
 
@@ -1047,7 +1102,7 @@ dependents.
 
 ### Launch printed commands instead of opening sessions
 
-This is the expected fallback outside Herdr. Run each returned command once in
+This is the expected fallback outside Herdr or Orca. Run each returned command once in
 its own terminal. Invoke coordination inside Herdr with `HERDR_ENV=1` for
 automatic persistent sessions.
 

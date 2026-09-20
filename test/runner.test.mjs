@@ -30,6 +30,7 @@ import {
 import { createWorktree } from "../dist/adapters.js";
 import { init } from "../dist/cli.js";
 import { locked } from "../dist/system.js";
+import { installFakeOrca } from "./helpers/fake-orca.mjs";
 const settings = { model: "model-a", reasoningEffort: "high" };
 const basePath = process.env.PATH;
 // Model an acknowledged worker exit with an already closed, known Herdr pane.
@@ -830,4 +831,65 @@ test("CLI dry-run and JSON confirmation expose exact candidates without terminal
   assert.equal(existsSync(a.path), true);
   const confirmed = JSON.parse(execFileSync(process.execPath, [cli, "cleanup", "demo", "--tasks", "1.1", "--attempt", a.id, "--confirm", result.results[0].token, "--json"], { cwd: root, encoding: "utf8" }));
   assert.equal(confirmed.results[0].status, "removed");
+});
+
+function orcaFixture(t, fail = false) {
+  const f = fixture(t, { terminal: "orca", worktrees: "orca" });
+  const keys = ["ORCA_TERMINAL_HANDLE"];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  t.after(() => { for (const key of keys) {
+    if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+  } });
+  process.env.ORCA_TERMINAL_HANDLE = "caller";
+  const fake = installFakeOrca(f.dir, f.root, f.bin);
+  fake.set({ failTerminalAfterCreate: fail });
+  return { ...f, fake, calls: fake.calls };
+}
+
+test("Orca CLI preview is read-only and launch persists both adapters and focuses only its pane", t => {
+  const { runner: r, root, calls } = orcaFixture(t);
+  const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+  const preview = JSON.parse(execFileSync(process.execPath,
+    [cli, "launch", "demo", "--tasks", "1.1", "--default-model", "model-a", "--dry-run", "--json"],
+    { cwd: root, encoding: "utf8" }));
+  assert.equal(preview.terminal, "orca");
+  assert.equal(existsSync(r.path("demo")), false);
+  assert.equal(calls().some(args => args[1] === "create"), false);
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  assert.equal(a.error, undefined);
+  assert.equal(a.terminal.backend, "orca");
+  assert.equal(a.terminal.pane, "term-1");
+  assert.equal(a.orcaWorktree.context.provider, "stablyai");
+  assert.equal(git(a.path, "branch", "--show-current"), a.branch);
+  const launch = calls().find(args => args[0] === "terminal" && args[1] === "create");
+  assert.ok(!launch.includes("--focus"));
+  assert.ok(launch.includes(`id:${a.orcaWorktree.id}`));
+  assert.match(launch[launch.indexOf("--command") + 1], /worker/);
+  assert.equal(r.attach("demo", "1.1").result.pane, "term-1");
+  assert.throws(() => r.recover("demo", "1.1"), /cannot safely replay/);
+});
+
+test("ambiguous Orca terminal creation retains worktree and cannot automatically replay", t => {
+  const { runner: r, calls } = orcaFixture(t, true);
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  assert.equal(a.terminal.phase, "creating");
+  assert.equal(a.terminal.backend, "orca");
+  assert.equal(existsSync(a.path), true);
+  assert.throws(() => r.recover("demo", "1.1"), /cannot safely replay/);
+  assert.throws(() => r.attach("demo", "1.1"), /ownership inspection/);
+  assert.equal(calls().filter(args => args[0] === "terminal" && args[1] === "create").length, 1);
+});
+
+test("Orca integration closes its exited terminal and removes the worktree while retaining its actual branch", t => {
+  const { runner: r, fake } = orcaFixture(t);
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  complete(r, a);
+  const state = r.read("demo"), saved = state.attempts.find(item => item.id === a.id);
+  saved.worker = { token: "test", exitedAt: "now", log: join(r.repo.stateDir, "worker.log") };
+  r.save(state);
+  r.integrate("demo", ["1.1"]);
+  assert.equal(existsSync(a.path), false);
+  assert.equal(fake.state().terminals.length, 0);
+  assert.equal(git(r.repo.root, "rev-parse", a.branch), r.read("demo").attempts[0].report.commit);
+  assert.equal(fake.calls().some(args => args[0] === "worktree" && args[1] === "rm"), false);
 });
