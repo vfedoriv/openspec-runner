@@ -30,8 +30,8 @@ export interface Config {
   defaultAgent: string;
   agents: Record<string, AgentConfig>;
   maxParallel: number;
-  worktrees: "auto" | "git" | "worktrunk";
-  terminal: "auto" | "manual" | "herdr";
+  worktrees: "auto" | "git" | "worktrunk" | "orca";
+  terminal: "auto" | "manual" | "herdr" | "orca";
   cleanup: "automatic" | "manual";
   setup: string[][];
   verifyIntegration: string[][];
@@ -191,8 +191,8 @@ function validateConfig(c: Config): Config {
   )
     throw new Error("Invalid defaultModel or maxParallel");
   if (
-    !["auto", "git", "worktrunk"].includes(c.worktrees) ||
-    !["auto", "manual", "herdr"].includes(c.terminal)
+    !["auto", "git", "worktrunk", "orca"].includes(c.worktrees) ||
+    !["auto", "manual", "herdr", "orca"].includes(c.terminal)
   )
     throw new Error("Invalid worktrees or terminal adapter");
   if (!["automatic", "manual"].includes(c.cleanup))

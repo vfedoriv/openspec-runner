@@ -37,7 +37,7 @@ reconcile <change>              Adopt committed planning edits; invalidate old r
 begin <change> <task> --attempt ID [--session ID]
 report <change> <task> --attempt ID --file PATH
 
-Run coordination inside Herdr for persistent automatic sessions. Otherwise launch
+Run coordination inside Herdr or fmfsaisai/orca for persistent automatic sessions. Otherwise launch
 prints commands to run once in your terminals. Delivery and archival are explicit.
 `;
 export function init(

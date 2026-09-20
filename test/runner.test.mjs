@@ -831,3 +831,66 @@ test("CLI dry-run and JSON confirmation expose exact candidates without terminal
   const confirmed = JSON.parse(execFileSync(process.execPath, [cli, "cleanup", "demo", "--tasks", "1.1", "--attempt", a.id, "--confirm", result.results[0].token, "--json"], { cwd: root, encoding: "utf8" }));
   assert.equal(confirmed.results[0].status, "removed");
 });
+
+function orcaFixture(t, fail = false) {
+  const f = fixture(t, { terminal: "orca", worktrees: "orca" });
+  const keys = ["ORCA", "ORCA_SESSION", "TMUX", "TMUX_PANE"];
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  t.after(() => { for (const key of keys) {
+    if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+  } });
+  Object.assign(process.env, { ORCA: "1", ORCA_SESSION: "orca-tests", TMUX: "/tmp/orca-tests,100,0", TMUX_PANE: "%0" });
+  const calls = join(f.dir, "tmux.jsonl");
+  executable(join(f.bin, "tmux"), `
+const fs=require('node:fs'), args=process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');
+switch(args[2]) {
+  case 'list-sessions': console.log('100|$0|1000|orca-tests'); break;
+  case 'new-window': ${fail ? "process.exit(1);" : "console.log('$0|@1|%1');"} break;
+  case 'list-panes': console.log('%0|@0|0\\n%1|@1|0'); break;
+  case 'select-window': case 'select-pane': break;
+  default: process.exit(2);
+}
+`);
+  executable(join(f.bin, "orca-worktree"), `
+const fs=require('node:fs'), path=require('node:path'), cp=require('node:child_process');
+const slug=process.argv[3], dir=path.join(process.env.ORCA_ROOT,'.orca','worktree',slug);
+fs.mkdirSync(path.dirname(dir),{recursive:true});
+cp.execFileSync('git',['worktree','add',dir,'-b','orca-'+slug],{stdio:'pipe'});
+console.log(dir);
+`);
+  return { ...f, calls: () => readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line)) };
+}
+
+test("Orca CLI preview is read-only and launch persists both adapters and focuses only its pane", t => {
+  const { runner: r, root, calls } = orcaFixture(t);
+  const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+  const preview = JSON.parse(execFileSync(process.execPath,
+    [cli, "launch", "demo", "--tasks", "1.1", "--default-model", "model-a", "--dry-run", "--json"],
+    { cwd: root, encoding: "utf8" }));
+  assert.equal(preview.terminal, "orca");
+  assert.equal(existsSync(r.path("demo")), false);
+  assert.equal(calls().some(args => args[2] === "new-window"), false);
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  assert.equal(a.error, undefined);
+  assert.equal(a.terminal.backend, "orca");
+  assert.equal(a.terminal.pane, "%1");
+  assert.equal(git(a.path, "branch", "--show-current"), a.branch);
+  const launch = calls().find(args => args[2] === "new-window");
+  assert.ok(launch.includes("-d"));
+  assert.ok(launch.includes(a.path));
+  assert.match(launch.at(-1), /worker/);
+  assert.equal(r.attach("demo", "1.1").result.pane, "%1");
+  assert.throws(() => r.recover("demo", "1.1"), /cannot safely replay/);
+});
+
+test("ambiguous Orca window creation retains worktree and cannot automatically replay", t => {
+  const { runner: r, calls } = orcaFixture(t, true);
+  const a = r.launch("demo", ["1.1"], settings)[0];
+  assert.equal(a.terminal.phase, "creating");
+  assert.equal(a.terminal.backend, "orca");
+  assert.equal(existsSync(a.path), true);
+  assert.throws(() => r.recover("demo", "1.1"), /cannot safely replay/);
+  assert.throws(() => r.attach("demo", "1.1"), /ownership inspection/);
+  assert.equal(calls().filter(args => args[2] === "new-window").length, 1);
+});
