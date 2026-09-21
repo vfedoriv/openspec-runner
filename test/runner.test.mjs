@@ -56,8 +56,12 @@ function executable(path, body) {
 }
 function fixture(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), "runner tests "));
+  const previousOrcaTerminal = process.env.ORCA_TERMINAL_HANDLE;
+  delete process.env.ORCA_TERMINAL_HANDLE;
   t.after(() => {
     process.env.PATH = basePath;
+    if (previousOrcaTerminal === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
+    else process.env.ORCA_TERMINAL_HANDLE = previousOrcaTerminal;
     delete process.env.HERDR_ENV;
     delete process.env.HERDR_SESSION;
     delete process.env.FAKE_HERDR_FAIL;
