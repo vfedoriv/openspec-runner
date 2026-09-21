@@ -53,7 +53,7 @@ test(
     mkdirSync(join(dir, "specs/runner-output"), { recursive: true });
     writeFileSync(
       join(dir, "specs/runner-output/spec.md"),
-      "## ADDED Requirements\n\n### Requirement: Output\nThe system SHALL write an acceptance output.\n\n#### Scenario: Generate output\n- **WHEN** the task runs\n- **THEN** an output file exists\n",
+      "## Purpose\nProvide a concrete acceptance output for interoperability checks.\n\n## ADDED Requirements\n\n### Requirement: Output\nThe system SHALL write an acceptance output.\n\n#### Scenario: Generate output\n- **WHEN** the task runs\n- **THEN** an output file exists\n",
     );
     writeFileSync(
       join(dir, "tasks.md"),
