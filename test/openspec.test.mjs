@@ -7,10 +7,12 @@ import {
   readFileSync,
   rmSync,
   mkdirSync,
+  chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Runner } from "../dist/runner.js";
+import { Feature } from "../dist/feature.js";
 import { readiness } from "../dist/plan.js";
 function run(cwd, cmd, args) {
   return execFileSync(cmd, args, {
@@ -27,9 +29,9 @@ try {
   available = false;
 }
 test(
-  "real unmodified OpenSpec creation, status, validation and archival remain compatible",
+  "real unmodified OpenSpec creation, managed review, validation and archival remain compatible",
   { skip: !available },
-  (t) => {
+  async (t) => {
     const root = mkdtempSync(join(tmpdir(), "runner real openspec "));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const git = (...a) => run(root, "git", a),
@@ -105,14 +107,32 @@ test(
       "--strict",
       "--json",
     ]);
-    const archived = JSON.parse(
-      run(result.path, "openspec", [
-        "archive",
-        "runner-acceptance",
-        "--yes",
-        "--json",
-      ]),
-    );
-    assert.ok(archived);
+    const feature = new Feature(root);
+    feature.start("runner-acceptance", true);
+    const role = { harness: "codex", model: "test-model", effort: "high" };
+    const settings = { implementation: role, review: role, repair: role };
+    feature.approve("runner-acceptance", settings, feature.planPreview("runner-acceptance", settings).token);
+    const fakeBin = mkdtempSync(join(tmpdir(), "openspec reviewer "));
+    const previousPath = process.env.PATH;
+    t.after(() => { process.env.PATH = previousPath; rmSync(fakeBin, { recursive: true, force: true }); });
+    const codex = join(fakeBin, "codex");
+    writeFileSync(codex, `#!/usr/bin/env node
+if (process.argv.includes('--help')) { console.log('--add-dir --model --cd'); process.exit(0); }
+(async () => {
+  const { Feature } = await import(${JSON.stringify(new URL("../dist/feature.js", import.meta.url).href)});
+  const f = new Feature(), change = 'runner-acceptance', j = f.read(change).jobs.at(-1);
+  f.begin(change, j.id, 'acceptance-review');
+  f.report(change, j.id, { attempt: j.id, session: 'acceptance-review', outcome: 'completed',
+    head: j.base, fingerprint: j.fingerprint, summary: 'Acceptance review', findings: [], verification: ['Read acceptance output'] });
+})().catch(e => { console.error(e); process.exitCode = 1; });
+`);
+    chmodSync(codex, 0o755);
+    process.env.PATH = fakeBin + ":" + previousPath;
+    const review = feature.launch("runner-acceptance", "review");
+    assert.equal((await feature.worker("runner-acceptance", review.id)).exitCode, 0);
+    feature.approveFinal("runner-acceptance", feature.finalPreview("runner-acceptance").token);
+    const archived = feature.archive("runner-acceptance");
+    assert.equal(archived.completed, true);
+    assert.equal(new Feature(result.path).status("runner-acceptance").phase, "completed");
   },
 );

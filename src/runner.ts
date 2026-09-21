@@ -32,6 +32,7 @@ import {
 } from "./plan.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import { getHarness } from "./harnesses/registry.js";
+import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs } from "./feature-state.js";
 import {
   createWorktree,
   startTerminal,
@@ -262,10 +263,16 @@ export class Runner {
       );
   }
   status(change: string) {
+    const feature = readFeature(this.repo.stateDir, change);
+    if (feature && (!existsSync(resolve(this.repo.root, "openspec/changes", change, "tasks.md")) ||
+        !existsSync(resolve(this.repo.root, "openspec/changes", change, "execution.yaml")) || feature.archive))
+      return { change, feature, integration: this.read(change)?.integration, head: this.read(change)?.head,
+        next: `openspec-runner feature status ${change} --json` };
     const p = loadPlan(this.repo.root, change),
       s = this.read(change);
     return {
       change,
+      feature,
       agent: p.agent,
       harness: p.agent,
       batches: s?.batches,
@@ -278,6 +285,8 @@ export class Runner {
         ...t,
         assignment: p.assignments[t.id],
         ready:
+          (!feature || (feature.phase === "implementing" && !feature.invalidated &&
+            feature.approval?.fingerprint === p.fingerprint)) &&
           (!s || s.fingerprint === p.fingerprint) &&
           !s?.transaction &&
           !(s
@@ -312,6 +321,9 @@ export class Runner {
     agent?: string,
   ) {
     const p = loadPlan(this.repo.root, change);
+    const feature = implementationGate(this.repo.stateDir, p);
+    if (feature && agent && agent !== feature.approval!.implementation.harness)
+      throw new Error("Harness differs from approved feature settings");
     const harness = this.harness(p, agent), selectedAgent = harness.id;
     this.selection(p, ids);
     const s = this.read(change);
@@ -332,6 +344,8 @@ export class Runner {
           .map((n) => decodeState(json<unknown>(join(this.repo.stateDir, n))))
       : [];
     const running = allStates.flatMap((s) => s.attempts.filter(active));
+    const featureJobs = activeFeatureJobs(this.repo.stateDir);
+    if (featureJobs.length) throw new Error("Exclusive feature review/repair job must finish before launching tasks");
     for (const id of ids) {
       const old = s && this.latest(s, id);
       if (
@@ -358,13 +372,19 @@ export class Runner {
     }
     const selected = ids.map((id) => ({
       task: id,
-      settings: harness.resolveSettings(
+      settings: feature && !settings ? feature.approval!.tasks[id] : harness.resolveSettings(
         p.assignments[id],
         settings,
         p.config.agents[selectedAgent],
       ),
       parallel: p.assignments[id].parallel,
     }));
+    if (feature) {
+      if (!s && head !== feature.approval!.base) throw new Error("Base differs from approved feature base");
+      for (const item of selected)
+        if (!item.settings || settingsIdentity(item.settings) !== settingsIdentity(feature.approval!.tasks[item.task]))
+          throw new Error("Execution settings differ from approved feature settings");
+    }
     if (running.length + ids.length > p.config.maxParallel)
       throw new Error("Repository concurrency limit exceeded");
     if (
@@ -543,6 +563,7 @@ export class Runner {
         a = this.latest(s, task),
         p = loadPlan(this.repo.root, change);
       this.drift(p, s);
+      implementationGate(this.repo.stateDir, p);
       if (
         !a ||
         !active(a) ||
@@ -645,6 +666,8 @@ export class Runner {
   }
   async worker(change: string, task: string, id: string) {
     const prepared = this.lock(() => {
+      if (readFeature(this.repo.stateDir, change))
+        implementationGate(this.repo.stateDir, loadPlan(this.repo.root, change));
       const s = this.requireState(change), a = this.latest(s, task);
       if (!a || a.id !== id || !a.setupDone)
         throw new Error("Worker attempt is not ready; inspect before retrying");
@@ -765,7 +788,7 @@ export class Runner {
       return a;
     });
   }
-  verifyResult(a: TaskAttempt, report: Report, change: string) {
+  verifyResult(a: Pick<TaskAttempt, "base" | "path" | "branch" | "fingerprint">, report: { commit?: string }, change: string) {
     if (
       !report.commit ||
       report.commit === a.base ||
@@ -850,6 +873,7 @@ export class Runner {
         return { aborted: true, head: s.head };
       }
       const p = loadPlan(this.repo.root, change);
+      const feature = implementationGate(this.repo.stateDir, p);
       this.drift(p, s);
       if (mode === "continue") {
         if (!s.transaction && !s.cleanupBatch) throw new Error("No interrupted integration");
@@ -866,6 +890,8 @@ export class Runner {
         if (a?.phase === "integrated") continue;
         if (!a || a.phase !== "completed" || !a.report)
           throw new Error(`Task ${task} needs a completed report`);
+        if (feature && (!a.worker?.exitedAt || a.worker.exitCode !== 0))
+          throw new Error(`Managed task ${task} requires a successful supervised exit receipt`);
         if (a.worker && !a.worker.exitedAt)
           throw new Error(
             `Task ${task} reported but its supervised worker has not exited yet`,
@@ -1075,6 +1101,7 @@ export class Runner {
       )
         throw new Error("Integration worktree must be clean at recorded HEAD");
       if (p.fingerprint === s.fingerprint) return { unchanged: true };
+      invalidateFeature(this.repo.stateDir, change, "Planning artifacts changed; approve the reconciled plan");
       if (
         s.baseline.some((id) => !p.assignments[id]) ||
         s.attempts.some(

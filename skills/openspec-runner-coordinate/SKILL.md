@@ -1,7 +1,27 @@
 ---
 name: openspec-runner-coordinate
-description: Coordinate explicitly selected single-harness OpenSpec task batches with openspec-runner, inspect sessions and reports, and integrate reviewed results.
+description: Coordinate OpenSpec implementation batches or an approved managed feature through supervised review, bounded repairs, final approval, and archival.
 ---
+
+First run `openspec-runner status <change> --json`. If it returns a feature lifecycle phase and approval history, use the managed lifecycle below. Otherwise preserve the explicit batch-approval workflow in the remaining instructions.
+
+## Managed features
+
+Resume using `openspec-runner feature status <change> --json`; it works before task artifacts exist and after archival. Respect its blocker and next action. A saved plan approval authorizes implementation, integration, review, and in-scope repairs; do not ask again for each routine batch. Missing/stale approval requires returning to planning. Do not edit runtime state directly.
+
+During implementation, use ordinary `status`, `launch --tasks ... --dry-run --json`, `launch`, and `integrate`. Select ready tasks from the execution plan, respecting dependencies, exclusive work, and the concurrency limit. Managed launch uses frozen per-task settings; omit harness/model/effort/base overrides. Inspect worker reports and successful exits before integrating. Continue through ready batches in this conversation; there is no unattended scheduler.
+
+After all tasks are integrated, preview and launch `feature review <change> [--dry-run] --json`. This creates a fresh reviewer session and isolated checkout. In manual-terminal mode, present its returned supervised worker command exactly once. Inspect `feature status` until the report and exit receipt are available. Do not infer completion from a quiet terminal.
+
+If the review has correctness, security, spec, or verification blockers, preview and launch `feature fix <change> [--dry-run] --json`. One repair attempt covers the current blockers. Integrate its verified result with `feature integrate <change> --attempt <id> --json`, then launch another fresh review. Allow at most two repair rounds by default. Advisory style/improvement findings do not trigger automatic repairs. At the limit, on a failed/blocked session, or when scope must change, stop and show the evidence for user direction. After that direction, use `--retry` for an unsuccessful review/repair attempt; retries consume repair rounds. Extending the limit requires another reviewed plan approval.
+
+For interrupted repair integration, inspect the worktree, resolve/stage conflicts, then use `feature integrate --continue`, or explicitly abort with `--abort`. For a lost supervisor or interrupted preparation, `feature recover <change> --attempt <id>` only records a provably interrupted job; it never redispatches. Ambiguous process/terminal ownership requires inspection. Keep feature job worktrees and their saved logs for diagnosis; their paths remain in status.
+
+When the fresh review has no blockers, run `feature approve <change> --final --dry-run --json` and `feature archive <change> --dry-run --json`. Present the branch, checks, review evidence, advisory findings, and archival/spec-synchronization scope. Ask the user to approve this exact final snapshot. Record consent with `feature approve <change> --final --confirm <token> --json`; do not use the token without approval. Then run `feature archive <change> --json`. If interrupted, inspect recorded state and rerun archive; it resumes rather than creating a duplicate archive/commit. Never manually declare completion when archival or post-archive checks failed.
+
+Completion means the integration branch is reviewed, verified, and contains the archived change. Deliver its branch and archive receipt. Merging into a target branch or publishing a PR is separate. Normal task cleanup may leave resources requiring inspection; show them without treating cleanup failure as feature failure. The existing per-resource cleanup consent rules below still apply to managed features.
+
+## Unmanaged batches and shared resource rules
 
 Run `openspec-runner status <change> --json` and show ready tasks with their assignments. Confirm one batch harness from the preview; use `--agent claude` or `--agent codex` when selecting it explicitly. Before previewing, verify every selected task is ready. A dependency selected in the same batch is not satisfied until it has been integrated; if any selected task is blocked, show the unmet dependencies and required sequence instead of running `launch`. Preview an entirely ready batch using `openspec-runner launch <change> --tasks 2.1,2.2 --agent <harness> --dry-run --json`, then run the same command without --dry-run only after user approval. Do not start a continuous scheduler. Claude previews show unsupported calling-session inheritance and its configured permission policy; supply `--default-model` or explicit task models.
 

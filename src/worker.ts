@@ -7,12 +7,15 @@ import { ClaudeStreamDecoder } from "./harnesses/claude-stream.js";
 
 // Exec exits after its turn and preserves session rollouts by default. The parent
 // observes close only after the child and its report command have returned.
+export type SupervisedSession = Pick<TaskAttempt, "agent" | "path" | "settings" | "expectedSession" |
+  "session" | "worker" | "identityConfirmed" | "observedSession" | "terminalEvidence">;
+
 export async function superviseWorker(
-  a: TaskAttempt,
+  a: SupervisedSession,
   common: string,
   prompt: string,
   started: (pid: number) => void,
-  evidence?: (update: (current: TaskAttempt) => void) => void,
+  evidence?: (update: (current: SupervisedSession) => void) => void,
 ): Promise<number | null> {
   const harness = getHarness(a.agent ?? "codex");
   const capabilities = await harness.capabilities(a.path);
@@ -49,7 +52,7 @@ export async function superviseWorker(
             if (!event.sessionId) return;
             try {
               // Stream identity is evidence, not the begin/report registration gate.
-              const update = (current: TaskAttempt) => {
+              const update = (current: SupervisedSession) => {
                 if (current.expectedSession && current.expectedSession !== event.sessionId)
                   throw new Error("Claude stream identity does not match the reserved session");
                 current.identityConfirmed = true;

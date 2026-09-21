@@ -6,18 +6,21 @@ checkboxes from an OpenSpec change into isolated Codex or Claude Code worker
 sessions, Git branches, and worktrees, then integrates only the results you
 approve.
 
-The package installs three project-local agent skills:
+The package installs five project-local agent skills:
 
 | Skill | Where it runs | Responsibility |
 |---|---|---|
 | `openspec-runner-plan` | Your planning session | Create or complete normal OpenSpec artifacts, assign models and dependencies, and write `execution.yaml` |
 | `openspec-runner-coordinate` | Your coordinating session | Validate, preview, launch, inspect, retry, and integrate explicitly selected task batches |
 | `openspec-runner-implement` | One isolated worker per task | Implement exactly one checkbox, verify it, commit it, and submit a structured report |
+| `openspec-runner-review` | A fresh feature reviewer | Review the whole feature against the approved spec and report findings |
+| `openspec-runner-repair` | An isolated repair worker | Repair blocking findings without changing the approved task list |
 
 The skills guide both supported worker harnesses; the `openspec-runner` CLI
 enforces durable state, dependency, worktree, report, and integration rules.
 The runner does not replace OpenSpec, modify OpenSpec core, change Codex or
-Claude Code authentication or permissions, or automatically archive a change.
+Claude Code authentication or permissions. Opt-in managed features can archive a
+change after final user approval; unmanaged changes retain explicit manual archival.
 
 Explicit skill invocation differs by harness:
 
@@ -37,6 +40,7 @@ use the `$skill-name` mention syntax.
 - [Requirements](#requirements)
 - [Install into a target project](#install-into-a-target-project)
 - [Quick start](#quick-start)
+- [Managed feature lifecycle](#managed-feature-lifecycle)
 - [Use the three skills together](#use-the-three-skills-together)
 - [Configuration](#configuration)
 - [Task lifecycle and integration](#task-lifecycle-and-integration)
@@ -85,7 +89,7 @@ flowchart TB
     L --> M[Use normal OpenSpec validation<br/>and archival flow]
 ```
 
-There are two important boundaries:
+For the unmanaged batch workflow shown above, there are two important boundaries:
 
 1. A worker completing a task does **not** complete its canonical OpenSpec
    checkbox. Only successful integration does that.
@@ -226,7 +230,9 @@ target-project/
 │   └── skills/
 │       ├── openspec-runner-plan/SKILL.md
 │       ├── openspec-runner-coordinate/SKILL.md
-│       └── openspec-runner-implement/SKILL.md
+│       ├── openspec-runner-implement/SKILL.md
+│       ├── openspec-runner-review/SKILL.md
+│       └── openspec-runner-repair/SKILL.md
 ├── .claude/
 │   └── skills/              # installed by init --agent claude|all
 └── openspec/
@@ -238,7 +244,7 @@ the compatibility default; `claude` creates a version-2 config with an explicit
 `sonnet` default and `dontAsk` permissions; `all` installs both skill targets and
 allows `--default-agent codex|claude` for a new version-2 config:
 
-- It updates only the three runner-owned `SKILL.md` files.
+- It updates only the five runner-owned `SKILL.md` files.
 - It does not remove or replace unrelated project skills.
 - It creates `openspec/runner.yaml` only when absent, preserving existing runner
   configuration.
@@ -279,9 +285,9 @@ propose task dependencies, model assignments, effort, and safe parallel groups.
 Do not launch anything yet.
 ```
 
-Review the proposed table. After approval, the skill writes
-`openspec/changes/user-auth/execution.yaml` beside `tasks.md`, validates the
-plan, and asks you to commit the planning artifacts. You may start this step
+Review the proposed table and the complete
+`openspec/changes/user-auth/execution.yaml` prepared beside `tasks.md`. The skill validates the
+plan and asks you to commit the approved planning artifacts. You may start this step
 with uncommitted proposal, design, specification, or `tasks.md` files; commit
 them together with `execution.yaml` after planning finishes and before starting
 step 2.
@@ -371,7 +377,140 @@ openspec-runner integrate user-auth --tasks 2.1
 Repeat until complete, then explicitly deliver the returned integration branch
 and use your normal OpenSpec validation and archival process.
 
+## Managed feature lifecycle
+
+Invoke the planning skill with a feature idea to use the full managed workflow:
+
+```text
+Use $openspec-runner-plan to plan and coordinate a managed feature for user authentication.
+Explore the requirements, propose the OpenSpec artifacts and execution plan, and ask
+me to approve them before implementation. Continue through review and repairs,
+then ask for final approval before archiving.
+```
+
+Use `/openspec-runner-plan` in Claude Code. The current conversation coordinates
+the work; implementation, review, and repairs run in separate supervised sessions.
+There is no unattended controller. On a new session, resume from
+`openspec-runner feature status user-auth --json`.
+
+```text
+Explore → proposal/specs/design/tasks → plan approval → implementation
+        → review → up to two repair/review rounds → final approval → archive → completed
+```
+
+Managed features are opt-in. `feature start <change>` registers a new lifecycle
+before artifacts exist; it does not initialize OpenSpec or invent requirements.
+`feature adopt <change>` enrolls an existing change after its active workers and
+integration have stopped. Existing tasks, commits, and checked boxes never imply
+user approval. Unmanaged commands keep their existing behavior.
+
+The planning skill prepares all artifacts and task metadata before review, and
+includes explicit implementation, reviewer, and repair settings. Reviewers and
+repair workers may use a different supported harness from implementation.
+For example, save this input outside the change directory, replacing model
+placeholders using model discovery:
+
+```json
+{
+  "implementation": { "harness": "codex", "model": "MODEL_ID", "effort": "high" },
+  "review": { "harness": "codex", "model": "MODEL_ID", "effort": "high" },
+  "repair": { "harness": "claude", "model": "sonnet" },
+  "maxFixRounds": 2
+}
+```
+
+Codex effort must be explicit for all approved settings. Claude effort may be
+omitted to intentionally use its CLI default. Managed execution never inherits
+new defaults from whichever session happens to resume it.
+
+After the user approves the artifacts and settings, commit only those planning
+files. Preview the committed snapshot, check it matches the approved package,
+and record approval using its token:
+
+```sh
+openspec-runner feature start user-auth --json
+openspec-runner feature approve user-auth --file /path/to/feature-settings.json --dry-run --json
+openspec-runner feature approve user-auth --file /path/to/feature-settings.json --confirm PLAN_TOKEN --json
+```
+
+Tokens bind a snapshot; they are not substitutes for user consent. Plan approval
+creates the integration branch and authorizes routine ready-batch launches,
+integration, review, and in-scope repairs. Use ordinary launch/integrate commands
+with the approved settings; omit agent, model, effort, and base overrides.
+Changed planning content requires a commit, reconciliation, and fresh approval.
+Checkbox updates alone do not invalidate approval.
+
+After implementation, preview and start a fresh reviewer:
+
+```sh
+openspec-runner feature review user-auth --dry-run --json
+openspec-runner feature review user-auth --json
+openspec-runner feature status user-auth --json
+```
+
+Herdr/Orca dispatch uses the existing terminal adapters. Manual mode returns an
+exact supervised worker command to run once in another terminal. Reports alone
+are insufficient: a successful supervised exit and matching session identity
+are required. The reviewer checkout must remain unchanged.
+
+Review reports include a stable finding ID, category, location, impact, and
+suggested correction. Correctness, security, spec, and verification failures
+block completion. Style and optional improvements are advisory. For blockers:
+
+```sh
+openspec-runner feature fix user-auth --dry-run --json
+openspec-runner feature fix user-auth --json
+# After the repair worker reports and exits successfully:
+openspec-runner feature integrate user-auth --attempt REPAIR_ID --json
+openspec-runner feature review user-auth --json
+```
+
+Each repair attempt covers the current blockers in an isolated worktree without
+adding OpenSpec tasks. Repairs cannot close findings themselves; every repair
+must be integrated and reviewed again. After two repair attempts, unresolved
+blockers require user direction. A failed/blocked attempt pauses the workflow;
+an explicitly requested `--retry` creates another attempt and consumes another
+repair round. Increasing `maxFixRounds` requires a new reviewed plan approval.
+
+Once checks pass and the latest review has no blockers:
+
+```sh
+openspec-runner feature approve user-auth --final --dry-run --json
+openspec-runner feature archive user-auth --dry-run --json
+# Present the result, advisory findings, and archive scope; obtain final approval.
+openspec-runner feature approve user-auth --final --confirm FINAL_TOKEN --json
+openspec-runner feature archive user-auth --json
+```
+
+Archival runs OpenSpec's normal specification synchronization in the integration
+worktree, commits the archive, and runs final validation/checks. Only then is
+the feature marked completed. Completion does not merge into main or publish
+a pull request. Branches, reports, and the integration worktree remain available.
+
+Lifecycle state is versioned separately beneath
+`<git-common-dir>/openspec-runner/features/`; existing version-1/version-2 task
+state remains compatible. Approvals and reports live outside fingerprinted
+planning files. `status` includes the lifecycle, task readiness, findings,
+blocking errors, and next action, even before artifacts exist or after archival.
+
+For interrupted repairs, inspect and resolve conflicts before
+`feature integrate <change> --continue`, or use `--abort` to abandon the pending
+merge. `feature recover <change> --attempt ID` records provably interrupted
+preparation or a disappeared supervised worker without starting another session.
+Uncertain terminal/process ownership must be inspected; it is never automatically
+redispatched. Feature job worktrees are retained and listed in status for review
+and recovery. Existing task cleanup policy and confirmations remain unchanged.
+
+Archive errors retain an `archiving` state and receipt. Rerun `feature archive`
+after inspection to resume an already-produced archive or commit. Partial edits
+with the active change still present require inspection and completion of the
+OpenSpec operation before retrying. Never delete the lifecycle state to bypass
+an error or run a second archive blindly.
+
 ## Use the three skills together
+
+The following describes the original unmanaged batch workflow. Managed features
+use the additional review/repair skills and lifecycle approvals described above.
 
 ### Planning skill: `openspec-runner-plan`
 
@@ -384,7 +523,7 @@ It:
 3. Queries `openspec-runner models --json` instead of assuming model IDs.
 4. Presents one review table with task number, description, model, optional
    reasoning effort, dependencies, and parallel permission.
-5. Writes `execution.yaml` after review, includes every checkbox, and runs
+5. Prepares `execution.yaml` for review, includes every checkbox, and runs
    `openspec-runner validate <change> --json`.
 
 Task identity comes from the number in the checkbox text:
@@ -398,7 +537,7 @@ Task identity comes from the number in the checkbox text:
 Do not use OpenSpec's positional JSON task IDs as runner identifiers. Every
 checkbox must have an entry in `execution.yaml`; an empty assignment is valid.
 
-Planning does not authorize a launch. The OpenSpec artifacts may be uncommitted
+Unmanaged planning does not authorize a launch. The OpenSpec artifacts may be uncommitted
 when planning starts. After planning finishes, commit `tasks.md`,
 `execution.yaml`, and every other changed OpenSpec artifact before moving to
 coordination.
@@ -1165,6 +1304,25 @@ pnpm run build
 pnpm test
 pnpm pack --dry-run
 ```
+
+Run the complete suite on Linux or WSL with Node.js 22.13 or newer and pnpm on
+the Linux PATH. Native Windows does not support the integration suite's POSIX
+fake executables. To run the managed-feature checks first and then the full suite:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm run build
+node --test test/feature-contract.test.mjs test/feature.test.mjs test/openspec.test.mjs
+pnpm test
+pnpm pack --dry-run
+```
+
+The real OpenSpec interoperability test requires `openspec` on PATH; otherwise
+it is skipped. It creates a disposable project and exercises approval, a fake
+supervised reviewer, final approval, real OpenSpec spec synchronization, and
+archival. Real Codex/Claude authentication is not required for the test suite.
+On Windows, `pnpm run build` and
+`node --test test/feature-contract.test.mjs` check types and portable contracts.
 
 Tests use temporary repositories and fake Codex, Claude Code, Worktrunk, and
 Herdr executables.
