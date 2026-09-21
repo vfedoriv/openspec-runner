@@ -12,7 +12,7 @@ export interface OrcaContext {
 export function orcaCall(root: string, args: string[], context?: OrcaContext): any {
   if (context && (context.provider !== "stablyai" || !context.runtimeId))
     throw new Error("Legacy tmux Orca state is unsupported; inspect its original session manually");
-  const response = JSON.parse(run("orca", [...args, "--host", "local", "--json"], root, 30000));
+  const response = JSON.parse(run("orca", [...args, "--json"], root, 30000));
   if (response?.ok !== true || !response.result || typeof response.result !== "object" ||
       typeof response._meta?.runtimeId !== "string")
     throw new Error("Unsupported stablyai/orca JSON response; use its registered CLI and a running local runtime");

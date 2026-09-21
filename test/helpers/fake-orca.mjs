@@ -11,15 +11,15 @@ const fs = require('node:fs'), path = require('node:path'), cp = require('node:c
 const root = ${JSON.stringify(root)}, stateFile = ${JSON.stringify(stateFile)};
 const s = JSON.parse(fs.readFileSync(stateFile, 'utf8')), args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
-if (!args.includes('--json') || args[args.indexOf('--host') + 1] !== 'local') process.exit(2);
+if (!args.includes('--json') || args.includes('--host')) process.exit(2);
 const flag = name => args[args.indexOf(name)+1];
 const git = (...args) => cp.execFileSync('git', args, {cwd:root, encoding:'utf8', stdio:['ignore','pipe','pipe']}).trim();
 const save = () => fs.writeFileSync(stateFile, JSON.stringify(s));
 const scope = s.missingScope ? {} : {hostScope:{hostIds:s.omitLocal?[]:['local'],omittedHostIds:s.omitLocal?['local']:[]}};
 const terminal = () => s.terminals.find(t => t.handle === flag('--terminal'));
 let result;
-switch (args.slice(0,2).join(' ')) {
-case 'status --host': result={target:{kind:s.remote?'environment':'local'},runtime:{runtimeId:s.runtimeId,reachable:!s.unreachable,state:s.unreachable?'not_running':'ready'}}; break;
+switch (args[0] === 'status' ? 'status' : args.slice(0,2).join(' ')) {
+case 'status': result={target:{kind:s.remote?'environment':'local'},runtime:{runtimeId:s.runtimeId,reachable:!s.unreachable,state:s.unreachable?'not_running':'ready'}}; break;
 case 'repo list': result={repos:[{id:'repo-1',path:root,executionHostId:'local'}]}; break;
 case 'worktree list': result={worktrees:s.worktrees,totalCount:s.worktrees.length,truncated:!!s.truncated,...scope}; break;
 case 'worktree show': {
