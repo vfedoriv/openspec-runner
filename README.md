@@ -37,6 +37,7 @@ use the `$skill-name` mention syntax.
 
 ## Contents
 
+- [Documentation](#documentation)
 - [How it fits into OpenSpec](#how-it-fits-into-openspec)
 - [Requirements](#requirements)
 - [Install into a target project](#install-into-a-target-project)
@@ -52,6 +53,15 @@ use the `$skill-name` mention syntax.
 - [State and safety guarantees](#state-and-safety-guarantees)
 - [Troubleshooting](#troubleshooting)
 - [Developing the runner](#developing-the-runner)
+
+## Documentation
+
+The [documentation index](docs/README.md) links the user guides, references, and
+workflow diagrams. Start with the [user guide](docs/user-guide.md) for the current
+single-repository CLI. The [team workflow guide](docs/team-workflow.md) describes
+the proposed shared Store and delegated component extension, including team
+handoffs, dependencies, merge completion, and recovery. Its new runner command
+families are design interfaces rather than current CLI commands.
 
 ## How it fits into OpenSpec
 

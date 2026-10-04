@@ -3,6 +3,9 @@
 Date: 2026-10-04
 Status: Design for user review
 
+The workflow diagrams describe the proposed team mode. The current CLI and
+proposed workflow are documented separately in the [documentation index](../../README.md).
+
 ## 1. Intent and agreed decisions
 
 Extend openspec-runner so a team can implement one shared feature across several
@@ -62,6 +65,45 @@ There are three cooperating units:
 3. **Delegated component runner:** imports one assignment, executes a component
    through existing local task supervision, integration, review, and bounded
    repair, then exports a portable submission receipt.
+
+### Repository and machine boundaries
+
+```mermaid
+flowchart LR
+    subgraph CoordinatorMachine[Coordinator machine]
+        C[Shared feature coordinator]
+        V[Component inspection and combined verification]
+        C --> V
+    end
+    subgraph SharedGit[Shared Git repositories]
+        S[Store contract and coordination records]
+        A[API result branches and PRs]
+        W[Web result branches and PRs]
+    end
+    subgraph AliceMachine[Alice machine]
+        AR[API component runner]
+        AW[Local task workers and component reviewer]
+        AR --> AW
+    end
+    subgraph BobMachine[Bob machine]
+        WR[Web component runner]
+        WW[Local task workers and component reviewer]
+        WR --> WW
+    end
+    C -->|Publish assignments and decisions| S
+    S -->|Fetch approved assignment| AR
+    S -->|Fetch approved assignment| WR
+    AR -->|Publish component result| A
+    WR -->|Publish component result| W
+    AR -->|Publish submission receipt| S
+    WR -->|Publish submission receipt| S
+    S -->|Import submissions| C
+    A -->|Fetch exact result and delivery commits| V
+    W -->|Fetch exact result and delivery commits| V
+```
+
+Arrows across machines are explicit Git handoffs. Worker supervision, locks,
+worktrees, and process recovery stay on the machine executing a component.
 
 The coordinator is the single author of authoritative assignments, acceptance,
 revocation, and completion records. Teammates submit receipts through separate
@@ -209,6 +251,40 @@ further implementation requires a revised component plan and renewed approval.
 
 ## 8. Lifecycle, delivery, and archival
 
+### Feature SDLC
+
+```mermaid
+stateDiagram-v2
+    [*] --> Planning
+    Planning --> AwaitingApproval: Shared and component plans committed
+    AwaitingApproval --> Implementing: User approves exact snapshots
+    Implementing --> Verifying: All components accepted
+    Verifying --> Implementing: Component corrections required
+    Verifying --> ReadyForDelivery: Combined checks and review pass
+    ReadyForDelivery --> AwaitingMerges: Component PRs ready
+    AwaitingMerges --> FinalVerification: Every required PR merged
+    FinalVerification --> Planning: Delivered behavior needs a revised plan
+    FinalVerification --> AwaitingFinalApproval: Merged tuple passes checks and review
+    AwaitingFinalApproval --> FinalVerification: Merged tuple changes
+    AwaitingFinalApproval --> Completed: User approves exact merged tuple
+    Completed --> [*]
+    note right of Implementing
+        Each teammate runs an entire component change.
+        Acceptance belongs to the coordinator.
+    end note
+    note right of AwaitingMerges
+        Accepted branches are ready for delivery.
+        Required PR merges unlock final verification.
+    end note
+    note right of Completed
+        Delivery is complete.
+        Archive status is tracked independently.
+    end note
+```
+
+Transitions are explicit workflow actions. A blocked component carries its
+reason and next action while independent components may continue.
+
 Component status follows:
 
 ```text
@@ -220,7 +296,8 @@ require a corrected submission under the active assignment; changed approved
 scope requires reapproval. An acceptance is invalidated if its inputs change.
 
 The shared feature progresses through planning, awaiting approval, implementing,
-verifying, ready for delivery, awaiting merges, final verification, and completed.
+verifying, ready for delivery, awaiting merges, final verification, awaiting final
+approval, and completed.
 Status includes a blocker and next action. Ready for delivery requires every
 component accepted and a successful combined review against the exact component
 commit tuple. Completion requires:
@@ -263,6 +340,47 @@ a prepared archive branch is shown as pending delivery.
 
 ## 9. Git transport, failure, and recovery
 
+### Team interaction for one component
+
+```mermaid
+sequenceDiagram
+    actor U as Feature approver
+    participant C as Coordinator
+    participant S as Store Git repository
+    actor T as Component owner
+    participant L as Owner local runner
+    participant R as Component Git repository
+    actor P as PR reviewers
+    U->>C: Approve contract, component plans, and settings
+    C->>S: Publish assignment on coordination branch
+    T->>S: Fetch assignment and approved history
+    T->>L: Import entire component assignment
+    L->>L: Run tasks, integrate, review, and bounded repairs
+    L-->>T: Exact component commit and submission receipt
+    T->>R: Publish component result branch
+    T->>S: Publish receipt on submission branch
+    C->>S: Fetch and import receipt
+    C->>R: Fetch submitted commit
+    C->>C: Validate scope, review evidence, and acceptance checks
+    alt Result accepted
+        C->>S: Record acceptance and available milestones
+        Note over C,P: Combined feature checks and review precede PR merges
+        T->>P: Open component PR linked to contract and assignment
+        P->>R: Review and merge PR
+        C->>R: Fetch delivery commit and verify merge evidence
+        C->>S: Record component merged
+    else Correction or revised approval required
+        C-->>T: Findings and required next action
+        T->>L: Repair within approval or prepare revised plan
+    end
+    Note over C,R: After all components merge, verify and review the exact merged tuple
+    U->>C: Approve final merged result
+    C->>S: Record shared feature completion
+```
+
+The local runner observes worker exits. The coordinator validates portable
+evidence and retrieved commits; it does not connect to remote worker processes.
+
 Synchronization remains explicit: operators clone, fetch, push, and review
 branches through their normal Git workflow. Runner commands report missing
 commits or checkout mappings with the required repository, ref, and revision.
@@ -284,6 +402,66 @@ accepting them. Failed component checks block that component and its dependent
 milestones while independent components can continue. Failed combined checks
 block delivery approval or completion and produce findings assigned to the
 affected component owners.
+
+### Full workflow with decision and recovery points
+
+```mermaid
+flowchart TD
+    P[Explore shared behavior and prepare component plans] --> A[Commit and approve exact contract, plans, and settings]
+    A --> D{Declared dependency milestones available?}
+    D -->|No| WAIT[Wait for required accepted or merged component]
+    WAIT --> D
+    D -->|Yes| ASSIGN[Coordinator publishes entire component assignment]
+    ASSIGN --> IMPORT[Owner fetches and validates assignment]
+    IMPORT --> VALID{Repository, base, and snapshots match?}
+    VALID -->|No| REPLAN[Correct checkout or obtain revised approval]
+    REPLAN --> IMPORT
+    VALID -->|Yes| TASK[Run ready local task attempts]
+    TASK --> EXIT[Accept task reports and observe successful worker exits]
+    EXIT --> INTEGRATE[Integrate locally and run component checks]
+    INTEGRATE --> MORE{Unfinished component tasks?}
+    MORE -->|Yes| TASK
+    MORE -->|No| REVIEW[Fresh component review]
+    REVIEW --> BLOCK{Blocking findings?}
+    BLOCK -->|Yes, rounds remain| REPAIR[Isolated repair, verification, and local integration]
+    REPAIR --> REVIEW
+    BLOCK -->|Yes, limit reached| USER[User direction and revised plan or settings]
+    USER --> A
+    BLOCK -->|No| SUBMIT[Publish exact result branch and receipt]
+    SUBMIT --> CHECK[Coordinator imports receipt, retrieves commit, and runs acceptance checks]
+    CHECK --> OK{Assignment and result accepted?}
+    OK -->|No| CORRECT[Return findings or diagnose stale submission]
+    CORRECT --> FIXABLE{Correction fits approval and repair budget?}
+    FIXABLE -->|Yes| REPAIR
+    FIXABLE -->|No| USER
+    OK -->|Yes| ACCEPT[Record component acceptance and unlock dependents]
+    ACCEPT --> ALL{All required components accepted?}
+    ALL -->|No| D
+    ALL -->|Yes| COMBINED[Combined verification and whole feature review]
+    COMBINED --> READY{Ready for delivery?}
+    READY -->|No| FIXABLE
+    READY -->|Yes| PR[Publish and review component PRs]
+    PR --> MERGES[Fetch and record exact delivery commits]
+    MERGES --> MERGED{Every required component PR merged?}
+    MERGED -->|No| PR
+    MERGED -->|Yes| FINAL[Verify and review exact merged tuple]
+    FINAL --> FINALPASS{Final checks and review pass?}
+    FINALPASS -->|No| USER
+    FINALPASS -->|Yes| APPROVE[Await user approval of exact final tuple]
+    APPROVE -->|Approved| COMPLETE[Record delivery completion]
+    COMPLETE --> ARCHIVE{Archive scope approved and inputs unchanged?}
+    ARCHIVE -->|No| PENDING[Delivery complete, archival pending]
+    PENDING --> ARCHIVE
+    ARCHIVE -->|Yes| PREPARE[Prepare and verify component and Store archive commits]
+    PREPARE --> ARCHIVEPR[Publish and merge archive PRs]
+    ARCHIVEPR --> ARCHIVED[Record canonical archive delivery]
+```
+
+The component lane repeats independently for each assignment. Interruptions
+resume from durable local intent and committed records; retries retain earlier
+attempts. A failed check requires inspection, a permitted correction, and a new
+check of the affected snapshot. The separate archival lane leaves delivery
+completion intact while archive changes await review and merge.
 
 ## 10. Proposed CLI and skill boundaries
 
@@ -333,6 +511,13 @@ Required behavior coverage includes:
   exact merged-tuple checks, and final approval invalidation.
 - Post-merge archival scope, prepared versus delivered archive status, and recovery.
 - Existing unmanaged and managed repository-local behavior.
+
+User documentation is a required delivery artifact. Maintain the current
+[user guide](../../user-guide.md), [team guide](../../team-workflow.md), and
+[documentation index](../../README.md). As implementation lands, replace proposed
+interfaces with checked executable CLI examples, document every handoff and
+recovery path, and keep diagrams aligned with actual status and completion rules.
+Documentation must make current and proposed behavior clear during rollout.
 
 Deliver the work in order: context pinning and shared records; component
 assignment and execution binding; portable submission and acceptance; dependencies
