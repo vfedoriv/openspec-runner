@@ -60,9 +60,9 @@ use the `$skill-name` mention syntax.
 The [documentation index](docs/README.md) links the user guides, references, and
 workflow diagrams. Start with the [user guide](docs/user-guide.md) for the current
 single-repository CLI. The [team workflow guide](docs/team-workflow.md) describes
-the implemented shared Store and delegated component commands, including explicit
-Git handoffs, dependencies, merged-tuple completion, separate archival, and recovery.
-It contains complete checked manifest/settings/map/review/receipt schemas and examples.
+the roles, decisions, and process for work across repositories and machines.
+The [team operator reference](docs/team-workflow-reference.md) contains the direct
+CLI commands, input schemas, Git handoffs, and detailed recovery procedures.
 
 ## How it fits into OpenSpec
 
@@ -1321,7 +1321,7 @@ identities; snapshot mutations require a preview token. Approve/complete/archive
 also require actual user consent and `--approved-by`. Pure `--dry-run --json` never
 runs checks or creates resources. Existing local commands below retain their behavior.
 
-See the [complete linked command reference](docs/team-workflow.md#command-reference)
+See the [complete linked command reference](docs/team-workflow-reference.md#command-reference)
 for every action, including record inspection, revocation, delivered-snapshot acceptance,
 archive inspection/recovery, and canonical delivery. `openspec-runner --help` reports
 installed package paths to the team guide and checked input builder for agent skills

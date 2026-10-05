@@ -5,7 +5,8 @@ Start with the guide for the workflow you want to use.
 | Guide | Audience | Availability |
 |---|---|---|
 | [User guide](user-guide.md) | People installing the runner and executing changes in one repository | Current CLI |
-| [Team workflow](team-workflow.md) | Coordinators and teammates working across repositories and machines | Implemented coordination/component CLI; checked schemas and explicit Git handoffs |
+| [Team workflow](team-workflow.md) | Users, coordinators, and component owners | Roles, approval steps, process diagrams, and status explanations |
+| [Team operator reference](team-workflow-reference.md) | Agents and operators running the CLI directly | Command sequences, checked schemas, Git handoffs, and detailed recovery |
 | [Shared Store design](superpowers/specs/2026-10-04-store-linked-components-design.md) | People reviewing or implementing the team extension | Design for review |
 | [Linked input builder](examples/linked-feature-inputs.mjs) | Coordinators preparing full manifest/settings/map/scope files | Checked by CLI integration tests |
 | [Command reference](../README.md#cli-reference) | Users looking up current command syntax | Current CLI |
@@ -29,7 +30,7 @@ Start with the guide for the workflow you want to use.
 | Current managed feature SDLC | [User guide lifecycle](user-guide.md#managed-feature-sdlc) |
 | Current task execution and integration | [Task loop](user-guide.md#task-execution-and-integration) |
 | Where shared and local resources live | [Design repository and machine boundaries](superpowers/specs/2026-10-04-store-linked-components-design.md#repository-and-machine-boundaries) |
-| Shared feature SDLC | [Team status and completion](team-workflow.md#status-and-completion) |
+| Shared feature SDLC | [Team walkthrough](team-workflow.md#complete-team-walkthrough) |
 | How people exchange assignments and results | [Team interaction](team-workflow.md#team-interaction) |
 | Full team workflow, decisions, and repair loops | [Design detailed workflow](superpowers/specs/2026-10-04-store-linked-components-design.md#full-workflow-with-decision-and-recovery-points) |
 
