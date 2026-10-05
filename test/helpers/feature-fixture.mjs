@@ -58,6 +58,15 @@ if (process.argv.includes('--version')) { console.log('test-cli'); process.exit(
 (async () => {
   const { Feature } = await import(${JSON.stringify(new URL("../../dist/feature.js", import.meta.url).href)});
   const f = new Feature();
+  // Real agents dispatch begin after startup. The synchronous fake must wait
+  // for its supervisor to finish durable PID registration before dispatching it.
+  const deadline = Date.now() + 10000;
+  while (true) {
+    const pending = f.read('demo').jobs.at(-1);
+    if (pending.worker?.pid === process.pid && !fs.existsSync(f.repo.stateDir + '/lock.json')) break;
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for supervised fixture PID registration');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   const state = f.read('demo'), job = state.jobs.at(-1);
   const control = JSON.parse(fs.readFileSync(${JSON.stringify(controlPath)}, 'utf8'));
   const session = job.expectedSession || 'test-' + job.id;

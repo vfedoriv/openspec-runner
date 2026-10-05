@@ -3,7 +3,7 @@ import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Runner, decodeState } from "./runner.js";
-import { loadPlan, assertCommitted, readiness } from "./plan.js";
+import { loadPlan, assertCommitted, readiness, type Plan } from "./plan.js";
 import { atomic, clean, git, json, run, shellCommand, attempt } from "./system.js";
 import { createWorktree, startTerminal, terminalAdapter } from "./adapters.js";
 import { superviseWorker, type SupervisedSession } from "./worker.js";
@@ -13,6 +13,7 @@ import type { HarnessSettings } from "./harnesses/types.js";
 import {
   readFeature, saveFeature, featurePath, featureActive, activeFeatureJobs, blocking, digest,
   approvedFeature, validateFeatureReport, settingsIdentity, type FeatureState, type FeatureJob, type FeatureReport, type FeatureApproval,
+  pinnedPrompt, type DelegatedBinding,
 } from "./feature-state.js";
 
 export interface FeatureSettings {
@@ -26,6 +27,37 @@ const nonempty = (v: unknown): v is string => typeof v === "string" && !!v.trim(
 const taskActive = (s: ReturnType<Runner["read"]>) => s?.attempts.some(a =>
   ["preparing", "manual", "launching", "running"].includes(a.phase) || !!(a.worker && !a.worker.exitedAt));
 
+export function resolveFeatureApprovalSettings(options: { plan: Plan; input: { implementation: HarnessSettings; review: HarnessSettings; repair: HarnessSettings; tasks?: Record<string, HarnessSettings> } }) {
+  const p = options.plan, input = options.input;
+  const resolveRole = (role: "implementation" | "review" | "repair") => {
+    const spec = input?.[role];
+    if (!spec || !nonempty(spec.harness) || !nonempty(spec.model) || spec.model === "session" ||
+        (spec.effort !== undefined && !nonempty(spec.effort)))
+      throw new Error(`${role} requires an explicit harness/model and optional effort`);
+    const adapter = getHarness(spec.harness);
+    const settings = adapter.resolveSettings({ model: spec.model, effort: spec.effort ?? spec.reasoningEffort, reasoningEffort: spec.harness === "codex" ? spec.effort ?? spec.reasoningEffort : undefined, dependsOn: [], parallel: false },
+      undefined, p.config.agents[spec.harness]);
+    if (spec.harness === "codex" && !(settings.effort ?? settings.reasoningEffort))
+      throw new Error("Resolve an explicit Codex effort before plan approval");
+    return { ...settings, ...spec, harness: spec.harness,
+      ...(spec.harness === "codex" ? { reasoningEffort: settings.effort ?? settings.reasoningEffort } : {}) };
+  };
+  const implementation = resolveRole("implementation"), review = resolveRole("review"), repair = resolveRole("repair");
+  if (implementation.harness !== p.agent) throw new Error("Implementation harness must match execution.yaml/config");
+  const tasks = Object.fromEntries(p.tasks.map(t => {
+    const resolved = getHarness(p.agent).resolveSettings(p.assignments[t.id], implementation, p.config.agents[p.agent]);
+    const supplied = input.tasks?.[t.id];
+    const settings = { ...resolved, ...(implementation.options ? { options: implementation.options } : {}), ...(supplied ?? {}) };
+    if (settings.model !== resolved.model || settings.harness !== resolved.harness || (settings.effort ?? settings.reasoningEffort) !== (resolved.effort ?? resolved.reasoningEffort))
+      throw new Error(`Task ${t.id} settings differ from committed plan resolution`);
+    if (p.agent === "codex" && !(settings.effort ?? settings.reasoningEffort))
+      throw new Error(`Resolve explicit effort for task ${t.id} before approval`);
+    return [t.id, { ...settings, ...(p.agent === "codex" ? { reasoningEffort: settings.effort ?? settings.reasoningEffort } : {}) }];
+  }));
+  if (Object.keys(input.tasks ?? {}).some(task => !tasks[task])) throw new Error("Task settings contain unapproved task scope");
+  return { implementation, tasks, review, repair };
+}
+
 export class Feature {
   runner: Runner;
   constructor(cwd = process.cwd()) { this.runner = new Runner(cwd); }
@@ -36,6 +68,42 @@ export class Feature {
     return s;
   }
   private save(s: FeatureState) { saveFeature(this.repo.stateDir, s); }
+  bindAssignment(options: { change: string; approval: FeatureApproval; delegated: DelegatedBinding }) {
+    const saved = this.runner.lock(() => {
+      const old = readFeature(this.repo.stateDir, options.change);
+      if (old && old.delegated?.assignmentDigest !== options.delegated.assignmentDigest)
+        throw new Error("Existing managed feature differs from delegated assignment; reconcile before import");
+      if (old) return old;
+      if (this.runner.read(options.change)) throw new Error("Existing local execution cannot be replaced by assignment import");
+      const plan = loadPlan(this.repo.root, options.change);
+      assertCommitted(this.repo.root, plan, options.approval.base);
+      if (git(this.repo.root, "rev-parse", "HEAD") !== options.approval.base || plan.fingerprint !== options.approval.fingerprint)
+        throw new Error("Component plan/base differs from delegated assignment");
+      const state: FeatureState = { version: 1, change: options.change, planningRoot: this.repo.root,
+        phase: "implementing", jobs: [], fixRounds: 0, approval: structuredClone(options.approval),
+        approvalHistory: [structuredClone(options.approval)], delegated: structuredClone(options.delegated) };
+      this.save(state);
+      return state;
+    });
+    this.runner.lock(() => {
+      if (this.runner.read(options.change)) return;
+      const p = loadPlan(this.repo.root, options.change), id = options.delegated.assignmentId;
+      this.runner.save({ version: 2, change: options.change, fingerprint: saved.approval!.fingerprint, head: saved.approval!.base,
+        integration: { branch: `openspec-runner/${options.change}/delegated-${id}/integration`,
+          path: resolve(options.delegated.resources.worktreeRoot, `${options.change}-delegated-${id}-integration`), base: saved.approval!.base },
+        baseline: p.tasks.filter(t => t.completed).map(t => t.id), planTasks: p.tasks.map(t => t.id), attempts: [], batches: [] });
+    });
+    let r = this.execution(saved);
+    const exclude = resolve(this.repo.common, "info/exclude"), text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+    if (!text.split(/\r?\n/).includes(".openspec-runner/")) writeFileSync(exclude, `${text}\n.openspec-runner/\n`);
+    const workspace = createWorktree(this.repo.root, { ...r.integration, base: r.head }, options.delegated.resources.worktrees);
+    this.runner.lock(() => {
+      const state = this.execution(saved); state.integration = workspace; this.runner.save(state); r = state;
+    });
+    if (git(r.integration.path, "symbolic-ref", "--short", "HEAD") !== r.integration.branch || git(r.integration.path, "rev-parse", "HEAD") !== r.head || !clean(r.integration.path))
+      throw new Error("Delegated integration reservation changed; inspect before recovery");
+    return this.status(options.change);
+  }
   private update(change: string, fn: (s: FeatureState) => void) {
     return this.runner.lock(() => { const s = this.read(change); fn(s); this.save(s); return s; });
   }
@@ -107,6 +175,29 @@ export class Feature {
       throw new Error("Reviewer changed its checkout; run a fresh review");
     return job;
   }
+  /** Validated evidence shared by delegated export and ordinary Feature review gates. */
+  submissionEvidence(options: { change: string }) {
+    const s = this.read(options.change), { r } = this.allImplemented(s);
+    if (s.archive || s.phase === "completed") throw new Error("Component has entered archival");
+    const canonical = loadPlan(r.integration.path, options.change);
+    if (!canonical.tasks.every(task => task.completed)) throw new Error("Canonical task completion does not match integrated tasks");
+    const review = this.review(s);
+    if (review.approvalToken !== s.approval!.token || review.report!.head !== r.head || review.report!.fingerprint !== s.approval!.fingerprint)
+      throw new Error("Review does not bind exact commit and approved settings");
+    if (review.report!.findings!.some(blocking)) throw new Error("Blocking review findings prevent submission");
+    for (const task of canonical.tasks) {
+      if (r.baseline.includes(task.id)) continue;
+      const attempt = this.runner.latest(r, task.id);
+      if (!attempt || attempt.phase !== "integrated" || attempt.fingerprint !== canonical.fingerprint ||
+          attempt.report?.outcome !== "completed" || !attempt.worker?.exitedAt || attempt.worker.exitCode !== 0 || !attempt.report.commit)
+        throw new Error("Task lacks integrated successful supervised evidence");
+      git(this.repo.root, "merge-base", "--is-ancestor", attempt.report.commit, r.head);
+    }
+    return { commit: r.head, branch: r.integration.branch, path: r.integration.path,
+      tasks: canonical.tasks.map(task => ({ id: task.id, completed: task.completed })),
+      review: { commit: r.head, findings: structuredClone(review.report!.findings!) },
+      verification: structuredClone(s.approval!.verifyIntegration) };
+  }
   status(change: string) {
     const saved = this.read(change), s = structuredClone(saved);
     const r = this.runner.read(change);
@@ -151,6 +242,7 @@ export class Feature {
   }
   planPreview(change: string, input: FeatureSettings) {
     const s = this.read(change);
+    if (s.delegated) throw new Error("Delegated assignment cannot be reapproved locally; obtain coordinator approval");
     if (s.archive || s.phase === "completed") throw new Error("Archived/completed feature cannot be replanned");
     this.assertIdle(s);
     const p = loadPlan(s.planningRoot, change);
@@ -162,29 +254,9 @@ export class Feature {
     const maxFixRounds = input?.maxFixRounds ?? 2;
     if (!Number.isSafeInteger(maxFixRounds) || maxFixRounds < s.fixRounds || maxFixRounds < 0)
       throw new Error("maxFixRounds must be an integer no smaller than rounds already used");
-    const resolveRole = (role: "implementation" | "review" | "repair") => {
-      const spec = input?.[role];
-      if (!spec || !nonempty(spec.harness) || !nonempty(spec.model) || spec.model === "session" ||
-          (spec.effort !== undefined && !nonempty(spec.effort)))
-        throw new Error(`${role} requires an explicit harness/model and optional effort`);
-      const adapter = getHarness(spec.harness);
-      const settings = adapter.resolveSettings({ model: spec.model, effort: spec.effort, dependsOn: [], parallel: false },
-        undefined, p.config.agents[spec.harness]);
-      if (spec.harness === "codex" && !(settings.effort ?? settings.reasoningEffort))
-        throw new Error("Resolve an explicit Codex effort before plan approval");
-      return { ...settings, harness: spec.harness,
-        ...(spec.harness === "codex" ? { reasoningEffort: settings.effort ?? settings.reasoningEffort } : {}) };
-    };
-    const implementation = resolveRole("implementation"), review = resolveRole("review"), repair = resolveRole("repair");
-    if (implementation.harness !== p.agent) throw new Error("Implementation harness must match execution.yaml/config");
-    const tasks = Object.fromEntries(p.tasks.map(t => {
-      const settings = getHarness(p.agent).resolveSettings(p.assignments[t.id], implementation, p.config.agents[p.agent]);
-      if (p.agent === "codex" && !(settings.effort ?? settings.reasoningEffort))
-        throw new Error(`Resolve explicit effort for task ${t.id} before approval`);
-      return [t.id, { ...settings, ...(p.agent === "codex" ? { reasoningEffort: settings.effort ?? settings.reasoningEffort } : {}) }];
-    }));
+    const { implementation, tasks, review, repair } = resolveFeatureApprovalSettings({ plan: p, input });
     const snapshot = { fingerprint: p.fingerprint, base: r?.integration.base ?? git(s.planningRoot, "rev-parse", "HEAD"),
-      implementation, tasks, review, repair, maxFixRounds, verifyIntegration: p.config.verifyIntegration };
+      implementation, tasks, review, repair, maxFixRounds, verifyIntegration: p.config.verifyIntegration, setup: p.config.setup };
     return { ...snapshot, token: digest(snapshot) };
   }
   approve(change: string, input: FeatureSettings, token: string) {
@@ -243,7 +315,7 @@ export class Feature {
     }
     return { role, head: r.head, base: s.approval!.base, fingerprint: p.fingerprint,
       settings: s.approval![role], findings, round: role === "repair" ? s.fixRounds + 1 : s.fixRounds,
-      terminal: terminalAdapter(s.planningRoot, p.config.terminal), worktrees: p.config.worktrees };
+      terminal: terminalAdapter(s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees: s.delegated?.resources.worktrees ?? p.config.worktrees };
   }
   launch(change: string, role: "review" | "repair", retry = false) {
     const reserved = this.runner.lock(() => {
@@ -252,7 +324,7 @@ export class Feature {
         approvalToken: s.approval!.token,
         fingerprint: preview.fingerprint, settings: preview.settings, agent: preview.settings.harness,
         harness: preview.settings.harness, expectedSession: preview.settings.harness === "claude" ? randomUUID() : undefined,
-        path: resolve(s.planningRoot, ".openspec-runner/worktrees", id), branch: `openspec-runner/${change}/${role}/${id}`,
+        path: resolve(s.delegated?.resources.worktreeRoot ?? resolve(s.planningRoot, ".openspec-runner/worktrees"), id), branch: `openspec-runner/${change}/${role}/${id}`,
         base: preview.head, parallel: false, phase: "preparing", terminal: {} };
       s.jobs.push(job); s.phase = role === "review" ? "reviewing" : "fixing";
       if (role === "repair") s.fixRounds++;
@@ -265,7 +337,7 @@ export class Feature {
       const workspace = createWorktree(this.repo.root, job, reserved.preview.worktrees);
       this.updateJob(change, job.id, j => Object.assign(j, workspace));
       const p = loadPlan(job.path, change);
-      for (const cmd of p.config.setup) run(cmd[0], cmd.slice(1), job.path);
+      for (const cmd of this.read(change).approval!.setup ?? p.config.setup) run(cmd[0], cmd.slice(1), job.path);
       if (!clean(job.path) || git(job.path, "rev-parse", "HEAD") !== job.base)
         throw new Error("Feature setup changed the checkout");
       job = this.updateJob(change, job.id, j => {
@@ -311,7 +383,7 @@ export class Feature {
       `Findings/history: ${JSON.stringify(j.role === "repair" ? j.findings : s.jobs.filter(x => x.role === "review" && x.id !== j.id).at(-1)?.report?.findings ?? [])}\n` +
       `Report fields: attempt, session, outcome (completed/blocked/failed), head (${j.base}), fingerprint (${j.fingerprint}), summary, verification (nonempty strings), ` +
       `${j.role === "review" ? "findings (array of {id, category: correctness/security/spec/verification/style/improvement, location, impact, correction})" : "commit (full HEAD SHA for completed repairs)"}.\n` +
-      `Write JSON at ${input}; submit: openspec-runner feature report ${change} --attempt ${j.id} --file ${shellCommand([input])}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.`;
+      `Write JSON at ${input}; submit: openspec-runner feature report ${change} --attempt ${j.id} --file ${shellCommand([input])}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
   }
   begin(change: string, id: string, session?: string) {
     return this.updateJob(change, id, j => {
@@ -445,7 +517,9 @@ export class Feature {
     });
   }
   finalPreview(change: string) {
-    const s = this.read(change), { p, r } = this.allImplemented(s), review = this.review(s);
+    const s = this.read(change);
+    if (s.delegated) throw new Error("Delegated assignment stops before final approval/archive; export to coordinator");
+    const { p, r } = this.allImplemented(s), review = this.review(s);
     if (s.archive || s.phase === "completed") throw new Error("Feature has entered archival");
     if (review.report!.findings!.some(blocking)) throw new Error("Blocking review findings remain");
     for (const cmd of p.config.verifyIntegration) run(cmd[0], cmd.slice(1), r.integration.path);
@@ -472,6 +546,7 @@ export class Feature {
   }
   archivePreview(change: string) {
     const s = this.read(change);
+    if (s.delegated) throw new Error("Delegated assignment cannot archive");
     if (s.archive || s.phase === "completed") return { archive: s.archive, phase: s.phase, recovery: s.phase !== "completed" };
     const preview = this.finalPreview(change);
     return { ...preview, approved: s.finalApproval?.token === preview.token };
@@ -479,6 +554,7 @@ export class Feature {
   archive(change: string) {
     return this.runner.lock(() => {
       const s = this.read(change), r = this.execution(s), path = r.integration.path;
+      if (s.delegated) throw new Error("Delegated assignment cannot archive or complete the shared feature");
       if (s.phase === "completed") return { completed: true, archive: s.archive, branch: r.integration.branch };
       if (git(path, "symbolic-ref", "--short", "HEAD") !== r.integration.branch)
         throw new Error("Integration worktree changed branches; inspect before archival");

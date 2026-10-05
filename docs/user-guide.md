@@ -2,8 +2,7 @@
 
 This guide covers the current openspec-runner CLI. It takes you from installation
 through planning, isolated implementation, integration, review, recovery, and
-delivery. The [team workflow guide](team-workflow.md) describes the proposed
-extension for shared Stores and teammates on different machines.
+delivery. The [team workflow guide](team-workflow.md) covers implemented shared Stores and teammates on different machines.
 
 ## Contents
 
@@ -29,7 +28,7 @@ work. Your coordinating agent uses the installed skills to operate the CLI.
 |---|---|---|---|
 | Managed feature | You want implementation, whole-feature review, bounded repairs, and archival tracked together | Approve the committed plan and role settings, then the exact final result and archive scope | Reviewed, archived integration branch |
 | Unmanaged batches | You want to select and approve batches and integrations individually | Approve each launch and integration; archive manually | Retained integration branch with completed tasks |
-| Proposed shared feature | Several repositories and owners implement a Store contract | Shared snapshot approval, component acceptance, and final merged-result approval | Completion after every required component PR merges |
+| Shared Store feature | Several repositories and owners implement a Store contract | Shared snapshot approval, component acceptance, and final merged-result approval | Completion after every required component PR merges |
 
 Managed plan approval authorizes routine execution within that approved scope.
 A revised plan or execution setting requires review of a new snapshot. A preview
@@ -60,7 +59,36 @@ flowchart TD
 
 The last delivery step is explicit. The current managed feature completion
 records archival on the integration branch; it does not merge that branch into
-your main branch. The proposed team mode uses a later completion milestone.
+your main branch. Shared Store features complete only after all declared merges and final merged-tuple review/approval; archival is independent.
+
+## Shared and delegated workflows
+
+For several repositories or independent owner machines, follow the
+[complete team walkthrough](team-workflow.md#complete-team-walkthrough). The shared
+coordinator runs `coordination status FEATURE --store CHECKOUT --map FILE --json`;
+`--store` selects an explicit local checkout and the manifest `storeId` selects
+OpenSpec context. The local machine map routes repository identities to explicit
+implementation roots. It never becomes portable Store state.
+
+An owner runs `component inspect/import/status/export` under an immutable assignment.
+Use the installed `openspec-runner-component` skill; `openspec-runner --help` prints
+the installed package guide/builder paths. The assignment fixes task/role settings,
+checks, base and pinned Store revision; a newer mutable Store checkout does not
+replace it. Existing local task integration and `feature review/fix` work within that
+scope. Owners export a reviewed receipt, then explicitly publish the result branch
+and receipt through Git. Imported components do not perform local final approval
+or archival.
+
+The coordinator separately imports and accepts submitted results, reviews the exact
+combined tuple, records each attested PR merge on its declared branch, and obtains
+final review/user consent for the merged tuple. Shared completion can have archive
+`pending`; prepared post-merge archive branches must reach every approved canonical
+branch before archive status becomes `archived`. Standard Store archival currently
+requires repository-root `openspec/changes/CHANGE`; nested roots need component-only
+scope or reviewed migration and renewed approval. See [team recovery](team-workflow.md#changes-failures-and-recovery)
+for revocation, exact retry identities, rejected Git publication and inspected archive
+recovery. All linked previews are pure and report resolved roots, state, blockers and
+next actions.
 
 ## Install and initialize
 

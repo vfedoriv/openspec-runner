@@ -12,7 +12,8 @@ import { getHarness, harnessIds, hasHarness, planningRules } from "./harnesses/r
 import type { HarnessSettings } from "./harnesses/types.js";
 import { createInterface } from "node:readline/promises";
 import { parse } from "yaml";
-const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
+import { linkedCommand, linkedHelp } from "./linked-cli.js";
+export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
 models [--agent ID] [--json]   Query the selected harness model capabilities
@@ -50,6 +51,7 @@ reconcile <change>              Adopt committed planning edits; invalidate old r
 begin <change> <task> --attempt ID [--session ID]
 report <change> <task> --attempt ID --file PATH
 
+${linkedHelp}
 Run coordination inside Herdr or stablyai/orca for persistent automatic sessions. Otherwise launch
 prints commands to run once in your terminals. Delivery and archival are explicit.
 `;
@@ -82,6 +84,7 @@ export function init(
   const names = [
     "openspec-runner-plan",
     "openspec-runner-coordinate",
+    "openspec-runner-component",
     "openspec-runner-implement",
     "openspec-runner-review",
     "openspec-runner-repair",
@@ -105,6 +108,12 @@ export function init(
 export async function main(args = process.argv.slice(2)) {
   let jsonOutput = args.includes("--json");
   try {
+    if (["coordination", "component"].includes(args[0])) {
+      const result = await linkedCommand(args);
+      if (args.includes("--help") || args.includes("-h")) console.log(linkedHelp);
+      else console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     const { values: v, positionals: p } = parseArgs({
       args,
       allowPositionals: true,

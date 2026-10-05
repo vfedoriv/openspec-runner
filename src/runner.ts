@@ -32,7 +32,7 @@ import {
 } from "./plan.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import { getHarness } from "./harnesses/registry.js";
-import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs } from "./feature-state.js";
+import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt } from "./feature-state.js";
 import {
   createWorktree,
   startTerminal,
@@ -196,11 +196,12 @@ export class Runner {
       `${current}${prefix}# OpenSpec runner runtime worktrees\n${marker}\n`,
     );
   }
-  private worktreePath(...parts: string[]) {
+  private worktreePath(change: string, ...parts: string[]) {
     // Claude Code protects .git paths from automatic edits. Keep durable
     // runner state in repo.common, but put agent workspaces and report inputs
     // in a sibling runtime directory inside the repository root.
-    return resolve(this.repo.root, ".openspec-runner", "worktrees", ...parts);
+    const local = readFeature(this.repo.stateDir, change)?.delegated?.resources;
+    return resolve(local?.worktreeRoot ?? resolve(this.repo.root, ".openspec-runner", "worktrees"), ...parts);
   }
   path(change: string) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(change))
@@ -322,6 +323,7 @@ export class Runner {
   ) {
     const p = loadPlan(this.repo.root, change);
     const feature = implementationGate(this.repo.stateDir, p);
+    if (feature?.delegated && settings) throw new Error("Delegated execution forbids settings overlays");
     if (feature && agent && agent !== feature.approval!.implementation.harness)
       throw new Error("Harness differs from approved feature settings");
     const harness = this.harness(p, agent), selectedAgent = harness.id;
@@ -399,7 +401,8 @@ export class Runner {
       agent: selectedAgent,
       harness: selectedAgent,
       base: head,
-      terminal: terminalAdapter(this.repo.root, p.config.terminal),
+      terminal: terminalAdapter(this.repo.root, feature?.delegated?.resources.terminal ?? p.config.terminal),
+      worktrees: feature?.delegated?.resources.worktrees ?? p.config.worktrees,
       tasks: selected,
     };
   }
@@ -426,7 +429,7 @@ export class Runner {
           fingerprint: p.fingerprint,
           integration: {
             branch,
-            path: this.worktreePath(`${change}-${token}-integration`),
+            path: this.worktreePath(change, `${change}-${token}-integration`),
             base: preview.base,
           },
           head: preview.base,
@@ -462,7 +465,7 @@ export class Runner {
           ...(preview.agent === "claude" ? { expectedSession: randomUUID() } : {}),
           parallel: item.parallel,
           branch,
-          path: this.worktreePath(id),
+          path: this.worktreePath(change, id),
           base: state.head,
           phase: "preparing",
           terminal: {},
@@ -503,12 +506,12 @@ export class Runner {
         const workspace = createWorktree(
           this.repo.root,
           attempt,
-          prepared.plan.config.worktrees,
+          prepared.preview.worktrees,
         );
         attempt = this.updateAttempt(change, attempt.id, (current) =>
           Object.assign(current, workspace, { gitDir: git(workspace.path, "rev-parse", "--absolute-git-dir") }),
         );
-        for (const command of prepared.plan.config.setup)
+        for (const command of readFeature(this.repo.stateDir, change)?.approval?.setup ?? prepared.plan.config.setup)
           run(command[0], command.slice(1), attempt.path);
         attempt = this.updateAttempt(change, attempt.id, (current) => {
           current.setupDone = true;
@@ -580,20 +583,20 @@ export class Runner {
     const workspace = createWorktree(
       this.repo.root,
       attempt,
-      prepared.plan.config.worktrees,
+      readFeature(this.repo.stateDir, change)?.delegated?.resources.worktrees ?? prepared.plan.config.worktrees,
     );
     attempt = this.updateAttempt(change, attempt.id, (current) =>
       Object.assign(current, workspace, { gitDir: git(workspace.path, "rev-parse", "--absolute-git-dir") }),
     );
     if (!attempt.setupDone) {
       // Explicit recovery may rerun setup; setup commands should be idempotent.
-      for (const command of prepared.plan.config.setup)
+      for (const command of readFeature(this.repo.stateDir, change)?.approval?.setup ?? prepared.plan.config.setup)
         run(command[0], command.slice(1), attempt.path);
       attempt = this.updateAttempt(change, attempt.id, (current) => {
         current.setupDone = true;
       });
     }
-    const backend = terminalAdapter(this.repo.root, prepared.plan.config.terminal);
+    const backend = terminalAdapter(this.repo.root, readFeature(this.repo.stateDir, change)?.delegated?.resources.terminal ?? prepared.plan.config.terminal);
     if (backend === "manual") {
       attempt = this.updateAttempt(change, attempt.id, (current) => {
         current.phase = "manual";
@@ -647,7 +650,7 @@ export class Runner {
         "--file",
         reportPath,
       ]);
-    return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.`;
+    return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.` + pinnedPrompt(this.repo.stateDir, change);
   }
   command(change: string, a: TaskAttempt) {
     if (!a.session) return this.workerCommand(change, a);

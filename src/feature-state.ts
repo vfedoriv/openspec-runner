@@ -1,10 +1,12 @@
-import { existsSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, lstatSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { atomic, json } from "./system.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import type { TaskAttempt } from "./runner.js";
 import { loadPlan, type Plan } from "./plan.js";
+import { decodeRecord, stableDigest, type AssignmentRecord } from "./coordination-state.js";
+import { componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
 
 export type FeaturePhase = "planning" | "awaiting-plan-approval" | "implementing" |
   "reviewing" | "fixing" | "awaiting-final-approval" | "archiving" | "completed";
@@ -45,6 +47,7 @@ export interface FeatureApproval {
   repair: HarnessSettings;
   maxFixRounds: number;
   verifyIntegration: string[][];
+  setup?: string[][];
   at: string;
 }
 export interface FeatureState {
@@ -70,6 +73,56 @@ export interface FeatureState {
     commit?: string;
   };
   completedAt?: string;
+  delegated?: DelegatedBinding;
+}
+export interface DelegatedBinding {
+  featureId: string;
+  assignmentId: string;
+  owner: string;
+  historyRevision: string;
+  assignmentDigest: string;
+  contractFingerprint: string;
+  contextPaths: string[];
+  bindingPath: string;
+  resources: ComponentResources;
+}
+export function delegationForBinding(options: { stateDir: string; binding: ComponentBinding }): DelegatedBinding {
+  const { binding } = options, assignment = binding.assignment;
+  return { featureId: assignment.featureId, assignmentId: assignment.id, owner: assignment.owner,
+    historyRevision: binding.historyRevision, assignmentDigest: stableDigest({ value: assignment }), contractFingerprint: assignment.contract.fingerprint,
+    contextPaths: binding.contextPaths, bindingPath: componentBindingPath({ stateDir: options.stateDir, change: assignment.change }), resources: binding.resources };
+}
+export function pinnedPrompt(stateDir: string, change: string): string {
+  const runtime = readComponentBinding({ stateDir, change }), delegated = readFeature(stateDir, change)?.delegated;
+  if (runtime && (runtime.phase !== "ready" || !delegated)) throw new Error("Delegated component binding requires completed import and matching feature state");
+  if (!delegated) return "";
+  validateDelegatedBinding(delegated);
+  return `\nDelegated assignment: ${delegated.featureId}/${delegated.assignmentId}. Read only the pinned Store context at:\n${delegated.contextPaths.join("\n")}\nThese pinned paths are the authoritative shared contracts and linked specifications. Never re-fetch or substitute a registered Store checkout, including through openspec instructions or context commands. OpenSpec commands may inspect repository-local component artifacts only. Do not approve, archive, or complete this shared feature.`;
+}
+export function validateDelegatedBinding(binding: DelegatedBinding) {
+  const stateDir = dirname(dirname(binding.bindingPath)), change = binding.bindingPath.split(/[\\/]/).at(-1)!.replace(/\.json$/, "");
+  const runtime = readComponentBinding({ stateDir, change });
+  if (!runtime || stableDigest({ value: binding }) !== stableDigest({ value: delegationForBinding({ stateDir, binding: runtime }) }))
+    throw new Error("Delegated assignment binding changed; inspect import reservation");
+  const assignment = runtime.assignment;
+  const contexts = [assignment.contract, ...(assignment.contract.references ?? [])];
+  if (contexts.length !== binding.contextPaths.length) throw new Error("Pinned context inventory mismatch");
+  contexts.forEach((context, index) => {
+    const root = binding.contextPaths[index];
+    if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink() || (lstatSync(root).mode & 0o222)) throw new Error("Pinned context directory is unsafe or writable");
+    for (const file of context.files) {
+      let path = root;
+      const parts = file.path.split("/");
+      for (const [position, part] of parts.entries()) {
+        path = resolve(path, part);
+        if (lstatSync(path).isSymbolicLink()) throw new Error("Pinned context cannot contain symlinks");
+        if (position < parts.length - 1 && (!lstatSync(path).isDirectory() || (lstatSync(path).mode & 0o222))) throw new Error("Pinned context directory is unsafe or writable");
+      }
+      if (!lstatSync(path).isFile() || (lstatSync(path).mode & 0o222) || readFileSync(path, "utf8") !== file.content)
+        throw new Error("Pinned context changed or became writable; restore approved assignment context");
+    }
+  });
+  return assignment;
 }
 export const featureActive = (a: FeatureJob) =>
   ["preparing", "manual", "launching", "running"].includes(a.phase) || !!(a.worker && !a.worker.exitedAt);
@@ -97,13 +150,19 @@ export function featurePath(stateDir: string, change: string) {
 }
 export function readFeature(stateDir: string, change: string): FeatureState | undefined {
   const path = featurePath(stateDir, change);
-  if (!existsSync(path)) return undefined;
+  const runtime = readComponentBinding({ stateDir, change });
+  if (!existsSync(path)) {
+    if (runtime?.phase === "ready") throw new Error("Delegated component binding is missing its feature state");
+    return undefined;
+  }
   const s = json<FeatureState>(path);
   if (s.version !== 1 || s.change !== change || !Array.isArray(s.jobs) ||
       !Array.isArray(s.approvalHistory) || !Number.isInteger(s.fixRounds) || s.fixRounds < 0 ||
       typeof s.planningRoot !== "string" || !["planning", "awaiting-plan-approval", "implementing", "reviewing",
         "fixing", "awaiting-final-approval", "archiving", "completed"].includes(s.phase))
     throw new Error("Invalid or unsupported feature state");
+  if ((runtime && (!s.delegated || stableDigest({ value: s.delegated }) !== stableDigest({ value: delegationForBinding({ stateDir, binding: runtime }) }))) || (!runtime && s.delegated))
+    throw new Error("Feature delegation is missing or mismatched with independent component binding");
   return s;
 }
 export function saveFeature(stateDir: string, s: FeatureState) {
@@ -116,7 +175,15 @@ export function activeFeatureJobs(stateDir: string) {
 }
 export function approvedFeature(stateDir: string, plan: Plan) {
   const s = readFeature(stateDir, plan.change);
+  const runtime = readComponentBinding({ stateDir, change: plan.change });
+  if (runtime && (runtime.phase !== "ready" || !s)) throw new Error("Delegated component binding requires completed import and matching feature state");
   if (!s) return undefined;
+  if (s.delegated) {
+    const assignment = validateDelegatedBinding(s.delegated);
+    const expected = { token: stableDigest({ value: assignment }), fingerprint: assignment.planFingerprint, base: assignment.base, ...assignment.settings, at: assignment.createdAt };
+    if (!s.approval || stableDigest({ value: s.approval }) !== stableDigest({ value: expected }))
+      throw new Error("Delegated approval settings differ from imported assignment binding");
+  }
   if (!s.approval || s.invalidated || s.approval.fingerprint !== plan.fingerprint ||
       loadPlan(s.planningRoot, plan.change).fingerprint !== s.approval.fingerprint)
     throw new Error("Managed feature requires approval of the current plan; reconcile changed artifacts and run feature approve");

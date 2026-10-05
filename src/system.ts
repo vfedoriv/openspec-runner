@@ -13,7 +13,7 @@ import { dirname, resolve } from "node:path";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 
-export function run(cmd: string, args: string[], cwd: string, timeout?: number): string {
+export function runRaw(cmd: string, args: string[], cwd: string, timeout?: number): string {
   try {
     return execFileSync(cmd, args, {
       cwd,
@@ -21,15 +21,20 @@ export function run(cmd: string, args: string[], cwd: string, timeout?: number):
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 16 * 1024 * 1024,
       timeout,
-    }).trim();
+    });
   } catch (e: any) {
     throw new Error(
       `${cmd} ${args[0] ?? ""}: ${[e.stderr?.toString().trim(), e.stdout?.toString().trim()].filter(Boolean).join("\n") || e.message}`,
     );
   }
 }
+export function run(cmd: string, args: string[], cwd: string, timeout?: number): string {
+  return runRaw(cmd, args, cwd, timeout).trim();
+}
 export const git = (cwd: string, ...args: string[]) =>
   run("git", ["-c", "core.hooksPath=/dev/null", ...args], cwd);
+export const gitRaw = (cwd: string, ...args: string[]) =>
+  runRaw("git", ["-c", "core.hooksPath=/dev/null", ...args], cwd);
 export function attempt<T>(fn: () => T): T | undefined {
   try {
     return fn();

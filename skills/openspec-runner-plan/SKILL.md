@@ -1,7 +1,15 @@
 ---
 name: openspec-runner-plan
-description: Explore a feature idea or existing OpenSpec change, prepare a reviewed execution plan, and coordinate its opt-in managed lifecycle through review, repairs, and archival.
+description: Plan a repository-local feature or linked Store feature with committed task scope and resolved settings, then obtain approval of the exact implementation snapshot.
 ---
+
+Choose the mode before enrollment. A repository-local managed feature uses `feature start/adopt` below. A linked feature uses `coordination <action> <feature> --store CHECKOUT --map MAP`; an already imported assignment uses the delegated `openspec-runner-component` workflow. Do not enroll a shared contract or delegated assignment as an ordinary local managed feature.
+
+For a linked feature, read the workflow guide at the installed package path reported by `openspec-runner --help` for the complete manifest, machine-map and review/receipt schemas and checked CLI sequence. Prepare normal committed shared OpenSpec artifacts in the Store and committed component plans in their implementation repositories. The manifest names `storeId`, `sharedChange`, `coordinationBranch`, every component repository/change/delivery branch, frozen role/task settings, setup/checks, whole-component accepted/merged dependencies, shared-task milestone mapping, tuple verification and `completion.requireAllMerged: true`. Map every unfinished shared task. An explicit local machine map provides repository IDs and checkout paths; never insert checkout paths into portable records. A Store selector does not route implementation repositories. Use the installed OpenSpec adapter's JSON root/artifact contract; unsupported beta capability diagnostics require an OpenSpec upgrade or corrected Store registration.
+
+Initialize with `coordination init --file MANIFEST --dry-run --json`; the real command requires the expected full Store HEAD and operation identity. Preview shared approval with `coordination approve --dry-run --json`. Present the exact contract revision/fingerprint, component bases/plans, complete task and role settings, dependency gates, checks and repair limits. Record user consent only after the user approved that package, using its returned token, full expected head, record/operation IDs and `--approved-by`. Broad implementation approval covers the approved execution scope; completion and archive scope need their own exact consent. Publish the named coordination branch using an explicit authorized Git handoff. Assign whole components under that shared approval. Future Store checkout changes never silently substitute for a pinned assignment; changed relevant context requires renewed shared approval and reassignment.
+
+For local planning:
 
 Accept a feature idea or an existing change. For a new managed feature choose a repository-local change name and run `openspec-runner feature start <change> --json`; use `feature adopt` for an existing change. Check `feature status` first when resuming. If the user only wants execution metadata or the existing manual workflow, do not enroll the change automatically.
 

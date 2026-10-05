@@ -7,12 +7,13 @@ approval through isolated implementation, whole-feature review, bounded repairs,
 final approval, OpenSpec archival, and completion on a retained integration
 branch.
 
-The package installs five project-local agent skills:
+The package installs six project-local agent skills:
 
 | Skill | Where it runs | Responsibility |
 |---|---|---|
 | `openspec-runner-plan` | Your planning session | Explore a feature, prepare its OpenSpec artifacts and resolved execution/review settings, and obtain plan approval |
-| `openspec-runner-coordinate` | Your coordinating session | Run unmanaged batches or resume a managed feature through implementation, review, repairs, and archival |
+| `openspec-runner-coordinate` | Your coordinating session | Run local batches/features or shared assignments, acceptance, tuple reviews, merge completion and archive delivery |
+| `openspec-runner-component` | A delegated teammate session | Import the pinned whole-component assignment, execute/review it locally and export the portable handoff receipt |
 | `openspec-runner-implement` | One isolated worker per task | Implement exactly one checkbox, verify it, commit it, and submit a structured report |
 | `openspec-runner-review` | A fresh feature reviewer | Review the whole feature against the approved spec and report findings |
 | `openspec-runner-repair` | An isolated repair worker | Repair blocking findings without changing the approved task list |
@@ -59,9 +60,9 @@ use the `$skill-name` mention syntax.
 The [documentation index](docs/README.md) links the user guides, references, and
 workflow diagrams. Start with the [user guide](docs/user-guide.md) for the current
 single-repository CLI. The [team workflow guide](docs/team-workflow.md) describes
-the proposed shared Store and delegated component extension, including team
-handoffs, dependencies, merge completion, and recovery. Its new runner command
-families are design interfaces rather than current CLI commands.
+the implemented shared Store and delegated component commands, including explicit
+Git handoffs, dependencies, merged-tuple completion, separate archival, and recovery.
+It contains complete checked manifest/settings/map/review/receipt schemas and examples.
 
 ## How it fits into OpenSpec
 
@@ -273,7 +274,7 @@ the compatibility default; `claude` creates a version-2 config with an explicit
 `sonnet` default and `dontAsk` permissions; `all` installs both skill targets and
 allows `--default-agent codex|claude` for a new version-2 config:
 
-- It updates only the five runner-owned `SKILL.md` files.
+- It updates only the six runner-owned `SKILL.md` files.
 - It does not remove or replace unrelated project skills.
 - It creates `openspec/runner.yaml` only when absent, preserving existing runner
   configuration.
@@ -1311,6 +1312,22 @@ saved. It refuses unexpected files, ambiguous archive destinations, changed
 branches, altered archived artifacts, and dirty post-check worktrees.
 
 ## CLI reference
+
+Shared Store features use `coordination <action> <feature> --store CHECKOUT --map FILE`;
+teammates use `component <action> <feature> --store CHECKOUT --repository ID`.
+`--store` is a local Git checkout path; the manifest's `storeId` is the OpenSpec
+selector. All mutations require explicit expected SHA heads and immutable operation
+identities; snapshot mutations require a preview token. Approve/complete/archive-approve
+also require actual user consent and `--approved-by`. Pure `--dry-run --json` never
+runs checks or creates resources. Existing local commands below retain their behavior.
+
+See the [complete linked command reference](docs/team-workflow.md#command-reference)
+for every action, including record inspection, revocation, delivered-snapshot acceptance,
+archive inspection/recovery, and canonical delivery. `openspec-runner --help` reports
+installed package paths to the team guide and checked input builder for agent skills
+installed in external repositories. Shared completion requires all declared PR merges
+and passing current final review/consent; archive pending/prepared/archived is independent.
+
 
 | Command | Purpose |
 |---|---|

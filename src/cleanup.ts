@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import { attempt, git, repository } from "./system.js";
+import { attempt, git, gitRaw, repository } from "./system.js";
 import { inspectTerminal, type TerminalInspection } from "./terminal-cleanup.js";
 import { worktrees } from "./adapters.js";
 import { inspectOrcaWorktree } from "./orca-worktrees.js";
@@ -92,7 +92,7 @@ export function inspectCleanup(repo: ReturnType<typeof repository>, s: State, a:
   );
   // Git diff binds tracked changes; hash untracked contents separately. Never follow symlinks.
   for (const name of new Set(
-    git(a.path, "ls-files", "-z", "--others", "--exclude-standard")
+    gitRaw(a.path, "ls-files", "-z", "--others", "--exclude-standard")
       .split("\0")
       .filter(Boolean),
   )) {
