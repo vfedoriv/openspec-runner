@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { coordinationFixture } from "./helpers/coordination-fixture.mjs";
 import { git, executable } from "./helpers/feature-fixture.mjs";
@@ -275,12 +275,10 @@ test("archive commit recovery binds produced blob tree rather than only changed 
   p = f.c.archivePreview({ scope }); const args = { scope, token: p.token, expectedHead: p.head, id: "archive", operationId: "op-archive" };
   git(f.root, "config", "diff.renames", "false");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  f.control({ interruptArchiveCommit: true }); executable(join(f.bin, "git"), `
-const fs=require('node:fs'), cp=require('node:child_process'), file=${JSON.stringify(f.controlPath)}, control=JSON.parse(fs.readFileSync(file,'utf8')), args=process.argv.slice(2);
-if (args.includes('commit') && process.cwd().includes('archive-checkouts') && control.interruptArchiveCommit) { control.interruptArchiveCommit=false; fs.writeFileSync(file,JSON.stringify(control)); process.exit(1); }
-try { cp.execFileSync(${JSON.stringify(realGit)},args,{stdio:'inherit'}); } catch(e) { process.exit(e.status || 1); }
-`);
-  assert.throws(() => f.c.prepareArchive(args), /git|commit/i);
+  const wrapper = join(f.bin, "git"), quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  writeFileSync(wrapper, `#!/bin/sh\ncase "$PWD" in\n  *archive-checkouts*) for arg in "$@"; do [ "$arg" != commit ] || exit 1; done ;;\nesac\nexec ${quote(realGit)} "$@"\n`); chmodSync(wrapper, 0o755);
+  try { assert.throws(() => f.c.prepareArchive(args), /git|commit/i); }
+  finally { unlinkSync(wrapper); }
   const receipt = f.c.inspectArchivePreparation({ operationId: "op-archive" }); assert.equal(receipt.targets.api.stage, "committing");
   const journalPath = join(f.storeRoot, ".git/openspec-runner/archive/op-archive.json"), originalJournal = readFileSync(journalPath, "utf8"), legacy = JSON.parse(originalJournal);
   delete legacy.data.targets.api.tree; writeFileSync(journalPath, JSON.stringify(legacy));

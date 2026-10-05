@@ -1594,6 +1594,11 @@ On Windows, `pnpm run build` and
 
 Tests use temporary repositories and fake Codex, Claude Code, Worktrunk, and
 Herdr executables.
+`pnpm test` reports when each test file starts and lists running files every
+15 seconds. A parent-process watchdog aborts the run if any file exceeds five
+minutes, including synchronous subprocess work. Set `OPENSPEC_TEST_TIMEOUT_MS`
+to adjust that limit on slower machines. To focus on a test while investigating a failure, build once
+and run `node --test --test-name-pattern='test name' test/coordination-delivery.test.mjs`.
 The compatibility test uses installed OpenSpec when available and otherwise
 skips. Coverage includes model inheritance, validation, concurrency, duplicate
 prevention, setup recovery, paths containing spaces, partial worktree creation,

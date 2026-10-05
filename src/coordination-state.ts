@@ -708,6 +708,8 @@ export class CoordinationStore {
   readonly directory: string;
   private validatedHead?: string;
   private immutableObjects = new Map<string, string>();
+  private cachedSnapshot?: CoordinationSnapshot;
+  private cachedApproval?: { key: string; id?: string };
   constructor(options: { root: string; featureId: string }) {
     id(options.featureId, "feature");
     this.root = repository(options.root).root;
@@ -763,6 +765,8 @@ export class CoordinationStore {
   readSnapshot(options: { revision?: string } = {}): CoordinationSnapshot {
     const head = options.revision ?? git(this.root, "rev-parse", "HEAD");
     this.validateHistory(head);
+    // Only committed identities are cached; callers receive their own mutable copy.
+    if (this.cachedSnapshot?.head === head) return structuredClone(this.cachedSnapshot);
     const entries = this.entries(head), manifestEntry = entries.find(e => e.path === `${this.directory}/manifest.yaml`);
     if (!manifestEntry) throw new Error(`Missing committed feature manifest: ${this.featureId}`);
     const manifest = decodeManifest({ value: committedBlob({ root: this.root, object: manifestEntry.object }).toString("utf8") });
@@ -772,12 +776,16 @@ export class CoordinationStore {
       if (entry.path !== this.recordPath(record.kind, record.id)) throw new Error("Record filename or kind does not match its immutable identity");
       return record;
     });
+    this.cachedSnapshot = structuredClone({ manifest, records, head });
     return { manifest, records, head };
   }
   /** Approval authority follows introduction on first-parent history, never user timestamps. */
   authoritativeApproval(options: { snapshot?: CoordinationSnapshot } = {}): ApprovalRecord | undefined {
     const snapshot = options.snapshot ?? this.readSnapshot();
     const approvals = snapshot.records.filter((r): r is ApprovalRecord => r.kind === "approval");
+    const key = JSON.stringify([snapshot.head, approvals.map(record => record.id).sort()]);
+    if (this.cachedApproval?.key === key) return approvals.find(record => record.id === this.cachedApproval!.id);
+    if (!approvals.length) { this.cachedApproval = { key }; return undefined; }
     const commits = git(this.root, "rev-list", "--first-parent", snapshot.head).split("\n");
     for (const commit of commits) {
       const parent = attempt(() => git(this.root, "rev-parse", `${commit}^1`));
@@ -787,7 +795,7 @@ export class CoordinationStore {
           (!parent || attempt(() => git(this.root, "rev-parse", `${parent}:${path}`)) === undefined);
       });
       if (introduced.length > 1) throw new Error("Ambiguous approval history: multiple approvals introduced in one coordination commit");
-      if (introduced.length) return introduced[0];
+      if (introduced.length) { this.cachedApproval = { key, id: introduced[0].id }; return introduced[0]; }
     }
     if (approvals.length) throw new Error("Approval is not introduced on authoritative coordination history");
     return undefined;

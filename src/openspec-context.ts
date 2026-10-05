@@ -106,11 +106,31 @@ export function resolveContext(options: {
     artifactPaths: [...new Set(paths.map(inside))].sort(), references };
 }
 
+// Bound retained immutable bytes across repositories in long-lived runner processes.
+const blobCache = new Map<string, Buffer>();
+const blobCacheLimit = 16 * 1024 * 1024;
+let blobCacheBytes = 0;
+
 /** Read exact Git blob bytes; system.git deliberately trims command output. */
 export function committedBlob(options: { root: string; object: string }): Buffer {
-  return execFileSync("git", ["-c", "core.hooksPath=/dev/null", "cat-file", "blob", options.object], {
+  // Refs and abbreviated IDs can resolve differently later and must stay uncached.
+  const key = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.object) ? JSON.stringify([resolve(options.root), options.object]) : undefined;
+  const cached = key ? blobCache.get(key) : undefined;
+  if (cached) {
+    blobCache.delete(key!); blobCache.set(key!, cached);
+    return Buffer.from(cached);
+  }
+  const bytes = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "cat-file", "blob", options.object], {
     cwd: options.root, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
   });
+  if (key && bytes.length <= blobCacheLimit) {
+    while (blobCache.size && (blobCacheBytes + bytes.length > blobCacheLimit || blobCache.size >= 1024)) {
+      const oldest = blobCache.keys().next().value!;
+      blobCacheBytes -= blobCache.get(oldest)!.length; blobCache.delete(oldest);
+    }
+    blobCache.set(key, Buffer.from(bytes)); blobCacheBytes += bytes.length;
+  }
+  return bytes;
 }
 export function contextFingerprint(options: { files: ContextFile[]; references?: PinnedContext[]; selections?: string[] }): string {
   const files = [...options.files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(file => {

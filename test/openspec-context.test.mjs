@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { resolveContext, pinContext, safeContextPath, contextFingerprint } from "../dist/openspec-context.js";
+import { resolveContext, pinContext, safeContextPath, contextFingerprint, committedBlob } from "../dist/openspec-context.js";
 
 const git = (root, ...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd: root, encoding: "utf8" }).trim();
 function fixture(t) {
@@ -43,6 +43,25 @@ function adapter(root, options = {}) {
     throw new Error("Unexpected command");
   };
 }
+
+test("immutable blob reads reuse Git bytes while isolating returned buffers and repositories", (t) => {
+  const root = fixture(t), object = git(root, "rev-parse", "HEAD:AGENTS.md");
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const bin = mkdtempSync(join(tmpdir(), "runner-blob-git-")), log = join(bin, "calls");
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(log)}\nexec ${quote(realGit)} "$@"\n`); chmodSync(join(bin, "git"), 0o755);
+  const previousPath = process.env.PATH; process.env.PATH = `${bin}:${previousPath}`;
+  try {
+    committedBlob({ root, object }).fill(0);
+    assert.equal(committedBlob({ root, object }).toString(), "Store guidance\n");
+    assert.equal(readFileSync(log, "utf8").trim().split("\n").length, 1);
+    assert.throws(() => committedBlob({ root: bin, object }), /git|repository/i);
+  } finally { process.env.PATH = previousPath; }
+  assert.equal(committedBlob({ root, object: "HEAD:AGENTS.md" }).toString(), "Store guidance\n");
+  writeFileSync(join(root, "AGENTS.md"), "Updated guidance\n"); git(root, "commit", "-am", "Update guidance");
+  assert.equal(committedBlob({ root, object: "HEAD:AGENTS.md" }).toString(), "Updated guidance\n");
+});
 
 test("documented root and doctor references preserve the explicit implementation repository", (t) => {
   const root = fixture(t);

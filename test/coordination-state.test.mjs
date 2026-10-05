@@ -136,6 +136,32 @@ test("an independent Store clone reconstructs status from committed portable rec
   assert.equal(JSON.stringify(cloned.readSnapshot()).includes(root), false);
 });
 
+test("unchanged Store reads avoid repeated Git work without sharing mutable snapshots", (t) => {
+  const { root, store, write } = fixture(t); write(approval()); write(assignment());
+  const snapshot = store.readSnapshot(); store.authoritativeApproval({ snapshot });
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const bin = mkdtempSync(join(tmpdir(), "runner-count-git-")), log = join(bin, "calls");
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(log)}\nexec ${quote(realGit)} "$@"\n`); chmodSync(join(bin, "git"), 0o755);
+  const previousPath = process.env.PATH; process.env.PATH = `${bin}:${previousPath}`;
+  try {
+    snapshot.manifest.components.api.settings.implementation.model = "changed";
+    snapshot.records.find(record => record.kind === "assignment").owner = "changed";
+    const next = store.readSnapshot();
+    assert.equal(next.manifest.components.api.settings.implementation.model, "model");
+    assert.equal(next.records.find(record => record.kind === "assignment").owner, "alice");
+    assert.equal(store.authoritativeApproval({ snapshot: next }).id, "approval");
+    assert.equal(store.status().components.api.assignmentId, "assignment");
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    assert.ok(calls.length <= 4, `Unchanged reads launched ${calls.length} Git processes: ${calls.join("; ")}`);
+  } finally { process.env.PATH = previousPath; }
+  const renewed = { ...approval(), ...metadata("renewed"), createdAt: "2000-01-01T00:00:00Z" };
+  write(renewed);
+  assert.equal(store.authoritativeApproval().id, "renewed");
+  assert.equal(store.readSnapshot({ revision: snapshot.head }).records.filter(record => record.kind === "approval").length, 1);
+});
+
 test("lost index refresh after record commit recovers the exact commit without dirty index state", (t) => {
   const { root, write } = fixture(t), before = git(root, "rev-parse", "HEAD");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
