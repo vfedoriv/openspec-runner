@@ -12,7 +12,7 @@ function retainSources(previous: DashboardSnapshot | undefined, next: DashboardS
     const features = previous.features.filter(f => f.id === source);
     const ids = new Set(features.map(f => f.id));
     next.features = [...next.features.filter(f => !ids.has(f.id)), ...features];
-    next.tasks = [...next.tasks.filter(t => !ids.has(t.featureId)), ...previous.tasks.filter(t => ids.has(t.featureId)).map(t => ({ ...t, ready: false, reasons: [...t.reasons, "Source data is stale"] }))];
+    next.tasks = [...next.tasks.filter(t => !ids.has(t.featureId)), ...previous.tasks.filter(t => ids.has(t.featureId)).map(t => ({ ...t, ready: false, reasons: [...new Set([...t.reasons, "Source data is stale"])] }))];
     next.sessions = [...next.sessions.filter(s => !ids.has(s.featureId)), ...previous.sessions.filter(s => ids.has(s.featureId)).map(s => ({ ...s, process: "unknown" as const, terminal: "unknown" as const }))];
     next.assignments = [...next.assignments.filter(a => !ids.has(a.featureId)), ...previous.assignments.filter(a => ids.has(a.featureId)).map(a => ({ ...a, stale: true }))];
     next.attention.push(...previous.attention.filter(a => a.source === source && !next.attention.some(n => n.id === a.id)));
@@ -29,9 +29,25 @@ export function startDashboardCollector(options: DashboardOptions, receive: (sna
     const old = child; child = undefined; generation++; clearRequest();
     if (old) { old.removeAllListeners(); old.on("error", () => {}); old.kill(); }
   };
+  const reportFailure = (message: string) => {
+    if (latest) {
+      const sources = Object.keys(latest.sources);
+      latest = retainSources(latest, {
+        ...latest,
+        features: [], tasks: [], sessions: [], assignments: [],
+        sources: { ...latest.sources },
+        errors: sources.map(source => ({ source, message, stale: true })),
+        attention: sources.map(source => ({
+          id: `${source}:collector-error`, source, priority: 1, message,
+        })),
+      });
+      receive(latest);
+    }
+    fail(message);
+  };
   const restart = (message: string) => {
     if (closed) return;
-    stop(); fail(message); queued = false; refresh();
+    stop(); reportFailure(message); queued = false; refresh();
   };
   const start = () => {
     const ownGeneration = ++generation;
@@ -42,7 +58,7 @@ export function startDashboardCollector(options: DashboardOptions, receive: (sna
       if (Buffer.byteLength(JSON.stringify(response)) > 8 * 1024 * 1024) { restart("Dashboard response exceeds 8 MiB"); return; }
       clearRequest();
       if (response.snapshot) { latest = retainSources(latest, response.snapshot); receive(latest); }
-      else fail(response.error ?? "Invalid dashboard collector response");
+      else reportFailure(response.error ?? "Invalid dashboard collector response");
       if (queued) { queued = false; refresh(); }
     });
     current.on("error", error => restart(`Dashboard collector: ${error.message}`));

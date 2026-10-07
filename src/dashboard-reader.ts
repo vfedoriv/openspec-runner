@@ -74,7 +74,7 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
         if (feature.archive) attention("archive", `Archive evidence: ${feature.archive.phase}${feature.archive.commit ? ` (${feature.archive.commit})` : ""}`, 3);
         for (const job of feature.jobs) for (const finding of job.findings ?? []) attention(`finding:${job.id}:${finding.id}`, `${blocking(finding) ? "Blocking" : "Advisory"} ${finding.category} finding: ${finding.impact}`, blocking(finding) ? 1 : 3, `${source}:attempt:${job.id}`);
       }
-      if (feature && plan && feature.phase === "implementing") {
+      if (plan && (binding || feature?.phase === "implementing")) {
         try { implementationGate(repo.stateDir, plan); }
         catch (error) { globalReasons.push(error instanceof Error ? error.message : String(error)); }
       }

@@ -124,3 +124,32 @@ test("reader blocks managed launch when pinned planning root drifts", t => {
   assert.equal(s.tasks[0].ready, false);
   assert.match(s.tasks[0].reasons.join(" "), /approval.*current plan/i);
 });
+
+import { stableDigest } from "../dist/coordination-state.js";
+import { contextFingerprint } from "../dist/openspec-context.js";
+import { expectedContextPaths, readComponentBinding } from "../dist/component-state.js";
+test("reader blocks valid reserved component import before feature state exists", t => {
+  const { root, repo } = fixture(t), sha = "a".repeat(40);
+  const files = [{ path: "AGENTS.md", content: "Pinned guidance\n" }];
+  const settings = { model: "test-model", reasoningEffort: "high", harness: "codex" };
+  const assignment = {
+    version: 1, kind: "assignment", id: "assignment", featureId: "feature", operationId: "assign", createdAt: "2026-10-07T00:00:00Z",
+    approvalId: "approval", componentId: "api", owner: "alice", repository: "api", change: "demo", base: sha,
+    planFingerprint: loadPlan(root, "demo").fingerprint,
+    contract: { version: 1, repository: "contracts", revision: sha, change: "shared", fingerprint: contextFingerprint({ files }), files },
+    settings: { implementation: settings, tasks: { "1.1": settings, "1.2": settings }, review: settings, repair: settings, maxFixRounds: 2, verifyIntegration: [], setup: [] },
+    dependencies: [],
+  };
+  const resources = { terminal: "manual", worktrees: "git", worktreeRoot: join(root, "runtime") };
+  const binding = { version: 1, phase: "reserved", repository: "api", change: "demo", assignmentId: "assignment", featureId: "feature", historyRevision: sha, assignment, resources, contextPaths: expectedContextPaths({ stateDir: repo.stateDir, assignment }), token: stableDigest({ value: { assignment, historyRevision: sha, resources } }) };
+  mkdirSync(join(repo.stateDir, "components"));
+  const path = join(repo.stateDir, "components/demo.json"), bytes = JSON.stringify(binding);
+  writeFileSync(path, bytes);
+  assert.equal(readComponentBinding({ stateDir: repo.stateDir, change: "demo" }).phase, "reserved");
+  const s = collect(root);
+  assert.deepEqual(s.errors, []);
+  assert.equal(s.features[0].state, undefined);
+  assert.equal(s.tasks[0].ready, false);
+  assert.match(s.tasks[0].reasons.join(" "), /import|binding|reservation/i);
+  assert.equal(readFileSync(path, "utf8"), bytes);
+});
