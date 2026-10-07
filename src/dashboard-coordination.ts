@@ -4,9 +4,9 @@ import { CoordinationStore, decodeManifest, stableDigest, type AssignmentRecord,
 import { coordinationRevision } from "./coordination.js";
 import { readMachineMap } from "./repository-map.js";
 import { attempt, git, gitRaw, repository } from "./system.js";
-import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
+import type { AssignmentSummary, DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 
-type Fields = Pick<DashboardSnapshot, "features" | "assignments" | "attention" | "errors" | "sources">;
+type Fields = Pick<DashboardSnapshot, "features" | "tasks" | "assignments" | "attention" | "errors" | "sources">;
 type Candidate = { branches: Set<string>; manifests: FeatureManifest[]; errors: string[] };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const normalized = (path: string) => {
@@ -17,13 +17,23 @@ const normalized = (path: string) => {
 /** Observe local committed history only; checkout files and imported pins cannot grant authority. */
 export function collectCoordination(options: DashboardOptions, local: DashboardSnapshot): Fields {
   const result: Fields = {
-    features: [...local.features], assignments: [...local.assignments], attention: [...local.attention],
+    features: [...local.features], tasks: [...local.tasks], assignments: [...local.assignments], attention: [...local.attention],
     errors: [...local.errors], sources: { ...local.sources },
   };
   const error = (source: string, reason: unknown) => {
     result.sources[source] = { collectedAt: local.collectedAt, stale: false };
     result.errors.push({ source, message: message(reason), stale: false });
     result.attention.push({ id: `${source}:error`, source, priority: 1, message: message(reason) });
+  };
+  const blockImportedTasks = (imported: AssignmentSummary | undefined, reason: string) => {
+    if (!imported?.binding) return;
+    const binding = imported.binding;
+    result.tasks = result.tasks.map(task => {
+      if (task.featureId !== imported.featureId || !Object.hasOwn(binding.assignment.settings.tasks, task.task.id)) return task;
+      const explanation = `Coordination authority: ${reason}`;
+      result.attention.push({ id: `${task.id}:authority:${binding.assignmentId}`, source: task.featureId, targetId: task.id, priority: 1, message: explanation });
+      return { ...task, ready: false, reasons: [...new Set([...task.reasons, explanation])] };
+    });
   };
   const finish = () => {
     for (const assignment of result.assignments) if (assignment.binding && !assignment.inspectedRevision)
@@ -105,15 +115,19 @@ export function collectCoordination(options: DashboardOptions, local: DashboardS
         result.assignments = result.assignments.filter(a => !(a.binding?.featureId === featureId && a.repository === assignment.repository && a.binding.assignmentId === assignment.id));
         const id = `${source}:assignment:${assignment.id}`;
         result.assignments.push({ id, featureId: source, componentId: assignment.componentId, repository: assignment.repository, change: assignment.change, owner: assignment.owner,
-          binding: imported?.binding, importedRevision: imported?.importedRevision, inspectedRevision, status: current, stale });
-        if (stale) result.attention.push({ id: `${id}:stale`, source, targetId: id, priority: 1,
-          message: importMismatch ? "Imported assignment differs from authoritative Store history" : current?.assignmentId !== assignment.id ? "Assignment revoked or no longer active in inspected history" : "Assignment approval or dependency is stale in inspected history" });
+          binding: imported?.binding, importedRevision: imported?.importedRevision, inspectedRevision, status: current?.assignmentId === assignment.id ? current : undefined, stale });
+        if (stale) {
+          const reason = importMismatch ? "Imported assignment differs from authoritative Store history" : current?.assignmentId !== assignment.id ? "Assignment revoked or no longer active in inspected history" : "Assignment approval or dependency is stale in inspected history";
+          result.attention.push({ id: `${id}:stale`, source, targetId: id, priority: 1, message: reason });
+          blockImportedTasks(imported, reason);
+        }
       }
       for (const imported of bindings) if (!assignments.some(a => a.id === imported.binding!.assignmentId)) {
         const id = `${source}:assignment:${imported.binding!.assignmentId}`;
         result.assignments = result.assignments.filter(a => a !== imported);
         result.assignments.push({ ...imported, id, featureId: source, inspectedRevision, stale: true });
         result.attention.push({ id: `${id}:missing`, source, targetId: id, priority: 1, message: "Imported assignment is missing from authoritative Store history" });
+        blockImportedTasks(imported, "Imported assignment is missing from authoritative Store history");
       }
       if (status.blocker) result.attention.push({ id: `${source}:blocker`, source, targetId: source, priority: 1, message: status.blocker });
     } catch (cause) { error(source, cause); }

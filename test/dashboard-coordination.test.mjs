@@ -10,6 +10,7 @@ import { collectDashboard } from "../dist/dashboard-reader.js";
 import { repository } from "../dist/system.js";
 import { stableDigest } from "../dist/coordination-state.js";
 import { expectedContextPaths } from "../dist/component-state.js";
+import { loadPlan } from "../dist/plan.js";
 
 function fixture(t, options = {}) {
   const f = coordinationFixture(t, options);
@@ -105,7 +106,7 @@ test("coordination distinguishes pinned history from inspected authority and rev
   assert.equal(current.assignments.length, 1);
   assert.equal(a.importedRevision, binding.historyRevision);
   assert.equal(a.inspectedRevision, git(f.storeRoot, "rev-parse", "HEAD"));
-  assert.equal(a.status.phase, "planned"); assert.equal(a.stale, true);
+  assert.equal(a.status, undefined); assert.equal(a.stale, true);
   assert.ok(current.attention.some(x => /revoked/i.test(x.message)));
 });
 
@@ -235,4 +236,92 @@ test("coordination keeps accepted delivered and completed milestones separate", 
   review("final"); p = f.c.completionPreview();
   f.c.complete({ id: "complete", operationId: "op-complete", expectedHead: p.head, token: p.token, approvedBy: "user" });
   assert.equal(f.collect().features.find(x => x.id === "shared:feature").coordination.phase, "completed");
+});
+
+test("coordination never attributes replacement acceptance or delivery to a revoked assignment", t => {
+  const f = fixture(t, { unchecked: false }), binding = bind(f);
+  f.c.revoke({ assignmentId: "assignment", reason: "Replace owner", id: "revoke", operationId: "op-revoke", expectedHead: git(f.storeRoot, "rev-parse", "HEAD") });
+  let p = f.c.assignmentPreview({ componentId: "api", owner: "bob", contract: f.contract });
+  f.c.assign({ componentId: "api", owner: "bob", contract: f.contract, id: "replacement", operationId: "op-replacement", expectedHead: p.head, token: p.token });
+  const a = f.c.store.readRecord({ kind: "assignment", id: "replacement" });
+  const receipt = { version: 1, kind: "submission", id: "replacement-receipt", operationId: "op-replacement-receipt", featureId: "feature", createdAt: "2026-10-08T00:00:00Z",
+    assignmentId: a.id, owner: a.owner, repository: a.repository, change: a.change, outcome: "completed", base: a.base, planFingerprint: a.planFingerprint,
+    contractFingerprint: a.contract.fingerprint, result: { branch: "main", commit: a.base }, tasks: [{ id: "1.1", completed: true }], review: { commit: a.base, findings: [] }, verification: [] };
+  f.c.importSubmission({ bytes: JSON.stringify(receipt), expectedHead: git(f.storeRoot, "rev-parse", "HEAD") });
+  p = f.c.acceptancePreview({ submissionId: receipt.id });
+  f.c.accept({ submissionId: receipt.id, id: "accept-replacement", operationId: "op-accept-replacement", expectedHead: p.head, token: p.token });
+  let s = f.collect();
+  assert.equal(s.assignments.find(x => x.id.endsWith(":assignment:assignment")).status, undefined);
+  assert.equal(s.assignments.find(x => x.id.endsWith(":assignment:replacement")).status.acceptedCommit, a.base);
+  p = f.c.reviewPreview({ stage: "combined" });
+  f.c.recordReview({ stage: "combined", id: "review-replacement", operationId: "op-review-replacement", expectedHead: p.head, token: p.token,
+    review: { tuple: p.tuple, token: p.token, reviewedBy: "reviewer", summary: "Reviewed replacement tuple", findings: [] } });
+  const merge = { componentId: "api", deliveryCommit: a.base, mergeStyle: "merge", prUrl: "https://example.test/pr/2", attestedBy: "operator" };
+  p = f.c.mergePreview(merge); f.c.recordMerge({ ...merge, id: "merge-replacement", operationId: "op-merge-replacement", expectedHead: p.head, token: p.token });
+  s = f.collect();
+  const old = s.assignments.find(x => x.id.endsWith(":assignment:assignment"));
+  assert.equal(old.status, undefined); assert.equal(old.stale, true);
+  assert.equal(old.importedRevision, binding.historyRevision);
+  assert.equal(s.assignments.find(x => x.id.endsWith(":assignment:replacement")).status.deliveryCommit, a.base);
+  assert.ok(s.attention.some(x => x.targetId === old.id && /revoked/i.test(x.message)));
+});
+
+for (const failure of ["revoked", "stale approval", "missing assignment", "divergent import"]) {
+  test(`coordination projects ${failure} authority only onto matching ready imported tasks`, async t => {
+    const f = fixture(t);
+    writeFileSync(join(f.root, "openspec/changes/demo/tasks.md"), "- [ ] 1.1 Pending delegated task\n- [ ] 1.2 Recorded worker task\n");
+    writeFileSync(join(f.root, "openspec/changes/demo/execution.yaml"), 'version: 1\ntasks:\n  "1.1": {}\n  "1.2": {}\n');
+    git(f.root, "add", "."); git(f.root, "commit", "-m", "Two independent delegated tasks");
+    const { component, input } = f.imported();
+    const p = await component.inspect(input); await component.import({ ...input, token: p.token });
+    const head = git(f.root, "rev-parse", "HEAD"), fingerprint = loadPlan(f.root, "demo").fingerprint;
+    writeFileSync(join(repository(f.root).stateDir, "demo.json"), JSON.stringify({
+      version: 1, change: "demo", fingerprint, integration: { path: f.root, branch: "main", base: head }, head, baseline: [],
+      attempts: [{ id: "observed-worker", task: "1.2", description: "Recorded worker task", fingerprint, settings: { harness: "codex", model: "test-model", effort: "high" },
+        parallel: false, phase: "running", terminal: { pane: "saved-pane" }, path: f.root, branch: "main", base: head,
+        worker: { token: "saved-worker", log: join(f.root, "saved-worker.log"), exitedAt: "2026-10-08T00:00:00Z" } }],
+    }));
+    const directory = join(f.root, "openspec/changes/unrelated"); mkdirSync(directory);
+    writeFileSync(join(directory, "tasks.md"), "- [ ] 1.1 Unrelated task\n");
+    writeFileSync(join(directory, "execution.yaml"), 'version: 1\ntasks:\n  "1.1": {}\n');
+    const before = f.collect();
+    assert.equal(before.tasks.find(x => x.featureId === "local:demo").ready, true);
+    assert.equal(before.tasks.find(x => x.featureId === "local:unrelated").ready, true);
+    const originalHead = git(f.storeRoot, "rev-parse", "HEAD");
+    if (failure === "revoked") f.c.revoke({ assignmentId: "assignment", reason: "Owner changed", id: "revoke", operationId: "op-revoke", expectedHead: originalHead });
+    else if (failure === "stale approval") f.approve("new-approval");
+    else if (failure === "missing assignment") git(f.storeRoot, "reset", "--hard", `${originalHead}~1`);
+    else {
+      const path = join(f.storeRoot, "runner/features/feature/assignments/assignment.json");
+      const assignment = JSON.parse(readFileSync(path, "utf8")); assignment.owner = "bob";
+      // A separate valid authoritative history can introduce a different payload with the same record identity.
+      git(f.storeRoot, "reset", "--hard", `${originalHead}~1`);
+      f.c.store.writeRecord({ record: assignment, expectedHead: git(f.storeRoot, "rev-parse", "HEAD") });
+    }
+    const s = f.collect(), task = s.tasks.find(x => x.featureId === "local:demo");
+    assert.equal(task.ready, false, `${failure} must block known delegated readiness`);
+    assert.match(task.reasons.join(" "), /revoked|stale|missing|differs/i);
+    assert.ok(s.attention.some(x => x.source === "local:demo" && x.targetId === task.id && /revoked|stale|missing|differs/i.test(x.message)));
+    assert.equal(s.tasks.find(x => x.featureId === "local:unrelated").ready, true);
+    assert.deepEqual(s.sessions, before.sessions);
+    assert.equal(s.sessions[0].phase, "running"); assert.equal(s.sessions[0].process, "exited");
+    assert.equal(s.sessions[0].attempt.worker.token, "saved-worker");
+    assert.equal(s.features.find(x => x.id === "local:demo").phase, "implementing");
+    assert.deepEqual(s.errors, []);
+    git(f.storeRoot, "reset", "--hard", originalHead);
+    const restored = f.collect().tasks.find(x => x.featureId === "local:demo");
+    assert.equal(restored.ready, true); assert.deepEqual(restored.reasons, []);
+  });
+}
+
+test("coordination rejects multiple validated worktree identities sharing the same Git common directory", t => {
+  const f = fixture(t), linked = join(f.dir, "alias-worktree");
+  git(f.root, "config", "extensions.worktreeConfig", "true");
+  git(f.root, "worktree", "add", "-b", "alias-worktree", linked);
+  git(linked, "config", "--worktree", "openspec-runner.repository", "alias");
+  writeFileSync(f.map, JSON.stringify({ api: relative(f.dir, f.root), alias: relative(f.dir, linked) }));
+  const s = f.collect();
+  assert.equal(s.errors.find(x => x.source === "coordination")?.stale, false);
+  assert.match(s.errors.find(x => x.source === "coordination").message, /ambiguous/i);
+  assert.equal(s.features.some(x => x.origin === "shared"), false);
 });
