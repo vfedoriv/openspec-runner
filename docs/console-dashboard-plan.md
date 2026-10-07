@@ -139,7 +139,7 @@ readActivityPage(options: {
 }): ActivityPage;
 ```
 
-Page default/max 200 entries, max 256 KiB read/page, 64 KiB record/partial buffer per stream. Opaque cursor records file identity/offset; replacement/truncation resets. Separate stream buffers and byte-safe UTF-8; oversize remainder dropped through next newline with diagnostic. Sidecar preferred; legacy structured/text best effort, raw without invented times. Strip ANSI/OSC/control sequences except readable tabs/newlines. Bound tool correlation to latest 1,000 IDs. No state writes or identity evidence synthesis.
+Page default/max 200 entries, max 256 KiB read/page, 64 KiB record/partial buffer per stream. Opaque cursor records file identity/offset; replacement/truncation resets. Separate stream buffers and byte-safe UTF-8; oversize remainder dropped through next newline with diagnostic. Sidecar preferred, including older rotated files <log>.activity.jsonl.1 and <log>.activity.jsonl.2 within the same total page budget; legacy structured/text best effort, raw without invented times. Strip ANSI/OSC/control sequences except readable tabs/newlines. Bound tool correlation to latest 1,000 IDs. No state writes or identity evidence synthesis.
 
 - [ ] RED: "activity normalizes codex messages commands changes turn outcomes": malformed/unknown become diagnostic/raw and turn remains activity only.
 - [ ] RED: "activity correlates complete claude tool blocks": complete assistant text/tool_use/tool_result IDs, omit token deltas; existing identity decoder independent.

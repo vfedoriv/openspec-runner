@@ -36,3 +36,17 @@ After the approved Git upgrade, an isolated `/tmp` Git repository successfully e
 Complete baseline output is saved in ignored worktree scratch storage: `node_modules/.cache/console-dashboard/baseline.log`.
 
 APT verified signed repository metadata and package hashes; the imported Git PPA signing-key fingerprint is `F911AB184317630C59970973E363C90F8F1B6217`. Installed package version: `1:2.55.0-0ppa1~ubuntu22.04.2`.
+
+## Linux filesystem benchmark
+
+Captured unchanged baseline source/config/tests in `/tmp/openspec-dashboard-verification-vKRYjJn5` before implementation began, excluding `.git`, `node_modules`, `dist`, and `.superpowers`. Installed the existing lock with `pnpm install --frozen-lockfile` (0.989 seconds), then ran `pnpm test`.
+
+The Linux mirror exited **0** with the same **208 tests, 206 passed, 0 failed, 2 skipped**. Test-runner duration was **72.060 seconds**, compared with **112.842 seconds** on the mounted Windows worktree: approximately **36% less time** in this single comparison. Full build-and-test wall time in the mirror was **74 seconds**. Timing varies with system load.
+
+The mirror's complete original baseline logs are `/tmp/openspec-dashboard-verification-vKRYjJn5/baseline.log` and `install.log`. A reusable controller helper lives in ignored worktree storage and refreshes all fixed source directories and root configuration before testing:
+
+```powershell
+wsl.exe -d Ubuntu-22.04 -- bash /mnt/c/Users/vital/.codex/worktrees/console-dashboard/openspec-runner/.superpowers/sdd/console-dashboard-plan/verify-linux-mirror.sh
+```
+
+Always invoke this helper for current worktree verification; do not run tests directly against a potentially stale mirror. It retains Linux `node_modules`, copies the current package manifest and lock, and runs `pnpm install --frozen-lockfile` every time, including after UI dependency changes. It validates the exact resolved disposable mirror path before replacing only six fixed source directories; it does not change the source worktree or its Git metadata. Subsequent full output is written to the mirror's `verification.log`, preserving the original baseline log. The helper's Bash syntax was checked; its next full run will verify the refreshed implementation. `/tmp` may be cleared after a reboot, in which case the mirror must be recreated before using the helper.
