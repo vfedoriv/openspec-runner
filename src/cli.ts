@@ -12,6 +12,7 @@ import { getHarness, harnessIds, hasHarness, planningRules } from "./harnesses/r
 import type { HarnessSettings } from "./harnesses/types.js";
 import { createInterface } from "node:readline/promises";
 import { parse } from "yaml";
+import { dashboardCommand } from "./dashboard-cli.js";
 import { linkedCommand, linkedHelp } from "./linked-cli.js";
 export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
@@ -29,6 +30,7 @@ feature <action> <change>      Manage an opt-in feature lifecycle
   archive [--dry-run]          Archive, verify, and complete the feature
   worker | begin | report --attempt ID   Supervised feature job protocol
   recover --attempt ID        Record a provably stopped/interrupted job; never redispatch
+dashboard [--change NAME] [--store PATH --map FILE] [--once] [--json]
 validate <change> [--json]      Validate task metadata and OpenSpec readiness
 status <change> [--json]        Inspect dependencies, attempts, and session locations
 launch <change> --tasks IDS     Launch exactly these comma-separated task numbers
@@ -108,6 +110,7 @@ export function init(
 export async function main(args = process.argv.slice(2)) {
   let jsonOutput = args.includes("--json");
   try {
+    if (args[0] === "dashboard") { await dashboardCommand(args.slice(1)); return; }
     if (["coordination", "component"].includes(args[0])) {
       const result = await linkedCommand(args);
       if (args.includes("--help") || args.includes("-h")) console.log(linkedHelp);
