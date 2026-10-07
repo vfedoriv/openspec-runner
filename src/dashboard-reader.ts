@@ -7,6 +7,7 @@ import { readComponentBinding } from "./component-state.js";
 import { loadPlan, tasksFrom } from "./plan.js";
 import { processStart } from "./processes.js";
 import type { DashboardOptions, DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
+import { collectCoordination } from "./dashboard-coordination.js";
 
 function session(featureId: string, attempt: TaskAttempt | FeatureJob): SessionSummary {
   let observation: SessionSummary["process"] = "unknown";
@@ -108,5 +109,5 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
       snapshot.errors.push({ source, message, stale: false }); attention("error", message, 1);
     }
   }
-  return snapshot;
+  return { ...snapshot, ...collectCoordination(options, snapshot) };
 }

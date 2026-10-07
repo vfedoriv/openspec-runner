@@ -4,6 +4,13 @@ import type { CollectorResponse, DashboardOptions, DashboardSnapshot } from "./d
 
 function retainSources(previous: DashboardSnapshot | undefined, next: DashboardSnapshot): DashboardSnapshot {
   if (!previous) return next;
+  const coordinationFailure = next.errors.find(error => error.source === "coordination");
+  if (coordinationFailure) {
+    for (const feature of previous.features.filter(feature => feature.origin === "shared")) {
+      if (!next.errors.some(error => error.source === feature.id))
+        next.errors.push({ ...coordinationFailure, source: feature.id });
+    }
+  }
   for (const error of next.errors) {
     const source = error.source;
     if (!previous.sources[source]) continue;
@@ -14,7 +21,9 @@ function retainSources(previous: DashboardSnapshot | undefined, next: DashboardS
     next.features = [...next.features.filter(f => !ids.has(f.id)), ...features];
     next.tasks = [...next.tasks.filter(t => !ids.has(t.featureId)), ...previous.tasks.filter(t => ids.has(t.featureId)).map(t => ({ ...t, ready: false, reasons: [...new Set([...t.reasons, "Source data is stale"])] }))];
     next.sessions = [...next.sessions.filter(s => !ids.has(s.featureId)), ...previous.sessions.filter(s => ids.has(s.featureId)).map(s => ({ ...s, process: "unknown" as const, terminal: "unknown" as const }))];
-    next.assignments = [...next.assignments.filter(a => !ids.has(a.featureId)), ...previous.assignments.filter(a => ids.has(a.featureId)).map(a => ({ ...a, stale: true }))];
+    const retainedAssignments = previous.assignments.filter(a => ids.has(a.featureId)).map(a => ({ ...a, stale: true }));
+    next.assignments = [...next.assignments.filter(a => !ids.has(a.featureId) && !retainedAssignments.some(retained =>
+      a.binding && retained.featureId === `shared:${a.binding.featureId}` && retained.repository === a.repository && retained.id === `shared:${a.binding.featureId}:assignment:${a.binding.assignmentId}`)), ...retainedAssignments];
     next.attention.push(...previous.attention.filter(a => a.source === source && !next.attention.some(n => n.id === a.id)));
   }
   return next;

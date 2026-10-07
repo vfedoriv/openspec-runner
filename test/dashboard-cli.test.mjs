@@ -123,3 +123,30 @@ test("collector keeps stale reasons bounded across repeated source failures", t 
   assert.deepEqual(f.snapshots.at(-1).tasks[0].reasons, ["Source data is stale"]);
   assert.equal(f.snapshots.at(-1).sources["local:a"].collectedAt, "2026-10-07T00:00:00Z");
 });
+
+for (const source of ["coordination", "shared:team"]) {
+  test(`collector retains shared data on ${source} failure while local observations stay fresh`, t => {
+    const f = fakeCollector(t), good = freshSnapshot();
+    good.features.push({ id: "shared:team", origin: "shared", completed: 0, total: 1, taskIds: [], sessionIds: [], coordination: { head: "b".repeat(40) } });
+    good.sources["shared:team"] = { collectedAt: "shared-first", stale: false };
+    good.assignments = [{ id: "shared:team:assignment:assigned", featureId: "shared:team", repository: "api", change: "a", componentId: "api", owner: "alice", importedRevision: "a".repeat(40), inspectedRevision: "b".repeat(40), binding: { featureId: "team", assignmentId: "assigned" }, status: { phase: "accepted", acceptedCommit: "c".repeat(40) }, stale: false }];
+    f.collector.refresh(); f.respond(good);
+    const next = freshSnapshot();
+    next.collectedAt = "new-local"; next.sources["local:a"].collectedAt = "new-local";
+    next.features[0].completed = 1;
+    next.assignments[0].binding = { featureId: "team", assignmentId: "assigned" };
+    next.errors = [{ source, message: "Store unavailable", stale: false }];
+    f.collector.refresh(); f.respond(next);
+    const retained = f.snapshots.at(-1);
+    assert.equal(retained.features.find(x => x.id === "shared:team")?.coordination.head, "b".repeat(40));
+    assert.equal(retained.sources["shared:team"].stale, true);
+    assert.equal(retained.sources["shared:team"].collectedAt, "shared-first");
+    assert.equal(retained.sources["local:a"].stale, false);
+    assert.equal(retained.features.find(x => x.id === "local:a").completed, 1);
+    assert.equal(retained.sessions[0].process, "running");
+    assert.equal(retained.assignments.length, 1, "fresh imported binding and retained shared assignment must not duplicate");
+    assert.equal(retained.assignments[0].stale, true);
+    assert.equal(retained.assignments[0].inspectedRevision, "b".repeat(40));
+    assert.equal(retained.assignments[0].status.phase, "accepted");
+  });
+}

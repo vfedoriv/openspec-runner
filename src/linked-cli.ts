@@ -1,9 +1,10 @@
 import { parseArgs } from "node:util";
 import { readFileSync, writeFileSync, realpathSync, existsSync, lstatSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { Coordination, assertRepositoryIdentity, type ApprovalInputs, type MutationIdentity, type ReferenceInput } from "./coordination.js";
+import { Coordination, type ApprovalInputs, type MutationIdentity, type ReferenceInput } from "./coordination.js";
+import { readMachineMap } from "./repository-map.js";
 import { Component, type ComponentResources } from "./component.js";
 import { CoordinationStore, decodeManifest, decodeRecord, type ArchiveScope, type FeatureManifest } from "./coordination-state.js";
 import { resolveContext } from "./openspec-context.js";
@@ -93,17 +94,6 @@ function identity(v: Values): MutationIdentity {
   return { id: value(v, "id"), operationId: value(v, "operation"), expectedHead: head(v), ...(v["created-at"] ? { createdAt: value(v, "created-at") } : {}) };
 }
 function file<T>(v: Values): T { return json<T>(resolve(value(v, "file"))); }
-function machineMap(path: string): Record<string, string> {
-  const input = json<unknown>(resolve(path));
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("--map must contain a repository identity to checkout path object");
-  const result: Record<string, string> = {};
-  for (const [id, root] of Object.entries(input)) {
-    if (!id.trim() || typeof root !== "string" || !root.trim()) throw new Error("--map entries require repository identities and checkout paths");
-    result[id] = repository(resolve(dirname(resolve(path)), root)).root;
-    assertRepositoryIdentity({ root: result[id], repository: id });
-  }
-  return result;
-}
 function inputs(c: Coordination, manifest: FeatureManifest, v: Values): ApprovalInputs {
   const identities = Object.entries(c.repositories).filter(([, root]) => realpathSync(root) === realpathSync(c.store.root)).map(([id]) => id);
   if (identities.length !== 1) throw new Error("--map must identify the selected Store checkout with exactly one repository identity");
@@ -179,7 +169,7 @@ export async function linkedCommand(args: string[]): Promise<unknown> {
     }
     return { ...result, ...envelope, implementationRoot: component.repo.root, acceptance, delivery, archive, blocker: result.blocker ?? null, nextAction: result.nextAction ?? (action === "export" && !dryRun ? "Publish result branch and receipt through explicit Git handoffs" : "Import the previewed assignment or resume delegated execution") };
   }
-  const c = new Coordination({ root: storeRoot, featureId, repositories: machineMap(value(v, "map")) });
+  const c = new Coordination({ root: storeRoot, featureId, repositories: readMachineMap(value(v, "map")) });
   const ensureRoots = (manifest: FeatureManifest) => {
     for (const definition of Object.values(manifest.components)) if (!c.repositories[definition.repository]) throw new Error(`Explicit repository map missing for ${definition.repository}`);
   };
