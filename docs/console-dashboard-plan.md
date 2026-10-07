@@ -80,37 +80,39 @@ type DashboardSnapshot = {
 };
 ```
 
-Import existing types from plan.ts, runner.ts, feature-state.ts, component-state.ts and coordination-state.ts, without redefining persisted contracts. IDs: local:<change>, <featureId>:task:<taskId>, <featureId>:attempt:<attemptId>, shared:<storeIdentity>:<featureId>, <sharedFeatureId>:assignment:<assignmentId>. Source keys identify individual changes/shared features.
+Import existing types from plan.ts, runner.ts, feature-state.ts, component-state.ts and coordination-state.ts, without redefining persisted contracts. IDs: local:<change>, <featureId>:task:<taskId>, <featureId>:attempt:<attemptId>, shared:<featureId>, <sharedFeatureId>:assignment:<assignmentId>. Each collector has exactly one explicit Store with fixed inputs; IDs are unique and stable within its snapshot, without a separate Store identity probe. Source keys identify individual changes/shared features. Offline imported assignments use local:<change>:assignment:<assignmentId> until reconciled with explicit shared authority.
 
 **Consumes:** repository(cwd), decodeState(raw), readFeature(stateDir,change), readComponentBinding({stateDir,change}), Runner.status(change), existing report/settings/process evidence. Audit helpers for side effects; never use verification executors/recovery. **Produces:** collectDashboard(options: DashboardOptions): DashboardSnapshot; dashboardCommand(args: string[]): Promise<void>; formatDashboard(snapshot: DashboardSnapshot): string; startDashboardCollector(options: DashboardOptions, receive: (snapshot: DashboardSnapshot) => void, fail: (message: string) => void): { refresh(): void; close(): Promise<void> }.
 
 Collector IPC request {version:1,id:string,options:DashboardOptions}, response {version:1,id:string,snapshot?:DashboardSnapshot,error?:string}. One child/in-flight request, coalesced refresh, two-second polling, ten-second timeout/restart, max 8 MiB response, generation IDs reject late replies. Parent retains successful per-source data when that source fails and marks it stale. Child close cancels timers/process promptly. UI will dynamically import runDashboardUi(options: DashboardOptions): Promise<void>; introduce that import only in Task 6 so this task builds independently.
 
-- [ ] RED: "reader discovers prelaunch and retained features": union openspec/changes, stateDir/*.json excluding lock/auxiliary files, features/*.json and components/*.json; managed/unmanaged, missing archived artifacts and multiple attempts retained.
-- [ ] RED: "reader isolates malformed sources and state versions": valid siblings survive, v1/v2 decode without migration; before/after files/runtime bytes/refs unchanged.
-- [ ] RED: "reader explains existing gates": dependencies, drift, transaction, missing report, pending approvals, blocking versus advisory findings, repair limits and archive/integration evidence; counts without percentages.
-- [ ] RED: "reader separates phase report process and terminal": PID reuse/unsupported observation yields unknown, log silence never means exited, harness turn never means completed. Linked worktree root/common/state identity correct.
-- [ ] RED: "dashboard emits once json and plain without ui": --once, --json, --change, paired --store/--map syntax, non-TTY fallback, unknown flags fail; existing CLI behavior unaffected.
-- [ ] RED: "collector slow failure refresh and close stay responsive": fake blocked child/clock, one in flight, stale retained data, late response ignored, exit cancels.
-- [ ] GREEN: Implement reader and asynchronous client. Preserve detailed reused reports/settings/attempts; source-local errors. Separate dashboard argument parsing from existing commands/platform guards; preserve platform policy.
-- [ ] CHECK: targeted dashboard-reader/dashboard-cli, pnpm test, CLI --once/--json; fresh review and commit gate. Phase gate: local snapshot contract and observational audit accepted.
+- [x] RED: "reader discovers prelaunch and retained features": union openspec/changes, stateDir/*.json excluding lock/auxiliary files, features/*.json and components/*.json; managed/unmanaged, missing archived artifacts and multiple attempts retained.
+- [x] RED: "reader isolates malformed sources and state versions": valid siblings survive, v1/v2 decode without migration; before/after files/runtime bytes/refs unchanged.
+- [x] RED: "reader explains existing gates": dependencies, drift, transaction, missing report, pending approvals, blocking versus advisory findings, repair limits and archive/integration evidence; counts without percentages.
+- [x] RED: "reader separates phase report process and terminal": PID reuse/unsupported observation yields unknown, log silence never means exited, harness turn never means completed. Linked worktree root/common/state identity correct.
+- [x] RED: "dashboard emits once json and plain without ui": --once, --json, --change, paired --store/--map syntax, non-TTY fallback, unknown flags fail; existing CLI behavior unaffected.
+- [x] RED: "collector slow failure refresh and close stay responsive": fake blocked child/clock, one in flight, stale retained data, late response ignored, exit cancels.
+- [x] GREEN: Implement reader and asynchronous client. Preserve detailed reused reports/settings/attempts; source-local errors. Separate dashboard argument parsing from existing commands/platform guards; preserve platform policy.
+- [x] CHECK: targeted dashboard-reader/dashboard-cli, pnpm test, CLI --once/--json; fresh review and commit gate. Phase gate: local snapshot contract and observational audit accepted.
 
 ### Task 2: Coordination discovery and associations
 
-**Files:** Create src/dashboard-coordination.ts, test/dashboard-coordination.test.mjs. Modify src/dashboard-reader.ts. If needed, extract unchanged machineMap from src/linked-cli.ts into src/repository-map.ts for shared validation; no incidental refactoring.
+**Files:** Create src/dashboard-coordination.ts, test/dashboard-coordination.test.mjs. Modify src/dashboard-reader.ts. Task 2 also owns narrowly necessary shared-source retention changes in src/dashboard-client.ts and test/dashboard-cli.test.mjs. If needed, extract unchanged machineMap from src/linked-cli.ts into src/repository-map.ts for shared validation; no incidental refactoring.
 
-**Consumes:** DashboardOptions/DashboardSnapshot/FeatureSummary/AssignmentSummary from Task 1 and collectDashboard(options: DashboardOptions): DashboardSnapshot. **Produces:** collectCoordination(options: DashboardOptions, local: DashboardSnapshot): Pick<DashboardSnapshot,"features"|"assignments"|"attention"|"errors"|"sources"> (arrays include local items; reader replaces these fields). readMachineMap(path: string): Record<string,string> preserves current map validation: relative to map directory, repository normalization, assertRepositoryIdentity.
+**Consumes:** DashboardOptions/DashboardSnapshot/FeatureSummary/AssignmentSummary from Task 1 and collectDashboard(options: DashboardOptions): DashboardSnapshot. **Produces:** collectCoordination(options: DashboardOptions, local: DashboardSnapshot): Pick<DashboardSnapshot,"features"|"tasks"|"assignments"|"attention"|"errors"|"sources"> (arrays include local items; reader replaces these fields without mutating the input snapshot). Known imported-authority blockers produce copied local task rows with ready=false, specific reasons and local attention targets; historical assignments never inherit another assignment's milestones. readMachineMap(path: string): Record<string,string> preserves current map validation: relative to map directory, repository normalization, assertRepositoryIdentity.
 
 Discovery contract: enumerate committed runner/features/*/manifest.yaml candidates from locally available HEAD and refs/heads history plus binding feature IDs; decode candidate coordinationBranch, resolve refs/heads/<branch>, reread manifest there and verify ID/branch consistency. Then coordinationRevision({store,revision:branchHead}), store.status({revision:branchHead}) and authoritativeApproval; first-parent authority remains existing domain logic. Conflicting declarations/missing branches/invalid history are per-feature errors. Never fetch or silently use imported revision/checkout HEAD as current authority.
 
 Association contract: current repository identity is configured openspec-runner.repository, else exact origin. Map entries must pass existing identity validation. Match current worktree with mapped checkout using normalized common Git directory; ambiguous identity/map associations are errors. Discover only shared features whose components associate with current repository. --change filters local features/tasks/sessions and imported assignments with that local change; shared feature appears only when associated assignment/component matches. Never monitor peers' workers.
 
-- [ ] RED: "coordination discovers authoritative features from handoff checkout": manifest solely on declared local branch discovered, uncommitted manifest ignored, conflicting/missing branches isolated.
-- [ ] RED: "coordination maps linked worktree and filters assignments": relative map paths/main-worktree alias, ambiguous association error and exact --change linkage.
-- [ ] RED: "coordination distinguishes pinned from inspected revision": without Store imported assignment/pinned history with unknown revocation; with Store stale/revoked identified; accepted/merged/delivered/completed separate.
-- [ ] RED: "coordination invalid map and store do not hide local data": paired flags required, unavailable Store and invalid manifest errors visible without persisted mutation.
-- [ ] GREEN: Reuse CoordinationStore.status/authoritativeApproval, coordinationRevision and Component.status semantics; committed data only.
-- [ ] CHECK: targeted dashboard-coordination and coordination-cli, pnpm test, no-write audit; fresh review/commit. Phase gate: authority/association contracts accepted.
+Retention contract: use source "coordination" for a whole Store/map failure. The client retains prior shared-feature sources as stale on that error while preserving newly collected local data as fresh. Per-feature failures retain their exact shared source IDs. Reconcile imported bindings against shared assignments by shared feature ID, repository and assignment ID to avoid duplicate rows; unknown Store authority must remain explicit.
+
+- [x] RED: "coordination discovers authoritative features from handoff checkout": manifest solely on declared local branch discovered, uncommitted manifest ignored, conflicting/missing branches isolated.
+- [x] RED: "coordination maps linked worktree and filters assignments": relative map paths/main-worktree alias, ambiguous association error and exact --change linkage.
+- [x] RED: "coordination distinguishes pinned from inspected revision": without Store imported assignment/pinned history with unknown revocation; with Store stale/revoked identified; accepted/merged/delivered/completed separate.
+- [x] RED: "coordination invalid map and store do not hide local data": paired flags required, unavailable Store and invalid manifest errors visible without persisted mutation.
+- [x] GREEN: Reuse CoordinationStore.status/authoritativeApproval, coordinationRevision and Component.status semantics; committed data only.
+- [x] CHECK: targeted dashboard-coordination and coordination-cli, pnpm test, no-write audit; fresh review/commit. Phase gate: authority/association contracts accepted.
 
 ## Phase 2 — Activity
 
@@ -133,10 +135,11 @@ interface ActivityDecoder {
   end(): ActivityEntry[];
 }
 createActivityDecoder(identity: ActivityIdentity): ActivityDecoder;
-readActivityPage(options: {
+type ActivityPageOptions = {
   log: string; sidecar?: string; identity: ActivityIdentity; cursor?: string;
   direction: "older" | "newer"; limit?: number;
-}): ActivityPage;
+};
+readActivityPage(options: ActivityPageOptions): ActivityPage;
 ```
 
 Page default/max 200 entries, max 256 KiB read/page, 64 KiB record/partial buffer per stream. Opaque cursor records file identity/offset; replacement/truncation resets. Separate stream buffers and byte-safe UTF-8; oversize remainder dropped through next newline with diagnostic. Sidecar preferred, including older rotated files <log>.activity.jsonl.1 and <log>.activity.jsonl.2 within the same total page budget; legacy structured/text best effort, raw without invented times. Strip ANSI/OSC/control sequences except readable tabs/newlines. Bound tool correlation to latest 1,000 IDs. No state writes or identity evidence synthesis.
@@ -194,11 +197,13 @@ Explicit preview allowlist: launch <change> --tasks exact IDs; retry <change> <t
 
 ### Task 6: Lazy Ink views and readable activity
 
-**Files:** Create src/dashboard-ui.tsx, src/dashboard-view.ts, test/dashboard-ui.test.mjs. Modify src/dashboard-cli.ts, package.json, pnpm-lock.yaml, tsconfig.json for authorized Ink 8.0.0, React 19.3.0 and dev dependency @types/react 19.3.0, plus TSX. Use Ink rendering with controlled streams and the already installed Linux script utility for terminal checks; do not add a test renderer or native PTY package without further user authorization.
+**Files:** Create src/dashboard-ui.tsx, src/dashboard-view.ts, test/dashboard-ui.test.mjs. Modify src/dashboard-cli.ts, src/dashboard-client.ts, src/dashboard-collector.ts and src/dashboard-types.ts for UI wiring and activity requests through the existing collector. Modify package.json, pnpm-lock.yaml, tsconfig.json for authorized Ink 8.0.0, React 19.3.0 and dev dependency @types/react 19.3.0, plus TSX. Use Ink rendering with controlled streams and the already installed Linux script utility for terminal checks; do not add a test renderer or native PTY package without further user authorization.
 
 **Consumes:** startDashboardCollector(options:DashboardOptions,receive:(snapshot:DashboardSnapshot)=>void,fail:(message:string)=>void):{refresh():void;close():Promise<void>}; actionsFor(snapshot:DashboardSnapshot,targetId:string):DashboardAction[]; runDashboardAction({snapshot,action,input?,signal}):Promise<{text:string;command?:string[]}> with Task 5 DashboardAction/PreviewInput. ActivityIdentity={attemptId:string;harness:string}; readActivityPage({log:string,sidecar?:string,identity:ActivityIdentity,cursor?:string,direction:"older"|"newer",limit?:number}):ActivityPage, with ActivityEntry/ActivityPage from Task 3, including reset/errors and 200-entry/256KiB caps.
 
 **Produces:** runDashboardUi(options:DashboardOptions):Promise<void>; selectDashboardRows(snapshot:DashboardSnapshot,view:"Overview"|"Attention"|"Features"|"Sessions"|"Assignments",filters:{search:string;status?:string;harness?:string;owner?:string;includeCompleted:boolean;includeOlderAttempts:boolean;sort:"name"|"attention"}):Array<{id:string;label:string;targetId:string}>.
+
+Activity offload: extend the existing collector, rather than invoking synchronous readActivityPage on the UI thread or creating another collector. Add optional request kind "snapshot" | "activity" (absence retains snapshot compatibility), activity?:ActivityPageOptions on requests and activity?:ActivityPage on responses. Extend the client handle with readActivity(options:ActivityPageOptions,signal?:AbortSignal):Promise<ActivityPage>. Use the same single in-flight IPC request and bounded queue of at most eight activity requests, coalesced snapshot refreshes, existing ten-second timeout/response bound and generation guards. Reject cancelled/closed requests, discard late responses, and surface activity-page errors without marking unrelated snapshot sources stale. Closing cancels all outstanding work. UI selection generations prevent old-session pages replacing the current feed.
 
 - [ ] RED: "views default active overview and preserve selection": all five views, current-view search/status/harness/owner filters, sort, completed/older toggles; stable IDs/fallback; counts without percentages.
 - [ ] RED: "keys focus details help actions narrow terminal": arrows, Tab, Enter, Escape, /, r, ?, q; readable 40x12 fallback; all spec detail fields present.
