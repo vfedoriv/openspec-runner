@@ -3,7 +3,7 @@ import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
 import { runDashboardAction } from "./dashboard-action-runner.js";
-import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, type DashboardFilters } from "./dashboard-view.js";
+import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, type DashboardFilters } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 type Collector = ReturnType<typeof startDashboardCollector>;
@@ -19,6 +19,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const [menu, setMenu] = useState<DashboardAction[]>(), [actionIndex, setActionIndex] = useState(0), [output, setOutput] = useState(""), [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ action: DashboardAction; input: PreviewInput }>();
   const actionController = useRef<AbortController | undefined>(undefined), activityController = useRef<AbortController | undefined>(undefined), generation = useRef(0);
+  const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]);
+  const changeFollowing = (value: boolean) => { followingRef.current = value; setFollowing(value); };
   const cursor = useRef<{ older?: string; newer?: string }>({}), loading = useRef(false);
   const view = dashboardViews[tab], list = snapshot ? selectDashboardRows(snapshot, view, filters) : [];
   const chosen = preserveSelection(list, selected), target = list.find(r => r.id === chosen)?.targetId;
@@ -32,19 +34,27 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       const page = await collector.readActivity({ log: session.log, sidecar: session.activityPath, identity: { attemptId: session.attempt.id, harness: session.attempt.agent ?? "unknown" }, direction, mode, cursor: initial ? undefined : cursor.current[direction] }, controller.signal);
       if (own !== generation.current || lifetime.aborted) return;
       if (page.reset) cursor.current = {};
-      cursor.current[direction] = page.cursor;
+      if (page.cursor !== undefined) cursor.current[direction] = page.cursor;
       if (initial) cursor.current.newer = page.cursor;
-      setEntries(previous => mergeActivity(previous, page, direction)); setActivityError(page.errors.join("; "));
-      if (initial || direction === "older" || page.reset || following) setActivityOffset(0);
+      const previous = entriesRef.current;
+      const merged = mergeActivity(previous, page, direction);
+      entriesRef.current = merged; setEntries(merged); setActivityError(page.errors.join("; "));
+      if (initial || page.reset || followingRef.current || direction === "older" && page.entries.length > 0) setActivityOffset(0);
+      else if (direction === "newer") {
+        const byId = new Map(previous.map(entry => [entry.id, entry]));
+        const addedLines = page.entries.reduce((total, entry) => total + activityLineCount([entry], expandedRef.current) - activityLineCount(byId.has(entry.id) ? [byId.get(entry.id)!] : [], expandedRef.current), 0);
+        setActivityOffset(current => Math.max(0, Math.min(activityLineCount(merged, expandedRef.current) - 1, current + addedLines)));
+      }
     } catch (error) { if (own === generation.current && !controller.signal.aborted) setActivityError(safeText(error instanceof Error ? error.message : error)); }
     finally { if (own === generation.current) loading.current = false; }
   };
+  const loadRef = useRef(load); loadRef.current = load;
   useEffect(() => {
-    generation.current++; activityController.current?.abort(); loading.current = false; cursor.current = {}; setEntries([]); setActivityError(""); setFollowing(true); setActivityOffset(0);
+    generation.current++; activityController.current?.abort(); loading.current = false; cursor.current = {}; entriesRef.current = []; setEntries([]); setActivityError(""); changeFollowing(true); setActivityOffset(0);
     void load("older", true);
     return () => { generation.current++; activityController.current?.abort(); };
-  }, [session?.id, mode]);
-  useEffect(() => { if (!following || !session) return; const timer = setInterval(() => { void load("newer"); }, 2000); return () => clearInterval(timer); }, [following, session, mode]);
+  }, [session?.id, session?.log, session?.activityPath, session?.attempt.id, session?.attempt.agent, mode]);
+  useEffect(() => { if (!following || !session) return; const timer = setInterval(() => { void loadRef.current("newer"); }, 2000); return () => clearInterval(timer); }, [following, session?.id, session?.log, session?.activityPath, session?.attempt.id, session?.attempt.agent, mode]);
   useEffect(() => { const stop = () => { actionController.current?.abort(); activityController.current?.abort(); }; lifetime.addEventListener("abort", stop); return () => { stop(); lifetime.removeEventListener("abort", stop); }; }, [lifetime]);
   const execute = async (action: DashboardAction, input?: PreviewInput) => {
     if (!snapshot || busy) return;
@@ -86,11 +96,16 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (input === "c") { setFilters(f => ({ ...f, includeCompleted: !f.includeCompleted })); return; }
     if (input === "v") { setFilters(f => ({ ...f, includeOlderAttempts: !f.includeOlderAttempts })); return; }
     if (input === "z") { setFilters(f => ({ ...f, sort: f.sort === "name" ? "attention" : "name" })); return; }
-    if (input === "f") { setFollowing(true); setActivityOffset(0); void load("newer"); return; }
-    if (input === "p") { setFollowing(f => !f); return; }
+    if (input === "f") { changeFollowing(true); setActivityOffset(0); void load("newer"); return; }
+    if (input === "p") { changeFollowing(!followingRef.current); return; }
     if (input === "w") { setMode(m => m === "raw" ? "normalized" : "raw"); return; }
-    if (input === "b") { setFollowing(false); void load("older"); return; }
-    if (input === "x") { setExpanded(e => !e); return; }
+    if (input === "b") { changeFollowing(false); void load("older"); return; }
+    if (input === "x") {
+      const next = !expanded; expandedRef.current = next; changeFollowing(false); setExpanded(next);
+      const index = Math.max(0, entries.length - 1 - activityOffset);
+      setActivityOffset(next ? activityLineCount(entries.slice(index + 1), true) + Math.max(0, activityLineCount(entries[index] ? [entries[index]] : [], true) - Math.max(3, height - 7)) : 0);
+      return;
+    }
     if (input === "a" && snapshot && target) { setMenu(actionsFor(snapshot, target)); setActionIndex(0); return; }
     if (menu) {
       if (key.upArrow || key.downArrow) setActionIndex(i => Math.max(0, Math.min(menu.length - 1, i + (key.upArrow ? -1 : 1))));
@@ -103,7 +118,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (key.upArrow || key.downArrow) {
       const delta = key.upArrow ? -1 : 1;
       if (pane === "list") { const i = Math.max(0, list.findIndex(r => r.id === chosen)); setSelected(list[Math.max(0, Math.min(list.length - 1, i + delta))]?.id); }
-      else if (pane === "activity") { setFollowing(false); setActivityOffset(o => Math.max(0, Math.min(entries.length - 1, o - delta))); }
+      else if (pane === "activity") { changeFollowing(false); setActivityOffset(o => Math.max(0, Math.min(activityLineCount(entries, expanded) - 1, o - delta))); }
       else setOffset(o => Math.max(0, o + delta));
     }
   });
@@ -113,8 +128,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   else if (menu) lines = menu.slice(Math.max(0, actionIndex - capacity + 1), actionIndex + capacity).map((a, i) => `${a.id === menu[actionIndex]?.id ? "›" : " "} ${a.label}${a.available ? "" : ` — unavailable: ${a.reason}`}`);
   else if (pane === "activity") {
     const visible = entries.filter(e => !activitySearch || e.text.toLowerCase().includes(activitySearch.toLowerCase()));
-    const end = Math.max(0, visible.length - activityOffset);
-    lines = visible.slice(Math.max(0, end - capacity), end).flatMap(e => { const label = `${e.observedAt ?? "time unknown"} ${e.kind} [${e.identity.harness}/${e.identity.attemptId}] ${e.text}`; return expanded ? safeText(label).split("\n").slice(0, capacity) : [safeText(label).replace(/\n/g, " ↵ ")]; }).slice(-capacity);
+    lines = activityViewport(visible, expanded, activityOffset, capacity);
     if (!lines.length) lines = [session?.log ? "No activity available" : "No recorded log for this session"];
     if (activityError) lines.unshift(`Activity error: ${activityError}`);
   } else if (pane === "details") lines = (output ? safeText(output).split("\n") : snapshot && target ? detailLines(snapshot, target) : ["No selected evidence"]).slice(offset, offset + capacity);

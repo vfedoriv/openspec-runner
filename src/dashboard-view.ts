@@ -28,6 +28,7 @@ export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, f
 }
 export function preserveSelection(rows: Array<{ id: string }>, selected?: string): string | undefined { return rows.some(r => r.id === selected) ? selected : rows[0]?.id; }
 export function mergeActivity(previous: ActivityEntry[], page: ActivityPage, direction: "older" | "newer"): ActivityEntry[] {
+  if (!page.reset && !page.entries.length) return previous;
   if (direction === "older" || page.reset) return page.entries.slice(-1000);
   return [...new Map([...previous, ...page.entries].map(e => [e.id, e])).values()].slice(-1000);
 }
@@ -47,4 +48,27 @@ export function detailLines(s: DashboardSnapshot, targetId: string): string[] {
   if (target && "featureId" in target) walk(s.features.find(f => f.id === target.featureId)?.state, "Feature settings and evidence");
   for (const e of s.errors) lines.push(`Source ${e.source}${e.stale ? " [STALE]" : " [ERROR]"}: ${safeText(e.message)}`);
   return lines;
+}
+
+export function activityLineCount(entries: ActivityEntry[], expanded: boolean): number {
+  return entries.reduce((total, entry) => {
+    if (!expanded) return total + 1;
+    let count = 1;
+    for (let i = 0; i < entry.text.length; i++) if (entry.text[i] === "\n") count++;
+    return total + count;
+  }, 0);
+}
+/** Traverse the bounded retained feed, allocating only a single entry and the visible viewport. */
+export function activityViewport(entries: ActivityEntry[], expanded: boolean, offset: number, limit: number): string[] {
+  const visible: string[] = [];
+  let skip = offset;
+  for (let index = entries.length - 1; index >= 0 && visible.length < limit; index--) {
+    const entry = entries[index];
+    const label = safeText(`${entry.observedAt ?? "time unknown"} ${entry.kind} [${entry.identity.harness}/${entry.identity.attemptId}] ${entry.text}`);
+    const lines = expanded ? label.split("\n") : [label.replace(/\n/g, " ↵ ")];
+    if (skip >= lines.length) { skip -= lines.length; continue; }
+    for (let line = lines.length - 1 - skip; line >= 0 && visible.length < limit; line--) visible.push(lines[line]);
+    skip = 0;
+  }
+  return visible.reverse();
 }

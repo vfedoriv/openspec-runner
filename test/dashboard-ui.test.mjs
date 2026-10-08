@@ -110,3 +110,66 @@ test("collector metadata records missing worktree and valid capacity and harness
   assert.equal(result.sessions[0].worktreeAvailable, false);
   assert.equal(result.repository.maxParallel, 4); assert.equal(result.tasks[0].harness, "codex");
 });
+async function activityUiFixture(t, { height = 12 } = {}) {
+  const { PassThrough, Writable } = await import("node:stream");
+  const React = await import("react"); const { render } = await import("ink"); const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+  let output = ""; const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } }); stdout.isTTY = true; stdout.columns = 100; stdout.rows = height;
+  const lifetime = new AbortController(), requests = [];
+  const collector = { refresh() {}, close: async () => {}, readActivity(options, signal) { return new Promise(resolve => requests.push({ options, signal, resolve })); } };
+  const session = { id: "stream", featureId: "local:a", taskId: "t", role: "implementation", phase: "running", process: "unknown", terminal: "unknown", log: "/log", attempt: { id: "stream", agent: "codex", phase: "running", path: "/worktree", terminal: {}, base: "a".repeat(40) } };
+  const fixture = { ...snapshot, sessions: [session] };
+  const props = { snapshot: fixture, collector, lifetime: lifetime.signal, quit() {} };
+  const instance = render(React.createElement(DashboardUi, props), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  t.after(() => { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); });
+  const flush = async () => { await new Promise(resolve => setTimeout(resolve, 40)); await instance.waitUntilRenderFlush(); };
+  const key = async input => { output = ""; stdin.write(input); await flush(); };
+  await flush(); await key("\u001b[C"); await key("\u001b[C"); await key("\u001b[C");
+  await key("\r"); await key("\r");
+  return { requests, key, flush, get output() { return output; }, clone() { instance.rerender(React.createElement(DashboardUi, { ...props, snapshot: structuredClone(fixture) })); }, page(entries, cursor) { return { entries: entries.map((text, i) => ({ version: 1, id: text, identity: { attemptId: "stream", harness: "codex" }, kind: "message", stream: "stdout", text })), ...(cursor ? { cursor } : {}), reset: false, errors: [] }; } };
+}
+test("empty activity pages preserve newer and older continuation boundaries", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page(["saved tail"], "tail-boundary")); await ui.flush();
+  await ui.key("f"); ui.requests.at(-1).resolve(ui.page([])); await ui.flush();
+  await ui.key("f"); assert.equal(ui.requests.at(-1).options.cursor, "tail-boundary");
+  ui.requests.at(-1).resolve(ui.page([])); await ui.flush();
+  await ui.key("b"); ui.requests.at(-1).resolve(ui.page(["oldest retained entry"], "history-start")); await ui.flush();
+  await ui.key("b"); ui.requests.at(-1).resolve(ui.page([])); await ui.flush();
+  await ui.key("b"); assert.equal(ui.requests.at(-1).options.cursor, "history-start");
+});
+test("fresh snapshot session clones cannot starve the activity polling clock", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page(["start"], "tail")); await ui.flush();
+  for (let i = 0; i < 7; i++) {
+    await new Promise(resolve => setTimeout(resolve, 350)); ui.clone(); await ui.flush();
+    if (ui.requests.length > 1) break;
+  }
+  assert.ok(ui.requests.length > 1, "poll must fire despite snapshots arriving more frequently than two seconds");
+  assert.equal(ui.requests[1].options.direction, "newer"); assert.equal(ui.requests[1].options.cursor, "tail");
+});
+test("delayed follow page preserves the paused viewport anchor after scrolling", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page(Array.from({ length: 12 }, (_, i) => `row-${i}`), "tail")); await ui.flush();
+  await ui.key("f"); const pending = ui.requests.at(-1);
+  await ui.key("\u001b[A"); await ui.key("\u001b[A");
+  pending.resolve(ui.page(["newest-row"], "appended")); await ui.flush();
+  assert.doesNotMatch(ui.output, /newest-row/, "late append must not move a paused reader to tail");
+  await ui.key("\u001b[B"); assert.match(ui.output, /row-10/); assert.doesNotMatch(ui.output, /newest-row/);
+});
+test("expanded activity can scroll to lines beyond one terminal viewport", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page([Array.from({ length: 14 }, (_, i) => `expanded-line-${i}`).join("\n")], "tail")); await ui.flush();
+  await ui.key("x");
+  let inspected = "";
+  for (let i = 0; i < 10; i++) { await ui.key("\u001b[B"); inspected += ui.output; }
+  assert.match(inspected, /expanded-line-13/);
+});
+test("empty older pages retain their boundary and currently inspected history", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page(["tail"], "tail-boundary")); await ui.flush();
+  await ui.key("b"); ui.requests.at(-1).resolve(ui.page(["history at start"], "history-start")); await ui.flush();
+  await ui.key("b"); ui.requests.at(-1).resolve(ui.page([])); await ui.flush();
+  assert.doesNotMatch(ui.output, /No activity available/);
+  await ui.key("b"); assert.equal(ui.requests.at(-1).options.cursor, "history-start");
+});
