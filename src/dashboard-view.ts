@@ -72,3 +72,28 @@ export function activityViewport(entries: ActivityEntry[], expanded: boolean, of
   }
   return visible.reverse();
 }
+
+export function filterActivity(entries: ActivityEntry[], search: string): ActivityEntry[] {
+  const query = search.toLowerCase();
+  return query ? entries.filter(entry => entry.text.toLowerCase().includes(query)) : entries;
+}
+/** Preserve the last inspected entry/line in the current filtered coordinate space. */
+export function preserveActivityOffset(previous: ActivityEntry[], next: ActivityEntry[], offset: number, expanded: boolean): number {
+  let remaining = Math.max(0, offset);
+  let anchor: { id: string; line: number } | undefined;
+  for (let index = previous.length - 1; index >= 0; index--) {
+    const count = activityLineCount([previous[index]], expanded);
+    if (remaining < count) { anchor = { id: previous[index].id, line: count - 1 - remaining }; break; }
+    remaining -= count;
+  }
+  if (anchor) {
+    let after = 0;
+    for (let index = next.length - 1; index >= 0; index--) {
+      const count = activityLineCount([next[index]], expanded);
+      if (next[index].id === anchor.id) return after + Math.max(0, count - 1 - anchor.line);
+      after += count;
+    }
+  }
+  // Retention or a changed search can remove the anchor; remain within available history.
+  return Math.max(0, Math.min(offset, activityLineCount(next, expanded) - 1));
+}

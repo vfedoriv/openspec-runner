@@ -3,7 +3,7 @@ import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
 import { runDashboardAction } from "./dashboard-action-runner.js";
-import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, type DashboardFilters } from "./dashboard-view.js";
+import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 type Collector = ReturnType<typeof startDashboardCollector>;
@@ -19,12 +19,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const [menu, setMenu] = useState<DashboardAction[]>(), [actionIndex, setActionIndex] = useState(0), [output, setOutput] = useState(""), [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ action: DashboardAction; input: PreviewInput }>();
   const actionController = useRef<AbortController | undefined>(undefined), activityController = useRef<AbortController | undefined>(undefined), generation = useRef(0);
-  const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]);
+  const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]), activitySearchRef = useRef("");
   const changeFollowing = (value: boolean) => { followingRef.current = value; setFollowing(value); };
   const cursor = useRef<{ older?: string; newer?: string }>({}), loading = useRef(false);
   const view = dashboardViews[tab], list = snapshot ? selectDashboardRows(snapshot, view, filters) : [];
   const chosen = preserveSelection(list, selected), target = list.find(r => r.id === chosen)?.targetId;
   const session = snapshot?.sessions.find(s => s.id === target);
+  const visibleEntries = filterActivity(entries, activitySearch);
   useEffect(() => { setSelected(chosen); }, [chosen]);
   useEffect(() => { setOffset(0); setOutput(""); setMenu(undefined); actionController.current?.abort(); actionController.current = undefined; setBusy(false); }, [target, tab]);
   const load = async (direction: "older" | "newer", initial = false) => {
@@ -41,9 +42,9 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       entriesRef.current = merged; setEntries(merged); setActivityError(page.errors.join("; "));
       if (initial || page.reset || followingRef.current || direction === "older" && page.entries.length > 0) setActivityOffset(0);
       else if (direction === "newer") {
-        const byId = new Map(previous.map(entry => [entry.id, entry]));
-        const addedLines = page.entries.reduce((total, entry) => total + activityLineCount([entry], expandedRef.current) - activityLineCount(byId.has(entry.id) ? [byId.get(entry.id)!] : [], expandedRef.current), 0);
-        setActivityOffset(current => Math.max(0, Math.min(activityLineCount(merged, expandedRef.current) - 1, current + addedLines)));
+        const before = filterActivity(previous, activitySearchRef.current);
+        const after = filterActivity(merged, activitySearchRef.current);
+        setActivityOffset(current => preserveActivityOffset(before, after, current, expandedRef.current));
       }
     } catch (error) { if (own === generation.current && !controller.signal.aborted) setActivityError(safeText(error instanceof Error ? error.message : error)); }
     finally { if (own === generation.current) loading.current = false; }
@@ -71,7 +72,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       if (key.escape) { setEdit(undefined); setPreview(undefined); return; }
       if (key.return) {
         const value = text.trim();
-        if (edit === "activity") setActivitySearch(value);
+        if (edit === "activity") { activitySearchRef.current = value; setActivitySearch(value); setActivityOffset(0); }
         else if (edit === "search") setFilters(f => ({ ...f, search: value }));
         else if (["status", "harness", "owner"].includes(edit)) setFilters(f => ({ ...f, [edit]: value || undefined }));
         else if (preview) {
@@ -102,8 +103,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (input === "b") { changeFollowing(false); void load("older"); return; }
     if (input === "x") {
       const next = !expanded; expandedRef.current = next; changeFollowing(false); setExpanded(next);
-      const index = Math.max(0, entries.length - 1 - activityOffset);
-      setActivityOffset(next ? activityLineCount(entries.slice(index + 1), true) + Math.max(0, activityLineCount(entries[index] ? [entries[index]] : [], true) - Math.max(3, height - 7)) : 0);
+      const index = Math.max(0, visibleEntries.length - 1 - activityOffset);
+      setActivityOffset(next ? activityLineCount(visibleEntries.slice(index + 1), true) + Math.max(0, activityLineCount(visibleEntries[index] ? [visibleEntries[index]] : [], true) - Math.max(3, height - 7)) : 0);
       return;
     }
     if (input === "a" && snapshot && target) { setMenu(actionsFor(snapshot, target)); setActionIndex(0); return; }
@@ -118,7 +119,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (key.upArrow || key.downArrow) {
       const delta = key.upArrow ? -1 : 1;
       if (pane === "list") { const i = Math.max(0, list.findIndex(r => r.id === chosen)); setSelected(list[Math.max(0, Math.min(list.length - 1, i + delta))]?.id); }
-      else if (pane === "activity") { changeFollowing(false); setActivityOffset(o => Math.max(0, Math.min(activityLineCount(entries, expanded) - 1, o - delta))); }
+      else if (pane === "activity") { changeFollowing(false); setActivityOffset(o => Math.max(0, Math.min(activityLineCount(visibleEntries, expanded) - 1, o - delta))); }
       else setOffset(o => Math.max(0, o + delta));
     }
   });
@@ -127,8 +128,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   if (help) lines = ["←/→ views · ↑/↓ selection/scroll · Tab pane", "Enter details · Esc back/cancel · / search", "s status · h harness · o owner (empty clears)", "c completed · v older attempts · z sort", "a actions (Enter executes explicit preview)", "w raw · p pause · f resume · b older page", "x expand activity · r refresh · q exit", "Activity outcomes do not establish completion"];
   else if (menu) lines = menu.slice(Math.max(0, actionIndex - capacity + 1), actionIndex + capacity).map((a, i) => `${a.id === menu[actionIndex]?.id ? "›" : " "} ${a.label}${a.available ? "" : ` — unavailable: ${a.reason}`}`);
   else if (pane === "activity") {
-    const visible = entries.filter(e => !activitySearch || e.text.toLowerCase().includes(activitySearch.toLowerCase()));
-    lines = activityViewport(visible, expanded, activityOffset, capacity);
+    lines = activityViewport(visibleEntries, expanded, activityOffset, capacity);
     if (!lines.length) lines = [session?.log ? "No activity available" : "No recorded log for this session"];
     if (activityError) lines.unshift(`Activity error: ${activityError}`);
   } else if (pane === "details") lines = (output ? safeText(output).split("\n") : snapshot && target ? detailLines(snapshot, target) : ["No selected evidence"]).slice(offset, offset + capacity);

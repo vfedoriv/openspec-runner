@@ -173,3 +173,60 @@ test("empty older pages retain their boundary and currently inspected history", 
   assert.doesNotMatch(ui.output, /No activity available/);
   await ui.key("b"); assert.equal(ui.requests.at(-1).options.cursor, "history-start");
 });
+test("paused filtered activity keeps its exact visible anchor on invisible appends", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page(["match first", "unrelated before", "match anchor", "unrelated tail"], "tail")); await ui.flush();
+  await ui.key("/"); await ui.key("match"); await ui.key("\r");
+  await ui.key("f"); const pending = ui.requests.at(-1); await ui.key("p");
+  pending.resolve(ui.page(["invisible append one", "invisible append two"], "next")); await ui.flush();
+  await ui.key("?"); await ui.key("?");
+  assert.match(ui.output, /match first/); assert.match(ui.output, /match anchor/); assert.doesNotMatch(ui.output, /No activity available|invisible append/);
+});
+test("paused expanded filtered activity anchors matching lines across mixed appends", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page(["unrelated before", "match anchor\nkeep-1\nkeep-2\nkeep-3\nkeep-4\nkeep-5\nkeep-6\nkeep-7"], "tail")); await ui.flush();
+  await ui.key("/"); await ui.key("match"); await ui.key("\r"); await ui.key("x");
+  await ui.key("f"); const pending = ui.requests.at(-1); await ui.key("p"); await ui.key("\u001b[A"); await ui.key("\u001b[A");
+  pending.resolve(ui.page(["invisible expanded\nnoise-1\nnoise-2\nnoise-3\nnoise-4\nnoise-5", "match new\nnew matching line"], "next")); await ui.flush();
+  await ui.key("?"); await ui.key("?");
+  assert.match(ui.output, /keep-5/); assert.doesNotMatch(ui.output, /keep-6|new matching line|noise-|No activity available/);
+  let inspected = ""; for (let i = 0; i < 4; i++) { await ui.key("\u001b[B"); inspected += ui.output; }
+  assert.match(inspected, /new matching line/);
+});
+test("filtered activity clamps scrolling and anchors retained rows when the feed trims", async t => {
+  const ui = await activityUiFixture(t);
+  const retained = Array.from({ length: 1000 }, (_, i) => i === 900 ? "match retained" : i === 999 ? "match tail" : `unrelated-${i}`);
+  ui.requests[0].resolve(ui.page(retained.slice(0, 200), "page-200")); await ui.flush();
+  for (let start = 200; start < 1000; start += 200) {
+    await ui.key("f"); ui.requests.at(-1).resolve(ui.page(retained.slice(start, start + 200), `page-${start + 200}`)); await ui.flush();
+  }
+  await ui.key("/"); await ui.key("match"); await ui.key("\r");
+  await ui.key("f"); const pending = ui.requests.at(-1); await ui.key("p");
+  for (let i = 0; i < 6; i++) await ui.key("\u001b[A");
+  pending.resolve(ui.page(Array.from({ length: 100 }, (_, i) => `excluded-${i}`), "trimmed")); await ui.flush();
+  await ui.key("?"); await ui.key("?");
+  assert.match(ui.output, /match retained/); assert.doesNotMatch(ui.output, /No activity available|excluded-/);
+  await ui.key("\u001b[B"); assert.match(ui.output, /match tail/);
+});
+test("a pending activity page preserves anchors under the current newly applied search", async t => {
+  const ui = await activityUiFixture(t);
+  ui.requests[0].resolve(ui.page(["match first", "unrelated before", "match anchor", "unrelated tail"], "tail")); await ui.flush();
+  await ui.key("f"); const pending = ui.requests.at(-1);
+  await ui.key("/"); await ui.key("MATCH"); await ui.key("\r"); await ui.key("p");
+  pending.resolve(ui.page(["unrelated append one", "unrelated append two"], "next")); await ui.flush();
+  await ui.key("?"); await ui.key("?");
+  assert.match(ui.output, /match first/); assert.match(ui.output, /match anchor/); assert.doesNotMatch(ui.output, /No activity available/);
+});
+test("retention dropping the paused filtered anchor clamps to remaining matching history", async t => {
+  const ui = await activityUiFixture(t);
+  const entries = Array.from({ length: 1000 }, (_, i) => i === 0 ? "match removed" : i === 999 ? "match survivor" : `irrelevant-${i}`);
+  ui.requests[0].resolve(ui.page(entries.slice(0, 200), "page-200")); await ui.flush();
+  for (let start = 200; start < 1000; start += 200) {
+    await ui.key("f"); ui.requests.at(-1).resolve(ui.page(entries.slice(start, start + 200), `page-${start + 200}`)); await ui.flush();
+  }
+  await ui.key("/"); await ui.key("match"); await ui.key("\r"); await ui.key("f");
+  const pending = ui.requests.at(-1); await ui.key("p"); await ui.key("\u001b[A");
+  pending.resolve(ui.page(Array.from({ length: 200 }, (_, i) => `unseen-${i}`), "trimmed")); await ui.flush();
+  await ui.key("?"); await ui.key("?");
+  assert.match(ui.output, /match survivor/); assert.doesNotMatch(ui.output, /match removed|No activity available|unseen-/);
+});
