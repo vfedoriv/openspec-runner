@@ -409,3 +409,54 @@ test("activity raw mode reads the supplied log and binds cursors to mode", (t) =
   const normalized = readActivityPage({ log, sidecar, identity: selected, direction: "newer", cursor: raw.cursor });
   assert.equal(normalized.reset, true, "a cursor from raw mode cannot be reused in normalized mode");
 });
+
+test("activity older pending sidecar cursor resumes its record start in newer mode", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "older-pending.log");
+  const sidecar = log + ".activity.jsonl";
+  const full = Buffer.from(JSON.stringify(sidecarEntry("older-pending", "continued ✓")) + "\n");
+  const split = full.indexOf(Buffer.from("✓")) + 1;
+  writeFileSync(log, "", "utf8");
+  writeFileSync(sidecar, full.subarray(0, split));
+
+  const older = readActivityPage({ log, sidecar, identity, direction: "older" });
+  assert.deepEqual(older.entries, []);
+  assert.ok(older.cursor);
+  writeFileSync(sidecar, full.subarray(split), { flag: "a" });
+  const newer = readActivityPage({ log, sidecar, identity, direction: "newer", cursor: older.cursor });
+  assert.deepEqual(newer.entries.map((entry) => [entry.id, entry.text, entry.kind]), [
+    ["older-pending", "continued ✓", "message"],
+  ]);
+});
+
+test("activity cursors switch directions at complementary multi-entry boundaries", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "direction-switch.log");
+  const claudeIdentity = { attemptId: "claude-switch", harness: "claude" };
+  writeFileSync(log, JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "first block" }, { type: "text", text: "second block" }] },
+  }) + "\n", "utf8");
+
+  const newerFirst = readActivityPage({ log, identity: claudeIdentity, direction: "newer", limit: 1 });
+  const newerSecond = readActivityPage({ log, identity: claudeIdentity, direction: "newer", cursor: newerFirst.cursor, limit: 1 });
+  const newerPair = [...newerFirst.entries, ...newerSecond.entries];
+  assert.deepEqual(newerPair.map((entry) => entry.text), ["first block", "second block"]);
+  assert.equal(new Set(newerPair.map((entry) => entry.id)).size, 2);
+  const olderFromNewerSecond = readActivityPage({
+    log, identity: claudeIdentity, direction: "older", cursor: newerSecond.cursor, limit: 1,
+  });
+  assert.deepEqual(olderFromNewerSecond.entries.map((entry) => entry.text), ["first block"]);
+  assert.equal(olderFromNewerSecond.entries[0].id, newerFirst.entries[0].id);
+
+  const olderFirst = readActivityPage({ log, identity: claudeIdentity, direction: "older", limit: 1 });
+  const olderSecond = readActivityPage({ log, identity: claudeIdentity, direction: "older", cursor: olderFirst.cursor, limit: 1 });
+  const olderPair = [...olderFirst.entries, ...olderSecond.entries];
+  assert.deepEqual(olderPair.map((entry) => entry.text), ["second block", "first block"]);
+  assert.equal(new Set(olderPair.map((entry) => entry.id)).size, 2);
+  const newerFromOlderSecond = readActivityPage({
+    log, identity: claudeIdentity, direction: "newer", cursor: olderSecond.cursor, limit: 1,
+  });
+  assert.deepEqual(newerFromOlderSecond.entries.map((entry) => entry.text), ["second block"]);
+  assert.equal(newerFromOlderSecond.entries[0].id, olderFirst.entries[0].id);
+});

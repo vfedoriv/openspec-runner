@@ -17,6 +17,7 @@ type Position = {
   signature: string;
   skip?: SkipKind;
   entryOffset?: number;
+  pendingStart?: number;
 };
 type CursorState = { version: 1; source: string; start: Position; end: Position };
 type FileRef = { path: string; fileId: string; size: number; signature: string; signatureBytes: number };
@@ -83,7 +84,8 @@ function decodeCursor(value: string): CursorState | undefined {
         (candidate.offset as number) >= 0 && Number.isSafeInteger(candidate.size) && (candidate.size as number) >= 0 &&
         typeof candidate.signature === "string" &&
         (candidate.skip === undefined || candidate.skip === "forward" || candidate.skip === "backward" || candidate.skip === "pending") &&
-        (candidate.entryOffset === undefined || (Number.isSafeInteger(candidate.entryOffset) && candidate.entryOffset >= 0));
+        (candidate.entryOffset === undefined || (Number.isSafeInteger(candidate.entryOffset) && candidate.entryOffset >= 0)) &&
+        (candidate.pendingStart === undefined || (Number.isSafeInteger(candidate.pendingStart) && candidate.pendingStart >= 0 && candidate.pendingStart <= (candidate.offset as number)));
     };
     if (!validPosition(cursor.start) || !validPosition(cursor.end)) return undefined;
     return cursor as CursorState;
@@ -343,6 +345,7 @@ function positionFor(
   offset: number,
   skip?: SkipKind,
   entryOffset?: number,
+  pendingStart?: number,
 ): Position {
   return {
     fileId: files[index].fileId,
@@ -351,6 +354,7 @@ function positionFor(
     signature: files[index].signature,
     ...(skip ? { skip } : {}),
     ...(entryOffset !== undefined && entryOffset > 0 ? { entryOffset } : {}),
+    ...(pendingStart !== undefined ? { pendingStart } : {}),
   };
 }
 
@@ -419,9 +423,16 @@ function buildPage(
     let skip = cursor?.end.skip;
     let entryOffset = cursor?.end.entryOffset ?? 0;
     if (index < 0) index = 0;
-    if (skip === "pending" && cursor && files[index]?.size > cursor.end.size) {
-      skip = undefined;
-      entryOffset = 0;
+    startPosition = cursor?.end ?? positionFor(files, index, offset);
+    if (skip === "pending" && cursor) {
+      const file = files[index];
+      const appended = file && file.size > cursor.end.size;
+      offset = cursor.end.pendingStart ?? cursor.end.offset;
+      if (appended) {
+        skip = undefined;
+        entryOffset = 0;
+        startPosition = positionFor(files, index, offset);
+      }
     }
     while (index < files.length && entries.length < limit && budget.remaining > 0) {
       const file = files[index];
@@ -438,6 +449,7 @@ function buildPage(
         }
       }
       if (offset >= file.size) {
+        endPosition = positionFor(files, index, offset);
         index += 1;
         if (index < files.length) {
           offset = 0;
@@ -450,40 +462,27 @@ function buildPage(
       const record = scanForward(file, offset, budget);
       if (!record) break;
       progressed = true;
-      const recordStart = positionFor(files, index, record.start);
       const normalized = recordEntries(record, options.identity, file, sidecar, mode, legacyNormalizer);
       const remaining = normalized.slice(entryOffset);
-      if (remaining.length) {
-        if (!startPosition) startPosition = recordStart;
-        const available = limit - entries.length;
-        const selected = remaining.slice(0, available);
-        entries.push(...selected);
-        const consumed = entryOffset + selected.length;
-        if (record.eofPartial) {
-          endPosition = positionFor(files, index, record.start, "pending", consumed);
-          offset = record.start;
-          skip = "pending";
-          entryOffset = consumed;
-          break;
-        }
-        if (selected.length < remaining.length) {
-          endPosition = positionFor(files, index, record.start, undefined, consumed);
-          offset = record.start;
-          skip = undefined;
-          entryOffset = consumed;
-          break;
-        }
-        endPosition = positionFor(files, index, record.end);
-      } else if (record.eofPartial) {
-        if (!startPosition) startPosition = recordStart;
-        endPosition = positionFor(files, index, record.start, "pending", entryOffset);
+      const available = limit - entries.length;
+      const selected = remaining.slice(0, available);
+      if (selected.length) entries.push(...selected);
+      const consumed = entryOffset + selected.length;
+      if (record.eofPartial) {
+        endPosition = positionFor(files, index, record.start, "pending", consumed, record.start);
         offset = record.start;
         skip = "pending";
+        entryOffset = consumed;
         break;
-      } else {
-        if (!startPosition) startPosition = recordStart;
-        endPosition = positionFor(files, index, record.end, record.partial ? "forward" : undefined);
       }
+      if (selected.length < remaining.length) {
+        endPosition = positionFor(files, index, record.start, undefined, consumed);
+        offset = record.start;
+        skip = undefined;
+        entryOffset = consumed;
+        break;
+      }
+      endPosition = positionFor(files, index, record.end, record.partial ? "forward" : undefined);
       if (record.partial) {
         offset = record.nextOffset;
         skip = "forward";
@@ -492,21 +491,19 @@ function buildPage(
       offset = record.nextOffset;
       skip = undefined;
       entryOffset = 0;
-      if (record.eofPartial) break;
     }
-    if (!startPosition && progressed) startPosition = cursor?.start ?? endPosition;
-    if (!startPosition && cursor) startPosition = cursor.start;
     if (!endPosition && cursor) endPosition = cursor.end;
+    if (!endPosition && files[index]) endPosition = positionFor(files, index, Math.min(offset, files[index].size));
   } else {
     let index = cursor ? files.findIndex((file) => file.fileId === cursor.start.fileId) : files.length - 1;
     let offset = cursor ? cursor.start.offset : files.at(-1)!.size;
     let skip = cursor?.start.skip;
-    let entryOffset = cursor?.start.entryOffset ?? 0;
+    let entryBoundary = cursor?.start.entryOffset;
     if (index < 0) index = files.length - 1;
-    if (skip === "pending" && cursor && files[index]?.size > cursor.start.size) {
-      offset = files[index].size;
+    endPosition = cursor?.start ?? positionFor(files, files.length - 1, files.at(-1)!.size);
+    if (skip === "pending" && cursor) {
+      offset = cursor.start.pendingStart ?? cursor.start.offset;
       skip = undefined;
-      entryOffset = 0;
     }
     const reversed: ActivityEntry[] = [];
     while (index >= 0 && reversed.length < limit && budget.remaining > 0) {
@@ -516,63 +513,72 @@ function buildPage(
         progressed ||= result.offset !== offset;
         offset = result.offset;
         skip = undefined;
-        entryOffset = 0;
+        entryBoundary = undefined;
         startPosition = positionFor(files, index, offset);
         if (!result.complete) {
           startPosition = positionFor(files, index, offset, "backward");
           break;
         }
       }
-      if (offset <= 0) {
+      if (offset <= 0 && !(entryBoundary !== undefined && entryBoundary > 0)) {
         index -= 1;
         if (index >= 0) {
           offset = files[index].size;
           skip = undefined;
-          entryOffset = 0;
+          entryBoundary = undefined;
           continue;
         }
         break;
       }
-      const record = scanBackward(file, offset, budget);
+      const record = entryBoundary !== undefined && entryBoundary > 0
+        ? scanForward(file, offset, budget)
+        : scanBackward(file, offset, budget);
       if (!record) break;
       progressed = true;
-      if (!endPosition) endPosition = positionFor(files, index, record.end);
       const normalized = recordEntries(record, options.identity, file, sidecar, mode, legacyNormalizer);
-      const remainingCount = Math.max(0, normalized.length - entryOffset);
-      const remaining = normalized.slice(0, remainingCount);
+      const boundary = entryBoundary === undefined ? normalized.length : Math.min(entryBoundary, normalized.length);
+      const eligible = normalized.slice(0, boundary);
       const available = limit - reversed.length;
-      const selected = remaining.slice(Math.max(0, remaining.length - available));
+      const selected = eligible.slice(Math.max(0, eligible.length - available));
+      if (record.eofPartial && !cursor) {
+        endPosition = positionFor(files, index, record.start, "pending", normalized.length, record.start);
+      }
       if (selected.length) {
         reversed.push(...selected.slice().reverse());
-        const consumedFromEnd = entryOffset + selected.length;
-        if (record.eofPartial) endPosition = positionFor(files, index, record.end, "pending", consumedFromEnd);
-        if (selected.length < remaining.length) {
-          startPosition = positionFor(files, index, record.end, record.eofPartial ? "pending" : undefined, consumedFromEnd);
-          offset = record.end;
+        const nextBoundary = eligible.length - selected.length;
+        if (selected.length < eligible.length) {
+          startPosition = positionFor(
+            files,
+            index,
+            record.start,
+            record.eofPartial ? "pending" : undefined,
+            nextBoundary,
+            record.eofPartial ? record.start : undefined,
+          );
+          offset = record.start;
           skip = record.eofPartial ? "pending" : undefined;
-          entryOffset = consumedFromEnd;
+          entryBoundary = nextBoundary;
           break;
         }
-      } else if (record.eofPartial) {
-        endPosition = positionFor(files, index, record.end, "pending", entryOffset);
       }
       if (record.partial) {
         startPosition = positionFor(files, index, record.start, "backward");
         offset = record.start;
         skip = "backward";
+        entryBoundary = undefined;
         break;
       }
       startPosition = positionFor(files, index, record.start);
-      offset = record.nextOffset;
+      offset = record.start;
       skip = undefined;
-      entryOffset = 0;
+      entryBoundary = undefined;
     }
     entries.push(...reversed.reverse());
-    if (!startPosition && progressed) startPosition = cursor?.start ?? endPosition;
-    if (!startPosition && cursor) startPosition = cursor.start;
-    if (!endPosition && cursor) endPosition = cursor.end;
+    if (!endPosition && cursor) endPosition = cursor.start;
   }
 
+  if (!startPosition && cursor) startPosition = options.direction === "newer" ? cursor.end : cursor.start;
+  if (!startPosition && endPosition) startPosition = endPosition;
   let nextCursor: string | undefined;
   const pending = startPosition?.skip === "pending" || endPosition?.skip === "pending";
   if (startPosition && endPosition && (entries.length > 0 || progressed || pending)) {
