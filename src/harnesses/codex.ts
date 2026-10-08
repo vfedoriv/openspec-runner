@@ -86,6 +86,7 @@ export const codexHarness: HarnessAdapter = {
           inspection: true, callingSessionInheritance: true, modelDiscovery: true,
           exactResume: true,
           effort: true,
+          structuredActivity: /(?:^|\s)--json(?:\s|,|$)/m.test(help),
         },
       };
     } catch (error: any) {
@@ -111,6 +112,12 @@ export const codexHarness: HarnessAdapter = {
   initialInvocation(settings, cwd, commonGitDir, prompt, session = randomUUID()): Invocation {
     const legacy = settings as Settings;
     return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), prompt], cwd };
+  },
+  activityInvocation(invocation, capabilities): Invocation {
+    if (!capabilities.supported || !capabilities.features.structuredActivity ||
+        invocation.args[0] !== "exec" || invocation.args[1] === "resume" ||
+        invocation.args.includes("--json")) return invocation;
+    return { ...invocation, args: ["exec", "--json", ...invocation.args.slice(1)] };
   },
   resumeInvocation(settings, cwd, commonGitDir, session): Invocation {
     return { executable: "codex", args: codexArgs(settings as Settings, cwd, session, commonGitDir), cwd };

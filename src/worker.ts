@@ -3,12 +3,13 @@ import { mkdirSync, openSync, closeSync, writeSync, fsyncSync } from "node:fs";
 import { dirname } from "node:path";
 import type { TaskAttempt } from "./runner.js";
 import { getHarness } from "./harnesses/registry.js";
+import { createActivityWriter, type ActivityWriter } from "./activity-writer.js";
 import { ClaudeStreamDecoder } from "./harnesses/claude-stream.js";
 
 // Exec exits after its turn and preserves session rollouts by default. The parent
 // observes close only after the child and its report command have returned.
 export type SupervisedSession = Pick<TaskAttempt, "agent" | "path" | "settings" | "expectedSession" |
-  "session" | "worker" | "identityConfirmed" | "observedSession" | "terminalEvidence">;
+  "session" | "worker" | "identityConfirmed" | "observedSession" | "terminalEvidence"> & { id?: string };
 
 export async function superviseWorker(
   a: SupervisedSession,
@@ -28,15 +29,22 @@ export async function superviseWorker(
   const session = a.expectedSession ?? a.session ?? "";
   if (a.agent === "claude" && !session)
     throw new Error("Claude worker is missing its reserved session UUID");
-  const invocation = harness.initialInvocation(
+  let invocation = harness.initialInvocation(
     a.settings,
     a.path,
     common,
     prompt,
     session,
   );
+  if (a.id && capabilities.features.structuredActivity && harness.activityInvocation) {
+    try { invocation = harness.activityInvocation(invocation, capabilities); } catch { /* Optional capture hook. */ }
+  }
   mkdirSync(dirname(a.worker!.log), { recursive: true });
   const fd = openSync(a.worker!.log, "ax", 0o600);
+  let activity: ActivityWriter | undefined;
+  try {
+    if (a.id) activity = createActivityWriter(a.worker!.log, { attemptId: a.id, harness: a.agent ?? "codex" });
+  } catch { /* Capture cannot prevent worker execution. */ }
   try {
     return await new Promise((resolvePromise, reject) => {
       let failure: unknown;
@@ -85,6 +93,7 @@ export async function superviseWorker(
         }
       });
       child.stdout!.on("data", chunk => {
+        try { activity?.feed(chunk, "stdout"); } catch { /* Observational only. */ }
         try {
           writeSync(fd, chunk);
           process.stdout.write(chunk);
@@ -94,7 +103,10 @@ export async function superviseWorker(
           child.kill();
         }
       });
-      child.stderr!.on("data", chunk => { writeSync(fd, chunk); process.stderr.write(chunk); });
+      child.stderr!.on("data", chunk => {
+        try { activity?.feed(chunk, "stderr"); } catch { /* Observational only. */ }
+        writeSync(fd, chunk); process.stderr.write(chunk);
+      });
       child.once("error", error => { failure = error; });
       child.once("close", code => {
         try {
@@ -106,6 +118,7 @@ export async function superviseWorker(
       });
     });
   } finally {
+    try { await activity?.close(); } catch { /* Capture failures do not alter the result. */ }
     fsyncSync(fd);
     closeSync(fd);
   }
