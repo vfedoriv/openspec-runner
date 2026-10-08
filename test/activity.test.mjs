@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
 import {
   mkdtempSync, writeFileSync, readFileSync, truncateSync, rmSync,
@@ -120,8 +122,10 @@ test("activity correlates complete claude tool blocks", () => {
     message: { content: [{ type: "tool_result", tool_use_id: "tool-0", content: "old result" }] },
   }));
   const boundedEntries = bounded.feed(Buffer.from(calls.join("\n") + "\n"), "stdout");
-  assert.ok(["diagnostic", "raw"].includes(boundedEntries.at(-1).kind));
-  assert.equal(boundedEntries.at(-1).toolId, undefined, "correlation forgets IDs older than the latest 1,000");
+  assert.equal(boundedEntries.at(-1).kind, "command");
+  assert.equal(boundedEntries.at(-1).toolId, "tool-0");
+  assert.match(boundedEntries.at(-1).text, /Claude tool result/);
+  assert.doesNotMatch(boundedEntries.at(-1).text, /Bash result/, "correlation forgets IDs older than the latest 1,000");
 });
 
 test("activity bounds partial unicode oversized and control records", () => {
@@ -247,4 +251,161 @@ test("activity pages legacy logs and resets", (t) => {
   const reused = readActivityPage({ log: otherLog, identity, direction: "newer", cursor: first.cursor });
   assert.equal(reused.reset, true, "a cursor is tied to the supplied source and cannot redirect file reads");
   assert.deepEqual(reused.entries.map((entry) => entry.text), ["other"]);
+});
+
+test("activity older pages preserve multi-block records spanning several read blocks", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "long-older.log");
+  const text = "first-" + "x".repeat(9000) + "middle-" + "y".repeat(9000) + "last-" + "z".repeat(3000);
+  writeFileSync(log, JSON.stringify({ type: "agent_message", text: "older prefix" }) + "\n" +
+    JSON.stringify({ type: "agent_message", text }) + "\n", "utf8");
+
+  const page = readActivityPage({ log, identity, direction: "older", limit: 2 });
+  assert.equal(page.entries.at(-1).text, text);
+});
+
+test("activity pages revisit partial JSON and UTF-8 records after append", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "partial-json.log");
+  const sidecar = log + ".activity.jsonl";
+  const full = Buffer.from(JSON.stringify(sidecarEntry("partial-json", "joined ✓")) + "\n");
+  const unicode = full.indexOf(Buffer.from("✓"));
+  const split = unicode + 1;
+  writeFileSync(log, "", "utf8");
+  writeFileSync(sidecar, full.subarray(0, split));
+
+  const pending = readActivityPage({ log, sidecar, identity, direction: "newer" });
+  assert.deepEqual(pending.entries, [], "an incomplete JSON row must not become a malformed-entry diagnostic");
+  assert.ok(pending.cursor, "the cursor must retain the incomplete row boundary");
+  writeFileSync(sidecar, full.subarray(split), { flag: "a" });
+  const completed = readActivityPage({ log, sidecar, identity, direction: "newer", cursor: pending.cursor });
+  assert.deepEqual(completed.entries.map((entry) => [entry.id, entry.text]), [["partial-json", "joined ✓"]]);
+});
+
+test("activity pages revisit partial legacy text after append without splitting it", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "partial-legacy.log");
+  writeFileSync(log, "partial ", "utf8");
+  const pending = readActivityPage({ log, identity, direction: "newer" });
+  assert.deepEqual(pending.entries.map((entry) => entry.text), ["partial "], "legacy EOF text may be observed provisionally");
+  assert.ok(pending.cursor);
+  const pendingId = pending.entries[0].id;
+  writeFileSync(log, "line\n", { flag: "a" });
+  const completed = readActivityPage({ log, identity, direction: "newer", cursor: pending.cursor });
+  assert.deepEqual(completed.entries.map((entry) => entry.text), ["partial line"]);
+  assert.equal(completed.entries[0].id, pendingId, "completion revisits the same stable record identity");
+});
+
+test("activity pagination continues within multi-entry records in both directions", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "multi-entry.log");
+  const claudeIdentity = { attemptId: "claude-pages", harness: "claude" };
+  writeFileSync(log, JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "first block" }, { type: "text", text: "second block" }] },
+  }) + "\n", "utf8");
+
+  const newerFirst = readActivityPage({ log, identity: claudeIdentity, direction: "newer", limit: 1 });
+  const newerSecond = readActivityPage({ log, identity: claudeIdentity, direction: "newer", cursor: newerFirst.cursor, limit: 1 });
+  assert.deepEqual([...newerFirst.entries, ...newerSecond.entries].map((entry) => entry.text), ["first block", "second block"]);
+  assert.notEqual(newerFirst.entries[0].id, newerSecond.entries[0].id);
+
+  const olderFirst = readActivityPage({ log, identity: claudeIdentity, direction: "older", limit: 1 });
+  const olderSecond = readActivityPage({ log, identity: claudeIdentity, direction: "older", cursor: olderFirst.cursor, limit: 1 });
+  assert.deepEqual([...olderFirst.entries, ...olderSecond.entries].map((entry) => entry.text), ["second block", "first block"]);
+  assert.notEqual(olderFirst.entries[0].id, olderSecond.entries[0].id);
+});
+
+test("activity rejects sidecar entries belonging to a different attempt", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "identity.log");
+  const sidecar = log + ".activity.jsonl";
+  writeFileSync(log, "", "utf8");
+  writeFileSync(sidecar, JSON.stringify(sidecarEntry("wrong-attempt", "must not appear", {
+    attemptId: "attempt-1", harness: "claude",
+  })) + "\n", "utf8");
+
+  const page = readActivityPage({
+    log, sidecar, identity: { attemptId: "attempt-2", harness: "codex" }, direction: "newer",
+  });
+  assert.equal(page.entries.length, 1);
+  assert.equal(page.entries[0].kind, "diagnostic");
+  assert.deepEqual(page.entries[0].identity, { attemptId: "attempt-2", harness: "codex" });
+  assert.doesNotMatch(page.entries[0].text, /must not appear/);
+});
+
+test("activity legacy pages correlate Claude tool records and expose standalone results", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "claude-legacy.log");
+  const claudeIdentity = { attemptId: "claude-legacy", harness: "claude" };
+  const records = [
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "legacy-tool", name: "Bash", input: { command: "pwd" } }] } },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "legacy-tool", content: "/repo", is_error: false }] } },
+  ];
+  writeFileSync(log, records.map((record) => JSON.stringify(record)).join("\n") + "\n", "utf8");
+  const page = readActivityPage({ log, identity: claudeIdentity, direction: "newer" });
+  const correlated = page.entries.find((entry) => entry.toolId === "legacy-tool" && entry.text.includes("result"));
+  assert.ok(correlated);
+  assert.match(correlated.text, /Bash result: \/repo/);
+
+  const standalone = join(dir, "claude-result-only.log");
+  writeFileSync(standalone, JSON.stringify(records[1]) + "\n", "utf8");
+  const older = readActivityPage({ log: standalone, identity: claudeIdentity, direction: "older" });
+  assert.ok(older.entries.some((entry) => entry.kind === "command" && entry.toolId === "legacy-tool" && entry.text.includes("/repo")));
+});
+
+test("activity retains unknown Claude blocks as raw observations", () => {
+  const decoder = decoderFor({ attemptId: "claude-unknown", harness: "claude" });
+  const entries = decoder.feed(Buffer.from(JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "future_image", source: "opaque payload" }] },
+  }) + "\n"), "stdout");
+  assert.ok(entries.some((entry) => entry.kind === "raw" && entry.text.includes("future_image")));
+});
+
+test("activity counts production reads against the byte and entry page limits", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "read-budget.log");
+  const sidecar = log + ".activity.jsonl";
+  writeFileSync(log, "", "utf8");
+  const rows = Array.from({ length: 250 }, (_, index) => JSON.stringify(sidecarEntry("budget-" + index, "x".repeat(1500))));
+  writeFileSync(sidecar, rows.join("\n") + "\n", "utf8");
+
+  const original = fs.readSync;
+  let bytesRead = 0;
+  const mock = t.mock.method(fs, "readSync", (...args) => {
+    const count = original(...args);
+    bytesRead += count;
+    return count;
+  });
+  syncBuiltinESMExports();
+  let page;
+  try {
+    page = readActivityPage({ log, sidecar, identity, direction: "newer", limit: 500 });
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.ok(page.entries.length > 0 && page.entries.length <= 200);
+  assert.ok(bytesRead <= 256 * 1024, `production reads used ${bytesRead} bytes`);
+});
+
+test("activity raw mode reads the supplied log and binds cursors to mode", (t) => {
+  const dir = fixture(t);
+  const log = join(dir, "raw-mode.log");
+  const sidecar = log + ".activity.jsonl";
+  const source = JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "normalized" } });
+  writeFileSync(log, source + "\n", "utf8");
+  writeFileSync(sidecar, JSON.stringify(sidecarEntry("sidecar-id", "sidecar text")) + "\n", "utf8");
+  const selected = { attemptId: "true-attempt", harness: "custom-harness" };
+
+  const raw = readActivityPage({ log, sidecar, identity: selected, direction: "newer", mode: "raw" });
+  assert.equal(raw.entries.length, 1);
+  assert.equal(raw.entries[0].kind, "raw");
+  assert.equal(raw.entries[0].text, source);
+  assert.deepEqual(raw.entries[0].identity, selected);
+  assert.equal(raw.entries[0].observedAt, undefined);
+  assert.notEqual(raw.entries[0].id, "sidecar-id");
+  const normalized = readActivityPage({ log, sidecar, identity: selected, direction: "newer", cursor: raw.cursor });
+  assert.equal(normalized.reset, true, "a cursor from raw mode cannot be reused in normalized mode");
 });

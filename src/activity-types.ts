@@ -31,4 +31,5 @@ export type ActivityPageOptions = {
   cursor?: string;
   direction: "older" | "newer";
   limit?: number;
+  mode?: "normalized" | "raw";
 };

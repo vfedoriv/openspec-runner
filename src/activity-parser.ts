@@ -42,12 +42,15 @@ function outcomeFor(raw: Record<string, unknown>): string | undefined {
 
 class ActivityNormalizer {
   private sequence = 0;
-  private readonly tools = new Map<string, ToolSummary>();
+  private readonly tools: Map<string, ToolSummary>;
 
   constructor(
     private readonly identity: ActivityIdentity,
     private readonly idPrefix = identity.attemptId,
-  ) {}
+    tools = new Map<string, ToolSummary>(),
+  ) {
+    this.tools = tools;
+  }
 
   consume(line: string, stream: ActivityStream, observedAt?: string): ActivityEntry[] {
     const source = line.replace(/\r$/, "");
@@ -132,10 +135,15 @@ class ActivityNormalizer {
     const message = isRecord(raw.message) ? raw.message : undefined;
     if (!message) return [this.entry("raw", source, stream, observedAt)];
     const content = Array.isArray(message.content) ? message.content :
-      typeof message.content === "string" ? [{ type: "text", text: message.content }] : [];
+      typeof message.content === "string" ? [{ type: "text", text: message.content }] : undefined;
+    if (!content) return [this.entry("raw", source, stream, observedAt)];
     const entries: ActivityEntry[] = [];
+    let unknownBlock = content.length === 0;
     for (const block of content) {
-      if (!isRecord(block)) continue;
+      if (!isRecord(block)) {
+        unknownBlock = true;
+        continue;
+      }
       if (block.type === "text" && typeof block.text === "string") {
         if (block.text) entries.push(this.entry("message", block.text, stream, observedAt));
         continue;
@@ -158,17 +166,18 @@ class ActivityNormalizer {
       }
       if (block.type === "tool_result" && typeof block.tool_use_id === "string" && block.tool_use_id) {
         const summary = this.tools.get(block.tool_use_id);
-        if (!summary) {
-          entries.push(this.entry("diagnostic", "Claude tool result has no recent matching tool_use ID", stream, observedAt));
-          continue;
-        }
-        this.tools.delete(block.tool_use_id);
+        if (summary) this.tools.delete(block.tool_use_id);
         const result = textContent(block.content);
-        const text = summary.name + " result: " + (result || summary.command);
+        const text = summary
+          ? summary.name + " result: " + (result || summary.command)
+          : "Claude tool result (" + block.tool_use_id + "): " + (result || "result available");
         entries.push(this.entry("command", text, stream, observedAt, block.tool_use_id,
           block.is_error === true ? "error" : "success"));
+        continue;
       }
+      unknownBlock = true;
     }
+    if (unknownBlock) entries.push(this.entry("raw", source, stream, observedAt));
     return entries;
   }
 
@@ -279,6 +288,13 @@ export function createActivityDecoder(identity: ActivityIdentity): ActivityDecod
   };
 
   return { feed, end };
+}
+
+export function createActivityRecordNormalizer(
+  identity: ActivityIdentity,
+): (line: string, stream: ActivityStream, idPrefix: string) => ActivityEntry[] {
+  const tools = new Map<string, ToolSummary>();
+  return (line, stream, idPrefix) => new ActivityNormalizer(identity, idPrefix, tools).consume(line, stream);
 }
 
 export function normalizeActivityRecord(
