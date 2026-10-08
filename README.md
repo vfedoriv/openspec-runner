@@ -50,6 +50,7 @@ use the `$skill-name` mention syntax.
 - [Sessions, terminals, and worktrees](#sessions-terminals-and-worktrees)
   - [Worktree and terminal cleanup](#worktree-and-terminal-cleanup)
 - [Recovery and plan changes](#recovery-and-plan-changes)
+- [Console dashboard](#console-dashboard)
 - [CLI reference](#cli-reference)
 - [State and safety guarantees](#state-and-safety-guarantees)
 - [Troubleshooting](#troubleshooting)
@@ -1617,3 +1618,100 @@ Adapter references: [Codex CLI](https://learn.chatgpt.com/docs/developer-command
 [Worktrunk](https://github.com/max-sixty/worktrunk),
 [Herdr automation](https://herdr.dev/docs/agent-automation/), and
 [Herdr persistence](https://herdr.dev/docs/persistence-remote/).
+
+## Console dashboard
+
+Run the dashboard from a repository on Linux/macOS or in WSL on Windows. Native
+Windows runner execution remains unsupported. Node.js 22.13 or newer is required.
+
+```sh
+openspec-runner dashboard
+openspec-runner dashboard --change demo
+openspec-runner dashboard --store ../coordination-store --map ./repositories.yaml
+openspec-runner dashboard --once
+openspec-runner dashboard --json --change demo > dashboard.json
+```
+
+`--once` prints one plain snapshot; `--json` emits one version-1 JSON snapshot.
+Without a TTY on both input and output, the default is one plain snapshot. These
+paths load the reader without loading Ink or React. `--change` selects the local
+change and associated imported assignments. Supply `--store` and `--map` together;
+paths resolve from the current directory and retain existing identity/map checks.
+
+The interactive dashboard refreshes every two seconds through one asynchronous
+collector, keeping keyboard input available while it reads. Its five views are
+Overview (counts and current work), Attention (blockers and data errors), Features
+(tasks, dependencies, settings and lifecycle evidence), Sessions (attempts,
+reports, identities, saved terminals and activity), and Assignments (component
+owners, coordination revisions and assignment/submission/acceptance/delivery).
+Completed, integrated, accepted and delivered states remain distinct.
+
+| Key | Action |
+|---|---|
+| Left/right arrows | Change view |
+| Up/down arrows | Select a row or scroll the focused pane |
+| Tab / Enter | Change pane / open details and session activity |
+| Escape | Return to list, close help/menu, or cancel a running action |
+| `/`, then Enter | Search the current view or the activity pane |
+| `s`, `h`, `o`, then Enter | Exact status, harness, owner filter; empty input clears |
+| `c`, `v`, `z` | Toggle completed work, older attempts, name/attention sorting |
+| `a`, then arrows/Enter | Open actions and explicitly select one |
+| `w`, `p`, `f` | Toggle raw activity, pause/toggle follow, resume at newest activity |
+| `b`, `x` | Read an older page, expand activity text |
+| `r`, `?`, `q` | Refresh, help, exit (Ctrl-C also exits) |
+
+Activity follows by default. Scrolling pauses follow so new output does not move
+the inspected text; `f` resumes. Search is local and case insensitive. Narrow
+terminals use a compact view header and truncate displayed lines. Terminal raw
+mode, cursor and alternate screen are restored when the dashboard exits, including
+render errors; active collector/activity/preview work is cancelled.
+
+Browsing is observational: it does not lock, migrate, recover or write runner
+state, run verification, fetch, or pull. A failed source retains its last successful
+observation marked **STALE**, with its original collection time. Stale tasks are
+not ready; process and terminal observations become unknown. Silence in a log
+never proves a worker stopped. Without a Store, imported assignment data shows
+its pinned revision; it does not claim current shared authority. With a Store,
+committed manifests and authoritative branch/history status are inspected locally,
+including shared components associated with this repository. Workers in other
+repositories are not monitored.
+
+New workers capture best-effort normalized activity beside the original log in
+`<log>.activity.jsonl`. Codex uses `exec --json` only when capability detection
+advertises it; older Codex text logs remain readable. Claude keeps its existing
+stream mode. The version-1 sidecar records attempt/harness identity, observation
+time, messages, tools, file changes, diagnostics and turn outcomes. A successful
+harness turn does not complete a runner task or replace its report/identity gates.
+Capture errors leave supervision and report acceptance unchanged; preexisting files
+and symlinks are refused. Original worker logs retain their bytes.
+
+Readers retain at most 1,000 entries for the selected session, request at most 200
+entries per page, read at most 256 KiB per page, and bound records to 64 KiB.
+Older history is paged; partial records and Unicode boundaries are handled across
+reads. Display strips terminal control sequences. Raw mode reads the original log;
+normalized mode prefers the sidecar and falls back to existing logs. Sidecars keep
+three files of at most 8 MiB each (`.activity.jsonl`, `.1`, `.2`), with a 1 MiB
+pending write queue and a 250 ms close budget. These bounds can omit/truncate
+activity; logs and authoritative reports remain the evidence for lifecycle work.
+
+Actions inspect evidence, show a saved attempt diff, focus an existing saved
+terminal, display CLI commands, or run an explicitly selected audited dry-run
+preview. Attachment never creates or resumes a session. Finished, ambiguous,
+missing-worktree or mismatched-context sessions explain why focus is unavailable.
+Launch/retry previews require exact task IDs; inherited unmanaged settings require
+an explicit model and, for Codex, effort. Managed previews use approved settings.
+Review and repair previews also retain coordination authority checks. Executable
+previews use `--dry-run --json`; Escape cancels them. Outputs are limited to 1 MiB
+and execution to 30 seconds.
+
+Approval, final approval and archive previews are unavailable inside the dashboard:
+OpenSpec validation or configured verification commands may write files even when
+called by those CLI dry runs. Their menu entries explain that limitation and provide
+display-only CLI commands. Integration, recovery, assignment changes and cleanup
+are also displayed commands for execution outside the dashboard. The existing CLI
+approval and execution behavior is unchanged.
+
+Automated acceptance uses controlled fake Codex/Claude workers and terminal streams.
+Testing a real saved terminal requires the corresponding installed backend and
+matching caller context; fake-backend coverage does not establish live backend
+availability or authentication.

@@ -155,11 +155,12 @@ export async function runDashboardUi(options: DashboardOptions): Promise<void> {
   const quit = () => { lifetime.abort(); resolveExit(); };
   const collector = startDashboardCollector(options, next => { snapshot = next; failure = undefined; update(); }, message => { failure = message; update(); });
   const update = () => { if (!lifetime.signal.aborted) instance?.rerender(<DashboardUi snapshot={snapshot} collector={collector} failure={failure} quit={quit} lifetime={lifetime.signal} />); };
-  const interrupt = () => quit(); process.once("SIGINT", interrupt);
+  // Keep this listener registered until asynchronous terminal cleanup finishes.
+  const interrupt = () => quit(); process.on("SIGINT", interrupt);
   try {
     instance = render(<DashboardUi snapshot={snapshot} collector={collector} failure={failure} quit={quit} lifetime={lifetime.signal} />, { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr, interactive: true, exitOnCtrlC: false, patchConsole: false, alternateScreen: true });
     await Promise.race([finished, instance.waitUntilExit()]);
   } finally {
-    lifetime.abort(); await collector.close(); process.removeListener("SIGINT", interrupt); instance?.unmount(); instance?.cleanup();
+    lifetime.abort(); await collector.close(); instance?.unmount(); instance?.cleanup(); process.removeListener("SIGINT", interrupt);
   }
 }
