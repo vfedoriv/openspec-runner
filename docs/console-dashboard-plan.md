@@ -137,25 +137,29 @@ interface ActivityDecoder {
 createActivityDecoder(identity: ActivityIdentity): ActivityDecoder;
 type ActivityPageOptions = {
   log: string; sidecar?: string; identity: ActivityIdentity; cursor?: string;
-  direction: "older" | "newer"; limit?: number;
+  direction: "older" | "newer"; limit?: number; mode?: "normalized" | "raw";
 };
 readActivityPage(options: ActivityPageOptions): ActivityPage;
 ```
 
 Page default/max 200 entries, max 256 KiB read/page, 64 KiB record/partial buffer per stream. Opaque cursor records file identity/offset; replacement/truncation resets. Separate stream buffers and byte-safe UTF-8; oversize remainder dropped through next newline with diagnostic. Sidecar preferred, including older rotated files <log>.activity.jsonl.1 and <log>.activity.jsonl.2 within the same total page budget; legacy structured/text best effort, raw without invented times. Strip ANSI/OSC/control sequences except readable tabs/newlines. Bound tool correlation to latest 1,000 IDs. No state writes or identity evidence synthesis.
 
-- [ ] RED: "activity normalizes codex messages commands changes turn outcomes": malformed/unknown become diagnostic/raw and turn remains activity only.
-- [ ] RED: "activity correlates complete claude tool blocks": complete assistant text/tool_use/tool_result IDs, omit token deltas; existing identity decoder independent.
-- [ ] RED: "activity bounds partial unicode oversized and control records": split UTF-8, stderr interleaving, absent newline and hostile controls respect byte caps.
-- [ ] RED: "activity pages legacy logs and resets": missing file errors, no fake timestamps, older/newer boundaries preserve complete entries, truncation/replacement reset.
-- [ ] GREEN: Implement pure parser and bounded paging (no readFile of whole log).
-- [ ] CHECK: activity tests, pnpm test; fresh review/commit.
+Normalized mode is the default. Explicit raw mode ignores sidecars and emits sanitized original log lines without JSON normalization or invented timestamps, preserving the requested attempt/harness identity. Cursors bind to mode and retain intra-record entry boundaries; pending live EOF must not consume an unfinished record, and backward scans preserve each record's original block order. Validate sidecar identity, and share bounded tool correlation across legacy records within the page.
+
+- [x] RED: "activity normalizes codex messages commands changes turn outcomes": malformed/unknown become diagnostic/raw and turn remains activity only.
+- [x] RED: "activity correlates complete claude tool blocks": complete assistant text/tool_use/tool_result IDs, omit token deltas; existing identity decoder independent.
+- [x] RED: "activity bounds partial unicode oversized and control records": split UTF-8, stderr interleaving, absent newline and hostile controls respect byte caps.
+- [x] RED: "activity pages legacy logs and resets": missing file errors, no fake timestamps, older/newer boundaries preserve complete entries, truncation/replacement reset.
+- [x] GREEN: Implement pure parser and bounded paging (no readFile of whole log).
+- [x] CHECK: activity tests, pnpm test; fresh review/commit.
 
 ### Task 4: Best-effort sidecar capture
 
 **Files:** Create src/activity-writer.ts, test/worker-activity.test.mjs. Modify src/worker.ts, src/harnesses/types.ts, src/harnesses/codex.ts; adjust existing harness/runner/feature behavior tests only when needed.
 
 **Consumes:** ActivityIdentity/ActivityEntry/ActivityDecoder and createActivityDecoder(identity: ActivityIdentity): ActivityDecoder from Task 3; feed(chunk:Uint8Array,stream:"stdout"|"stderr",observedAt?:string):ActivityEntry[], end():ActivityEntry[]. **Produces:** createActivityWriter(log:string,identity:ActivityIdentity): { feed(chunk:Uint8Array,stream:"stdout"|"stderr"):void; close():Promise<void> }; sidecar <log>.activity.jsonl; optional HarnessCapabilities.features.structuredActivity?:boolean; optional HarnessAdapter.activityInvocation?(invocation:Invocation,capabilities:HarnessCapabilities):Invocation.
+
+SupervisedSession retains its existing caller contract with optional id?:string for capture identity; real task attempts and feature jobs already provide that ID. If a legacy/custom caller has no attempt ID, skip capture and preserve its existing invocation instead of inventing identity or failing supervision.
 
 Codex structuredActivity true only if exec help advertises --json. activityInvocation adds --json only to initial supported exec, never resume; absent hook/capability preserves existing invocation. No new saved settings/state version. Receipt timestamp and attempt identity recorded. Async serialized writes: max 1 MiB queue, max 64 KiB entry, 0600, max 8 MiB current plus two rotated files named <log>.activity.jsonl.1 and <log>.activity.jsonl.2 (1 is newer); reader respects these rotations and page budget. Queue/disk/parser failure disables capture and emits best-effort diagnostic; close bounded to 250 ms and absorbs capture failures. Stderr always diagnostic/raw stream, never identity-bearing stdout.
 
