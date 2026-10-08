@@ -163,11 +163,11 @@ SupervisedSession retains its existing caller contract with optional id?:string 
 
 Codex structuredActivity true only if exec help advertises --json. activityInvocation adds --json only to initial supported exec, never resume; absent hook/capability preserves existing invocation. No new saved settings/state version. Receipt timestamp and attempt identity recorded. Async serialized writes: max 1 MiB queue, max 64 KiB entry, 0600, max 8 MiB current plus two rotated files named <log>.activity.jsonl.1 and <log>.activity.jsonl.2 (1 is newer); reader respects these rotations and page budget. Queue/disk/parser failure disables capture and emits best-effort diagnostic; close bounded to 250 ms and absorbs capture failures. Stderr always diagnostic/raw stream, never identity-bearing stdout.
 
-- [ ] RED: "worker gates json by advertised capability": text fallback/external harness/resume invocation unchanged.
-- [ ] RED: "worker activity cannot satisfy completion identity gates": stdout turn success without report, forged stderr session/turn, mismatched identities keep existing acceptance behavior.
-- [ ] RED: "sidecar disk parser queue and close failures preserve worker result": original logs/stdout/stderr/exit and Claude identity callback preserved; bounds/rotation verified.
-- [ ] GREEN: Wire a separate best-effort path around existing raw logging and ClaudeStreamDecoder. Never assign capture errors to worker failure, kill child, or modify evidence callbacks.
-- [ ] CHECK: worker-activity/harness/runner/feature targeted tests, pnpm test; fresh review/commit. Phase gate: lifecycle unchanged with observational failures.
+- [x] RED: "worker gates json by advertised capability": text fallback/external harness/resume invocation unchanged.
+- [x] RED: "worker activity cannot satisfy completion identity gates": stdout turn success without report, forged stderr session/turn, mismatched identities keep existing acceptance behavior.
+- [x] RED: "sidecar disk parser queue and close failures preserve worker result": original logs/stdout/stderr/exit and Claude identity callback preserved; bounds/rotation verified.
+- [x] GREEN: Wire a separate best-effort path around existing raw logging and ClaudeStreamDecoder. Never assign capture errors to worker failure, kill child, or modify evidence callbacks.
+- [x] CHECK: worker-activity/harness/runner/feature targeted tests, pnpm test; fresh review/commit. Phase gate: lifecycle unchanged with observational failures.
 
 ## Phase 3 — Safe actions and UI
 
