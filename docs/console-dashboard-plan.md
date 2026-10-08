@@ -226,13 +226,13 @@ Activity offload: extend the existing collector, rather than invoking synchronou
 
 **Consumes:** dashboardCommand(args:string[]):Promise<void>, runDashboardUi(options:DashboardOptions):Promise<void>, collectDashboard(options:DashboardOptions):DashboardSnapshot and version-1 snapshot/activity/action contracts unchanged. **Produces:** CLI/shortcut/format/sidecar documentation, acceptance evidence and packaged compiled UI/collector paths.
 
-- [ ] RED: "dashboard capture browsing preview preserve lifecycle": fake Codex/Claude, v1/v2, missing reports, turn success, sidecar failures and handoff Store history; activity never changes report/identity/integration gates and browse/preview preserves files/refs.
-- [ ] GREEN: Wire evidenced missing package/import paths; document dashboard, --change, --store/--map, --once, --json, TTY fallback, shortcuts, stale data, bounded sidecars/rotation and explicit safe-action limits.
-- [ ] CHECK: pnpm test PASS under supported Linux runtime; pnpm pack --dry-run PASS with compiled TSX/collector and compatible dependency engines.
-- [ ] CHECK: disposable repository dashboard --json/--once/--change and paired Store/map; one JSON snapshot and no persisted changes. Explicit supported preview commands PASS without mutations.
-- [ ] CHECK: WSL/Linux terminal navigation/all views/filtering, narrow terminal, paused follow/raw log, slow-preview cancellation and clean exit. Exercise saved-terminal attachment through fake backend fixtures; additionally test a real saved backend when available and record that optional real-backend check as unverified when unavailable.
-- [ ] REVIEW: fresh gpt-6.1-sol low whole-change review against approved spec, authority, bounds, lifecycle and compatibility. Supervisor delegates corrections and reruns affected checks.
-- [ ] ACCEPT: seven approved task gates, required full suite/CLI/package checks and manual evidence complete; report remaining risks. No additional design approval pause.
+- [x] RED: "dashboard capture browsing preview preserve lifecycle": fake Codex/Claude, v1/v2, missing reports, turn success, sidecar failures and handoff Store history; activity never changes report/identity/integration gates and browse/preview preserves files/refs.
+- [x] GREEN: Wire evidenced missing package/import paths; document dashboard, --change, --store/--map, --once, --json, TTY fallback, shortcuts, stale data, bounded sidecars/rotation and explicit safe-action limits.
+- [x] CHECK: pnpm test PASS under supported Linux runtime; pnpm pack --dry-run PASS with compiled TSX/collector and compatible dependency engines.
+- [x] CHECK: disposable repository dashboard --json/--once/--change and paired Store/map; one JSON snapshot and no persisted changes. Explicit supported preview commands PASS without mutations.
+- [x] CHECK: WSL/Linux terminal navigation/all views/filtering, narrow terminal, paused follow/raw log, slow-preview cancellation and clean exit. Exercise saved-terminal attachment through fake backend fixtures; additionally test a real saved backend when available and record that optional real-backend check as unverified when unavailable.
+- [x] REVIEW: fresh gpt-6.1-sol low whole-change review against approved spec, authority, bounds, lifecycle and compatibility. Supervisor delegates corrections and reruns affected checks.
+- [x] ACCEPT: seven approved task gates, required full suite/CLI/package checks and manual evidence complete; report remaining risks. No additional design approval pause.
 
 ## Coverage and self-review
 
@@ -247,4 +247,10 @@ Activity offload: extend the existing collector, rather than invoking synchronou
 | Five views, keys/filters/sort/details/follow/search/raw/exit | 6 |
 | End-to-end compatibility, platform/manual/package documentation | 7 |
 
-Plan self-review: each approved feature has an owner; interface names agree across briefs; Review Focus cases have named tests. Implementation and verification remain pending.
+Plan self-review: each approved feature has an owner; interface names agree across briefs; Review Focus cases have named tests. Tasks 1–7 passed independent review. Whole-branch review and the final count-label correction passed independent review with no unresolved critical or important findings.
+
+## Completion record
+
+Implementation source: b495e045d2f4f5838459179835652e578bf15a9b on codex/console-dashboard. Final supported Linux suite: 314 tests, 312 passed, zero failures, two existing optional skips. Build and package dry run passed. Actual terminal navigation across all five views at width 55, q and OS SIGINT restoration passed; renderer failure closes collector and preview children. CLI JSON/plain/change, Store/map, bounded activity, safe previews and persisted-state/ref preservation are covered by acceptance and regression tests.
+
+Compatibility: Codex execution state v1/v2 and Claude v2 exercised through real fake-worker subprocesses. Legacy v1 normalization remains Codex-only. Native Windows runner execution remains unsupported; use Unix/WSL. Live authenticated Claude/Herdr saved-terminal attachment was unavailable and remains unverified; fake-backend exact-focus paths passed. No workflow mutation, merge or publication was performed. Branch integration remains the user's choice.
