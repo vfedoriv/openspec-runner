@@ -150,3 +150,12 @@ for (const source of ["coordination", "shared:team"]) {
     assert.equal(retained.assignments[0].status.phase, "accepted");
   });
 }
+test("plain snapshot distinguishes local satisfied tasks from shared delivered components", async () => {
+  const { formatDashboard } = await import("../dist/dashboard-cli.js");
+  const shared = { id: "shared:team", origin: "shared", completed: 1, total: 2, taskIds: [], sessionIds: [] };
+  const sharedOnly = { ...freshSnapshot(), features: [shared], tasks: [], sessions: [], assignments: [] };
+  assert.match(formatDashboard(sharedOnly), /shared:team.*1\/2 components delivered/);
+  const mixed = { ...sharedOnly, features: [{ ...freshSnapshot().features[0], completed: 1, total: 2 }, shared], tasks: freshSnapshot().tasks };
+  assert.match(formatDashboard(mixed), /a:.*1\/2 tasks satisfied/);
+  assert.match(formatDashboard(mixed), /shared:team.*1\/2 components delivered/);
+});

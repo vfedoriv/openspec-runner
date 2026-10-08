@@ -230,3 +230,34 @@ test("retention dropping the paused filtered anchor clamps to remaining matching
   await ui.key("?"); await ui.key("?");
   assert.match(ui.output, /match survivor/); assert.doesNotMatch(ui.output, /match removed|No activity available|unseen-/);
 });
+test("feature rows label shared delivery separately from local task satisfaction", async () => {
+  const { selectDashboardRows } = await import("../dist/dashboard-view.js");
+  const local = { ...snapshot.features[0], completed: 1, total: 2 };
+  const shared = { id: "shared:team", origin: "shared", completed: 1, total: 2, taskIds: [], sessionIds: [] };
+  const fixture = { ...snapshot, features: [local, shared] };
+  for (const view of ["Overview", "Features"]) {
+    const rows = selectDashboardRows(fixture, view, { ...filters, includeCompleted: true });
+    assert.match(rows.find(row => row.id === shared.id).label, /1\/2 components delivered/);
+    assert.match(rows.find(row => row.id === local.id).label, /1\/2 tasks satisfied/);
+  }
+});
+for (const [name, completed, total, expected] of [["shared-only", 0, 0, "0/0"], ["mixed local and shared", 1, 2, "1/2"]]) {
+  test(`${name} headline counts local tasks without delivered shared components`, async () => {
+    const { PassThrough, Writable } = await import("node:stream");
+    const React = await import("react"); const { render } = await import("ink"); const { DashboardUi } = await import("../dist/dashboard-ui.js");
+    const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+    let output = ""; const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } }); stdout.isTTY = true; stdout.columns = 110; stdout.rows = 20;
+    const lifetime = new AbortController();
+    const shared = { id: "shared:team", origin: "shared", completed: 3, total: 3, taskIds: [], sessionIds: [] };
+    const local = { ...snapshot.features[0], completed, total, taskIds: ["t", "second"] };
+    const tasks = total ? [snapshot.tasks[0], { ...snapshot.tasks[0], id: "second", task: { ...snapshot.tasks[0].task, id: "1.2" } }] : [];
+    const fixture = { ...snapshot, features: total ? [local, shared] : [shared], tasks, sessions: [], assignments: [], attention: [] };
+    const collector = { refresh() {}, close: async () => {}, readActivity: async () => ({ entries: [], reset: false, errors: [] }) };
+    const instance = render(React.createElement(DashboardUi, { snapshot: fixture, collector, lifetime: lifetime.signal, quit() {} }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 40)); await instance.waitUntilRenderFlush();
+      assert.match(output, new RegExp(`Tasks ${expected}`));
+      const count = output.match(/Tasks (\d+)\/(\d+)/); assert.ok(Number(count[1]) <= Number(count[2]));
+    } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
+  });
+}

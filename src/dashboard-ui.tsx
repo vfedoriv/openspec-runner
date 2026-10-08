@@ -137,10 +137,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     lines = list.slice(start, start + capacity).map(r => `${r.id === chosen ? "›" : " "} ${r.label}`);
     if (!lines.length) lines = [snapshot ? "No matching work" : "Collecting… keyboard remains available"];
   }
+  const localFeatures = snapshot?.features.filter(feature => feature.origin === "local") ?? [];
+  const satisfiedTasks = localFeatures.reduce((count, feature) => count + feature.completed, 0);
+  const totalTasks = localFeatures.reduce((count, feature) => count + feature.total, 0);
   const slots = snapshot ? `${snapshot.sessions.filter(s => ["preparing", "running", "launching", "manual"].includes(s.phase)).length}/${snapshot.repository.maxParallel ?? "unknown"}` : "unknown";
   return <Box flexDirection="column" height={height} width={columns}>
     <Text color="cyan">{safeText(narrow ? `${view} / ${pane} · ←/→` : dashboardViews.map((v, i) => i === tab ? `[${v}]` : v).join("  ")).slice(0, width)}</Text>
-    <Text>{safeText(`Tasks ${snapshot?.features.reduce((n, f) => n + f.completed, 0) ?? 0}/${snapshot?.tasks.length ?? 0} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`).slice(0, width)}</Text>
+    <Text>{safeText(`Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`).slice(0, width)}</Text>
     <Text color="yellow">{safeText(failure ?? snapshot?.errors.map(e => `${e.stale ? "STALE" : "ERROR"} ${e.source}: ${e.message}`).join("; ") ?? "").slice(0, width)}</Text>
     <Text dimColor>{safeText(`/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`).slice(0, width)}</Text>
     {lines.slice(0, capacity).map((line, i) => <Text key={i} wrap="truncate">{safeText(line).slice(0, width)}</Text>)}

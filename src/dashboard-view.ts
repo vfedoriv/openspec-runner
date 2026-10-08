@@ -9,7 +9,7 @@ const completed = (s: DashboardSnapshot, id: string) => { const f = s.features.f
 export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, filters: DashboardFilters): DashboardRow[] {
   const rows: Array<DashboardRow & { feature?: string; status?: string; harness?: string; owner?: string; priority?: number }> = [];
   if (view === "Overview" || view === "Features") for (const f of s.features) {
-    rows.push({ id: f.id, targetId: f.id, feature: f.id, status: f.phase ?? "unmanaged", owner: s.assignments.find(a => a.featureId === f.id)?.owner, label: `${f.change ?? f.id} · ${f.phase ?? "unmanaged"} · ${f.completed}/${f.total} tasks satisfied` });
+    rows.push({ id: f.id, targetId: f.id, feature: f.id, status: f.phase ?? "unmanaged", owner: s.assignments.find(a => a.featureId === f.id)?.owner, label: `${f.change ?? f.id} · ${f.phase ?? "unmanaged"} · ${f.completed}/${f.total} ${f.origin === "shared" ? "components delivered" : "tasks satisfied"}` });
     if (view === "Features") for (const t of s.tasks.filter(t => t.featureId === f.id)) rows.push({ id: t.id, targetId: t.id, feature: f.id, status: t.attempts.at(-1)?.phase ?? (t.task.completed ? "satisfied" : t.ready ? "ready" : "blocked"), harness: t.harness, label: `${t.task.id} ${t.task.description} · ${t.ready ? "ready" : t.reasons.join("; ") || "not ready"}` });
   }
   if (view === "Attention") for (const a of s.attention) rows.push({ id: a.id, targetId: a.targetId ?? a.source, feature: a.source, priority: a.priority, status: "attention", label: a.message });
