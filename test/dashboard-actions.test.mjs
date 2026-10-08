@@ -168,3 +168,14 @@ test("launch retry review and repair CLI previews preserve repository and runtim
   await fixture.review();
   assert.equal((await run("fix")).role, "repair");
 });
+test("action menus project known worktree availability without consulting filesystem", () => {
+  const s = snapshot();
+  s.sessions = [{ id: "session", featureId: "local:change", worktreeAvailable: true, role: "implementation", phase: "running", process: "unknown", terminal: "unknown", attempt: { id: "saved", path: "/definitely-not-a-current-worktree", base: "a".repeat(40), phase: "running", session: "saved", terminal: { backend: "orca", pane: "saved-pane" } } }];
+  const projected = actionsFor(s, "session");
+  assert.equal(projected.find(a => a.kind === "diff").available, true);
+  assert.equal(projected.find(a => a.kind === "focus").available, true);
+  s.sessions[0].worktreeAvailable = false;
+  assert.match(actionsFor(s, "session").find(a => a.kind === "diff").reason, /missing/);
+  delete s.sessions[0].worktreeAvailable;
+  assert.match(actionsFor(s, "session").find(a => a.kind === "diff").reason, /unknown/);
+});

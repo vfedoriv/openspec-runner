@@ -1,0 +1,112 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+const filters = { search: "", includeCompleted: false, includeOlderAttempts: false, sort: "name" };
+const snapshot = { version: 1, collectedAt: "now", repository: { root: "/repo" }, features: [{ id: "local:a", origin: "local", change: "Alpha", completed: 0, total: 1, taskIds: ["t"], sessionIds: [] }, { id: "local:b", origin: "local", change: "Beta", phase: "completed", completed: 1, total: 1, taskIds: [], sessionIds: [] }], tasks: [{ id: "t", featureId: "local:a", harness: "claude", task: { id: "1.1", description: "Build", completed: false }, ready: true, reasons: [], assignment: { dependsOn: [], model: "model" }, attempts: [] }], sessions: [], assignments: [], attention: [{ id: "alert", source: "local:a", targetId: "t", priority: 1, message: "Blocked" }], errors: [], sources: {} };
+test("views default to active work and filter the current view", async () => {
+  const { selectDashboardRows } = await import("../dist/dashboard-view.js");
+  assert.deepEqual(selectDashboardRows(snapshot, "Overview", filters).map(r => r.id), ["local:a"]);
+  assert.equal(selectDashboardRows(snapshot, "Features", { ...filters, includeCompleted: true }).length, 3);
+  assert.equal(selectDashboardRows(snapshot, "Features", { ...filters, harness: "claude" }).length, 2);
+  assert.equal(selectDashboardRows(snapshot, "Attention", { ...filters, search: "blocked" })[0].targetId, "t");
+  assert.deepEqual(selectDashboardRows(snapshot, "Sessions", filters), []);
+  assert.deepEqual(selectDashboardRows(snapshot, "Assignments", filters), []);
+});
+test("refresh preserves stable selection and falls back when the row disappears", async () => {
+  const { preserveSelection } = await import("../dist/dashboard-view.js");
+  assert.equal(preserveSelection([{ id: "b" }, { id: "a" }], "a"), "a");
+  assert.equal(preserveSelection([{ id: "b" }], "a"), "b");
+});
+test("activity pages bound retained entries and reset changed streams", async () => {
+  const { mergeActivity } = await import("../dist/dashboard-view.js");
+  const entries = Array.from({ length: 1000 }, (_, i) => ({ id: String(i), text: String(i) }));
+  assert.equal(mergeActivity(entries, { entries: [{ id: "1000" }], reset: false }, "newer").length, 1000);
+  assert.deepEqual(mergeActivity(entries, { entries: [{ id: "new" }], reset: true }, "newer"), [{ id: "new" }]);
+  assert.deepEqual(mergeActivity(entries, { entries: [{ id: "old" }], reset: false }, "older"), [{ id: "old" }]);
+});
+test("activity reads use collector IPC and page errors leave snapshots intact", async () => {
+  const { startDashboardCollector } = await import("../dist/dashboard-client.js");
+  const collector = startDashboardCollector({ cwd: process.cwd() }, () => {}, () => {});
+  try {
+    assert.equal(typeof collector.readActivity, "function");
+    const page = await collector.readActivity({ log: "/missing-dashboard-log", identity: { attemptId: "a", harness: "codex" }, direction: "older", mode: "raw" });
+    assert.ok(page.errors.length);
+    const abort = new AbortController(); abort.abort();
+    await assert.rejects(collector.readActivity({ log: "/missing", identity: { attemptId: "a", harness: "codex" }, direction: "older" }, abort.signal), /cancel/i);
+  } finally { await collector.close(); }
+});
+test("keys navigate details filters help and narrow terminals while collection is unresolved", async () => {
+  const { PassThrough, Writable } = await import("node:stream");
+  const React = await import("react"); const { render } = await import("ink");
+  const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+  let output = ""; const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } }); stdout.isTTY = true; stdout.columns = 40; stdout.rows = 12;
+  const lifetime = new AbortController(); let quit = false;
+  const collector = { refresh() {}, close: async () => {}, readActivity: async () => new Promise(() => {}) };
+  const instance = render(React.createElement(DashboardUi, { snapshot, collector, lifetime: lifetime.signal, quit() { quit = true; } }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const key = async value => { stdin.write(value); await new Promise(resolve => setTimeout(resolve, 35)); await instance.waitUntilRenderFlush(); };
+  try {
+    await instance.waitUntilRenderFlush(); assert.match(output, /Overview/);
+    await key("\u001b[C"); assert.match(output, /Attention/);
+    await key("\r"); assert.match(output, /details/);
+    await key("?"); assert.match(output, /Esc back/);
+    await key("\u001b"); await key("/"); await key("blocked"); await key("\r");
+    assert.match(output, /blocked/);
+    await key("\u001b"); await key("\u001b[D"); await key("/"); for (let i = 0; i < 7; i++) await key("\u007f"); await key("\r"); await key("a"); await key("\u001b[B"); await key("\u001b[B"); await key("\r"); assert.match(output, /openspec-runner.*launch/);
+    await key("q"); assert.equal(quit, true);
+  } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
+});
+test("closing collector rejects queued and active activity without waiting for snapshots", async () => {
+  const { startDashboardCollector } = await import("../dist/dashboard-client.js");
+  const collector = startDashboardCollector({ cwd: process.cwd() }, () => {}, () => {});
+  const options = { log: "/missing", identity: { attemptId: "a", harness: "codex" }, direction: "older" };
+  const requests = Array.from({ length: 9 }, () => collector.readActivity(options));
+  const settled = Promise.allSettled(requests);
+  await collector.close();
+  const results = await settled;
+  assert.equal(results.filter(r => r.status === "rejected").length, 9);
+  assert.match(results[8].reason.message, /queue is full/);
+  await assert.rejects(collector.readActivity(options), /closed/);
+});
+test("managed features stay active after tasks finish until lifecycle completion", async () => {
+  const { selectDashboardRows } = await import("../dist/dashboard-view.js");
+  const managed = { ...snapshot, features: [{ ...snapshot.features[0], completed: 1, phase: "awaiting-final-approval" }] };
+  assert.equal(selectDashboardRows(managed, "Overview", filters).length, 1);
+});
+test("session activity ignores a late response after selection changes and exposes raw follow controls", async () => {
+  const { PassThrough, Writable } = await import("node:stream");
+  const React = await import("react"); const { render } = await import("ink"); const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+  let output = ""; const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } }); stdout.isTTY = true; stdout.columns = 120; stdout.rows = 20;
+  const lifetime = new AbortController(); const pending = [];
+  const collector = { refresh() {}, close: async () => {}, readActivity(options, signal) { return new Promise(resolve => pending.push({ options, signal, resolve })); } };
+  const make = id => ({ id, featureId: "local:a", taskId: id, role: "implementation", phase: "running", process: "unknown", terminal: "unknown", log: `/logs/${id}`, attempt: { id, agent: "codex", phase: "running", path: "/worktree", terminal: { backend: "manual" }, base: "a".repeat(40) } });
+  const fixture = { ...snapshot, sessions: [make("one"), make("two")] };
+  const instance = render(React.createElement(DashboardUi, { snapshot: fixture, collector, lifetime: lifetime.signal, quit() {} }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const key = async value => { stdin.write(value); await new Promise(resolve => setTimeout(resolve, 35)); await instance.waitUntilRenderFlush(); };
+  const page = (id, text) => ({ entries: [{ version: 1, id, identity: { attemptId: id, harness: "codex" }, kind: "raw", stream: "stdout", text }], cursor: id, reset: false, errors: [] });
+  try {
+    await instance.waitUntilRenderFlush(); await key("\u001b[C"); await key("\u001b[C"); await key("\u001b[C");
+    await key("\u001b[B");
+    assert.equal(pending[0].signal.aborted, true);
+    pending[0].resolve(page("one", "obsolete session response"));
+    pending.at(-1).resolve(page("two", "current activity"));
+    await key("\r"); await key("\r"); assert.match(output, /current activity/); assert.doesNotMatch(output, /obsolete session response/);
+    await key("\u001b[A"); assert.match(output, /PAUSED/);
+    await key("f"); assert.match(output, /following/);
+    await key("w"); assert.equal(pending.at(-1).options.mode, "raw"); assert.equal(pending.at(-1).options.cursor, undefined);
+    pending.at(-1).resolve(page("two", "raw payload")); await key("x"); assert.match(output, /raw payload/);
+  } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
+});
+
+
+test("collector metadata records missing worktree and valid capacity and harness", async t => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs"); const { join } = await import("node:path"); const { tmpdir } = await import("node:os"); const { execFileSync } = await import("node:child_process"); const { loadPlan } = await import("../dist/plan.js"); const { repository } = await import("../dist/system.js");
+  const root = mkdtempSync(join(tmpdir(), "dashboard-ui-metadata-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" }); mkdirSync(join(root, "openspec/changes/demo"), { recursive: true });
+  writeFileSync(join(root, "openspec/runner.yaml"), "version: 1\n"); writeFileSync(join(root, "openspec/changes/demo/tasks.md"), "- [ ] 1.1 First\n"); writeFileSync(join(root, "openspec/changes/demo/execution.yaml"), "version: 1\ntasks:\n  1.1: {}\n");
+  const repo = repository(root); mkdirSync(repo.stateDir, { recursive: true });
+  writeFileSync(join(repo.stateDir, "demo.json"), JSON.stringify({ version: 1, change: "demo", fingerprint: loadPlan(root, "demo").fingerprint, integration: { path: root, branch: "main", base: "base" }, head: "head", baseline: [], attempts: [{ id: "missing", task: "1.1", description: "First", fingerprint: "f", settings: { model: "m", reasoningEffort: "high" }, phase: "running", terminal: {}, path: join(root, "missing"), branch: "a", base: "base" }] }));
+  const { collectDashboard } = await import("../dist/dashboard-reader.js"); const result = collectDashboard({ cwd: root });
+  assert.equal(result.sessions[0].worktreeAvailable, false);
+  assert.equal(result.repository.maxParallel, 4); assert.equal(result.tasks[0].harness, "codex");
+});

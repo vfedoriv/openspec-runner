@@ -26,10 +26,13 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
+    "ink": "8.0.0",
+    "react": "19.3.0",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "19.3.0",
     "typescript": "^5.9.3"
   }
 }

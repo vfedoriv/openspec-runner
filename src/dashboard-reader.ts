@@ -1,10 +1,11 @@
+import { parse } from "yaml";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { repository } from "./system.js";
 import { Runner, type TaskAttempt } from "./runner.js";
 import { blocking, featureActive, implementationGate, readFeature, type FeatureJob } from "./feature-state.js";
 import { readComponentBinding } from "./component-state.js";
-import { loadPlan, tasksFrom } from "./plan.js";
+import { configFrom, loadPlan, tasksFrom } from "./plan.js";
 import { processStart } from "./processes.js";
 import type { DashboardOptions, DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
 import { collectCoordination } from "./dashboard-coordination.js";
@@ -25,7 +26,7 @@ function session(featureId: string, attempt: TaskAttempt | FeatureJob): SessionS
     attempt, phase: attempt.phase, reportOutcome: attempt.report?.outcome,
     process: observation,
     terminal: terminal?.closed || (!terminal?.pane && !terminal?.orca) ? "unavailable" : "unknown",
-    log: attempt.worker?.log,
+    log: attempt.worker?.log, worktreeAvailable: existsSync(attempt.path),
   };
 }
 
@@ -36,6 +37,11 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
     version: 1, collectedAt, repository: { ...repo, currentWorktree: repo.root },
     features: [], tasks: [], sessions: [], assignments: [], attention: [], errors: [], sources: {},
   };
+  const configPath = resolve(repo.root, "openspec/runner.yaml");
+  if (existsSync(configPath)) {
+    try { snapshot.repository.maxParallel = configFrom(parse(readFileSync(configPath, "utf8"))).maxParallel; }
+    catch (error) { snapshot.errors.push({ source: "configuration", message: error instanceof Error ? error.message : String(error), stale: false }); }
+  }
   const changes = new Set<string>();
   const discover = (directory: string, directories = false) => {
     if (!existsSync(directory)) return;
@@ -60,6 +66,7 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
       let plan: ReturnType<typeof loadPlan> | undefined;
       if (existsSync(resolve(directory, "tasks.md")) && existsSync(resolve(directory, "execution.yaml"))) plan = loadPlan(repo.root, change);
       else if (!state && !feature && !binding) throw new Error("Planning artifacts are missing tasks.md or execution.yaml");
+      if (plan) snapshot.repository.maxParallel = plan.config.maxParallel;
       const globalReasons: string[] = [];
       if (plan && state && state.fingerprint !== plan.fingerprint) globalReasons.push("Planning drift: artifacts changed; reconcile required");
       if (state?.transaction || feature?.transaction) globalReasons.push("Interrupted integration transaction requires recovery");
@@ -90,7 +97,7 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
         else if (attempts.length) reasons.push(`Existing attempt is ${attempts.at(-1)!.phase}; select explicit retry when eligible`);
         for (const dependency of assignment?.dependsOn ?? []) if (!(state ? runner.satisfied(state, dependency) : tasks.find(t => t.id === dependency)?.completed)) reasons.push(`Dependency ${dependency} is not integrated or satisfied`);
         const authoritative = status && "tasks" in status ? status.tasks?.find(t => t.id === task.id)?.ready : false;
-        return { id: `${source}:task:${task.id}`, featureId: source, task, assignment, ready: !!authoritative && !reasons.length, reasons, attempts };
+        return { id: `${source}:task:${task.id}`, featureId: source, harness: plan?.agent, task, assignment, ready: !!authoritative && !reasons.length, reasons, attempts };
       });
       const sessions = [...(state?.attempts ?? []), ...(feature?.jobs ?? [])].map(a => session(source, a));
       for (const current of sessions) {

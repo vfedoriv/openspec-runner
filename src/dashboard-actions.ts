@@ -12,7 +12,7 @@ export type PreviewInput = { taskIds?: string[]; model?: string; effort?: string
 export function focusReason(session: SessionSummary): string | undefined {
   const a = session.attempt;
   if (a.cleaned || a.worker?.exitedAt || a.terminal.closed || a.report || ["completed", "integrated", "failed", "blocked", "stale"].includes(a.phase)) return "Worker finished; inspect retained evidence";
-  if (!existsSync(a.path)) return "Saved worktree is missing";
+  if (session.worktreeAvailable !== true) return session.worktreeAvailable === false ? "Saved worktree is missing" : "Saved worktree availability is unknown; refresh first";
   if (a.phase === "manual") return "Manual session; inspect saved details";
   if (!a.session) return "Ambiguous startup without a registered session";
   if (!a.terminal.pane) return "No existing saved terminal";
@@ -28,7 +28,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   const actions: DashboardAction[] = [{ id: `${targetId}:inspect`, label: "Inspect evidence", kind: "inspect", available: true }];
   const add = (suffix: string, label: string, kind: DashboardAction["kind"], reason?: string, argv?: string[]) => actions.push({ id: `${targetId}:${suffix}`, label, kind, available: !reason, reason, argv });
   if (session) {
-    add("diff", "View saved attempt diff", "diff", !existsSync(session.attempt.path) ? "Saved worktree is missing" : !/^[a-f0-9]{40,64}$/.test(session.attempt.base) ? "Saved base is not a commit identity" : undefined);
+    add("diff", "View saved attempt diff", "diff", session.worktreeAvailable !== true ? session.worktreeAvailable === false ? "Saved worktree is missing" : "Saved worktree availability is unknown; refresh first" : !/^[a-f0-9]{40,64}$/.test(session.attempt.base) ? "Saved base is not a commit identity" : undefined);
     add("focus", "Focus saved terminal", "focus", focusReason(session));
     actions.at(-1)!.sessionId = session.id;
   }
