@@ -17,7 +17,7 @@
 - Refresh every two seconds using one asynchronous collector process at a time.
 - Retain the latest 1,000 entries per selected session in memory and read older entries in bounded pages.
 - Reading never acquires runner locks, migrates, recovers, writes state, runs verification checks, fetches or pulls. Activity is not lifecycle authority.
-- Workflow mutations are displayed commands only. Dry-run execution requires explicit selection. Launch/retry requires exact tasks; unmanaged inherited settings require explicit model/effort; plan approval requires an existing settings file.
+- Workflow mutations are displayed commands only. Audited dry-run execution requires explicit selection. Launch/retry requires exact tasks; unmanaged inherited settings require explicit model and any required effort. Core approval/archive previews execute validation or configured checks, so dashboard exposes them as display-only commands with a concrete unavailable-preview reason.
 - Focus existing saved terminals only. Never create or resume sessions, including when attachment returns a command.
 - Sidecar failures must not change worker success, ownership, report acceptance or integration eligibility.
 - Keep Node >=22.13. Pin compatible Ink/React versions; TSX uses react-jsx and src/**/*.tsx inclusion. Snapshot paths never import UI dependencies.
@@ -58,7 +58,7 @@ type FeatureSummary = {
 };
 type TaskSummary = {
   id: string; featureId: string; task: Task; assignment?: Assignment;
-  ready: boolean; reasons: string[]; attempts: TaskAttempt[];
+  ready: boolean; reasons: string[]; attempts: TaskAttempt[]; harness?: string;
 };
 type SessionSummary = {
   id: string; featureId: string; taskId?: string; role: "implementation" | "review" | "repair";
@@ -73,7 +73,7 @@ type AssignmentSummary = {
 };
 type DashboardSnapshot = {
   version: 1; collectedAt: string;
-  repository: { root: string; common: string; stateDir: string; identity?: string; currentWorktree: string };
+  repository: { root: string; common: string; stateDir: string; identity?: string; currentWorktree: string; maxParallel?: number };
   features: FeatureSummary[]; tasks: TaskSummary[]; sessions: SessionSummary[];
   assignments: AssignmentSummary[]; attention: AttentionItem[]; errors: SourceError[];
   sources: Record<string, { collectedAt: string; stale: boolean }>;
@@ -191,17 +191,19 @@ runDashboardAction(options:{
 
 Only inspect/diff/focus/preview execute. Command-kind displays argv with existing platform quoting. Revalidate exact selected attempt before focus; historical selection must not focus a different latest attempt. Preserve Runner.attach finished/ambiguous checks, but adapter-focus only recorded existing terminal, otherwise details. Never run returned initial/resume command. Review/repair follows same policy. No create/start/resume/mutation method in action runner.
 
-Explicit preview allowlist: launch <change> --tasks exact IDs; retry <change> <task> with exactly one selected task; feature approve with existing --file, review/fix/archive, final approve; all --dry-run --json. Display other mutation commands with unavailable-preview explanations. Unmanaged inherited settings require model/effort inputs; flags --default-model/--default-effort; managed settings stay approval-owned. Child CLI argv without shell, async timeout 30s, output max 1 MiB, AbortSignal cleanup, stdout/stderr separate. Do not execute arbitrary action argv; independently validate allowlist.
+Executable preview allowlist: audited launch <change> --tasks exact IDs; retry <change> <task> with exactly one selected task; feature review/fix; all --dry-run --json. Plan/final approval and archive previews are unavailable because current core methods run validation/configured checks; provide display-only CLI commands and explicit reasons, without changing core behavior. Unmanaged inherited settings require explicit model and any required effort; fully specified assignments need no redundant overrides, Claude effort remains optional/capability-dependent and Codex effort must resolve. Managed settings stay approval-owned. Child CLI argv without shell, async timeout 30s, output max 1 MiB, AbortSignal cleanup, stdout/stderr separate. Do not execute arbitrary action argv; independently validate allowlist.
 
-- [ ] RED: "actions require explicit selection and preview inputs": missing IDs/model/effort/file unavailable, all executable preview argv dry-run/json, mutation-kind cannot execute.
-- [ ] RED: "focus uses exact existing saved terminal": finished/missing/changed/ambiguous and manual sessions yield details; review/repair never creates/resumes.
-- [ ] RED: "preview cancellation timeout and failure preserve state": slow child responsive/cancellable; byte/ref/runtime audit for all allowed previews.
-- [ ] GREEN: Implement helpers using existing CLI preview semantics; bounded evidence/diff reads and safe terminal adapter calls.
-- [ ] CHECK: dashboard-actions and existing attach/preview tests, pnpm test; fresh review/commit.
+Saved-terminal focus runs through a bounded ephemeral async child using the existing adapter argument/context construction; it must return promptly and cancel the child/backend process group it created, never a stored worker PID or unrelated service. This adds no persistent service and does not use Runner.attach or execute returned worker commands.
+
+- [x] RED: "actions require explicit selection and preview inputs": missing IDs/model/effort/file unavailable, all executable preview argv dry-run/json, mutation-kind cannot execute.
+- [x] RED: "focus uses exact existing saved terminal": finished/missing/changed/ambiguous and manual sessions yield details; review/repair never creates/resumes.
+- [x] RED: "preview cancellation timeout and failure preserve state": slow child responsive/cancellable; byte/ref/runtime audit for all allowed previews.
+- [x] GREEN: Implement helpers using existing CLI preview semantics; bounded evidence/diff reads and safe terminal adapter calls.
+- [x] CHECK: dashboard-actions and existing attach/preview tests, pnpm test; fresh review/commit.
 
 ### Task 6: Lazy Ink views and readable activity
 
-**Files:** Create src/dashboard-ui.tsx, src/dashboard-view.ts, test/dashboard-ui.test.mjs. Modify src/dashboard-cli.ts, src/dashboard-client.ts, src/dashboard-collector.ts and src/dashboard-types.ts for UI wiring and activity requests through the existing collector. Modify package.json, pnpm-lock.yaml, tsconfig.json for authorized Ink 8.0.0, React 19.3.0 and dev dependency @types/react 19.3.0, plus TSX. Use Ink rendering with controlled streams and the already installed Linux script utility for terminal checks; do not add a test renderer or native PTY package without further user authorization.
+**Files:** Create src/dashboard-ui.tsx, src/dashboard-view.ts, test/dashboard-ui.test.mjs. Modify src/dashboard-cli.ts, src/dashboard-client.ts, src/dashboard-collector.ts and src/dashboard-types.ts for UI wiring and activity requests through the existing collector. Task 6 owns narrow src/dashboard-reader.ts additions for optional task.harness (known plan agent) and repository.maxParallel (valid local runner configuration), so prelaunch harness labels and slot totals need no UI-thread filesystem reads. Unknown/invalid configuration stays unknown with source errors; never invent Codex or a slot limit. Modify package.json, pnpm-lock.yaml, tsconfig.json for authorized Ink 8.0.0, React 19.3.0 and dev dependency @types/react 19.3.0, plus TSX. Use Ink rendering with controlled streams and the already installed Linux script utility for terminal checks; do not add a test renderer or native PTY package without further user authorization.
 
 **Consumes:** startDashboardCollector(options:DashboardOptions,receive:(snapshot:DashboardSnapshot)=>void,fail:(message:string)=>void):{refresh():void;close():Promise<void>}; actionsFor(snapshot:DashboardSnapshot,targetId:string):DashboardAction[]; runDashboardAction({snapshot,action,input?,signal}):Promise<{text:string;command?:string[]}> with Task 5 DashboardAction/PreviewInput. ActivityIdentity={attemptId:string;harness:string}; readActivityPage({log:string,sidecar?:string,identity:ActivityIdentity,cursor?:string,direction:"older"|"newer",limit?:number}):ActivityPage, with ActivityEntry/ActivityPage from Task 3, including reset/errors and 200-entry/256KiB caps.
 
