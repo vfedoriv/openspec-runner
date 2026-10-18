@@ -6,6 +6,7 @@ import { runDashboardAction } from "./dashboard-action-runner.js";
 import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
+import { dashboardFrame, dashboardLayout, type DashboardLine } from "./dashboard-layout.js";
 type Collector = ReturnType<typeof startDashboardCollector>;
 export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { snapshot?: DashboardSnapshot; collector: Collector; failure?: string; quit(): void; lifetime: AbortSignal }) {
   const { columns, rows: height } = useWindowSize();
@@ -26,6 +27,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const chosen = preserveSelection(list, selected), target = list.find(r => r.id === chosen)?.targetId;
   const session = snapshot?.sessions.find(s => s.id === target);
   const visibleEntries = filterActivity(entries, activitySearch);
+  const error = failure ?? snapshot?.errors.map(e => `${e.stale ? "STALE" : "ERROR"} ${e.source}: ${e.message}`).join("; ") ?? "";
+  const layout = dashboardLayout({ columns, rows: height, error, table: view === "Features" && pane === "list" && !help && !menu });
   useEffect(() => { setSelected(chosen); }, [chosen]);
   useEffect(() => { setOffset(0); setOutput(""); setMenu(undefined); actionController.current?.abort(); actionController.current = undefined; setBusy(false); }, [target, tab]);
   const load = async (direction: "older" | "newer", initial = false) => {
@@ -104,7 +107,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (input === "x") {
       const next = !expanded; expandedRef.current = next; changeFollowing(false); setExpanded(next);
       const index = Math.max(0, visibleEntries.length - 1 - activityOffset);
-      setActivityOffset(next ? activityLineCount(visibleEntries.slice(index + 1), true) + Math.max(0, activityLineCount(visibleEntries[index] ? [visibleEntries[index]] : [], true) - Math.max(3, height - 7)) : 0);
+      setActivityOffset(next ? activityLineCount(visibleEntries.slice(index + 1), true) + Math.max(0, activityLineCount(visibleEntries[index] ? [visibleEntries[index]] : [], true) - layout.capacity) : 0);
       return;
     }
     if (input === "a" && snapshot && target) { setMenu(actionsFor(snapshot, target)); setActionIndex(0); return; }
@@ -123,10 +126,10 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       else setOffset(o => Math.max(0, o + delta));
     }
   });
-  const capacity = Math.max(3, height - 7), width = Math.max(15, columns - 2), narrow = columns < 70;
-  let lines: string[];
+  const { capacity, compact } = layout;
+  let lines: DashboardLine[];
   if (help) lines = ["←/→ views · ↑/↓ selection/scroll · Tab pane", "Enter details · Esc back/cancel · / search", "s status · h harness · o owner (empty clears)", "c completed · v older attempts · z sort", "a actions (Enter executes explicit preview)", "w raw · p pause · f resume · b older page", "x expand activity · r refresh · q exit", "Activity outcomes do not establish completion"];
-  else if (menu) lines = menu.slice(Math.max(0, actionIndex - capacity + 1), actionIndex + capacity).map((a, i) => `${a.id === menu[actionIndex]?.id ? "›" : " "} ${a.label}${a.available ? "" : ` — unavailable: ${a.reason}`}`);
+  else if (menu) lines = menu.slice(Math.max(0, actionIndex - capacity + 1), actionIndex + capacity).map(a => `${a.id === menu[actionIndex]?.id ? "▸" : " "} ${a.label}${a.available ? "" : ` — unavailable: ${a.reason}`}`);
   else if (pane === "activity") {
     lines = activityViewport(visibleEntries, expanded, activityOffset, capacity);
     if (!lines.length) lines = [session?.log ? "No activity available" : "No recorded log for this session"];
@@ -134,21 +137,30 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   } else if (pane === "details") lines = (output ? safeText(output).split("\n") : snapshot && target ? detailLines(snapshot, target) : ["No selected evidence"]).slice(offset, offset + capacity);
   else {
     const index = Math.max(0, list.findIndex(r => r.id === chosen)), start = Math.max(0, index - capacity + 1);
-    lines = list.slice(start, start + capacity).map(r => `${r.id === chosen ? "›" : " "} ${r.label}`);
+    lines = list.slice(start, start + capacity).map(r => {
+      const marker = r.id === chosen ? "▸" : " ";
+      if (!layout.table) return `${marker} ${r.label}`;
+      const task = snapshot?.tasks.find(t => t.id === r.targetId);
+      if (task) return [`${marker} ${task.task.id}`, task.task.description, task.ready ? "Ready" : task.reasons.join("; ") || "not ready"];
+      const feature = snapshot?.features.find(f => f.id === r.targetId);
+      return [marker, feature?.change ?? r.targetId, `${feature?.phase ?? "unmanaged"} · ${feature?.completed}/${feature?.total} ${feature?.origin === "shared" ? "components delivered" : "tasks satisfied"}`];
+    });
     if (!lines.length) lines = [snapshot ? "No matching work" : "Collecting… keyboard remains available"];
   }
   const localFeatures = snapshot?.features.filter(feature => feature.origin === "local") ?? [];
   const satisfiedTasks = localFeatures.reduce((count, feature) => count + feature.completed, 0);
   const totalTasks = localFeatures.reduce((count, feature) => count + feature.total, 0);
   const slots = snapshot ? `${snapshot.sessions.filter(s => ["preparing", "running", "launching", "manual"].includes(s.phase)).length}/${snapshot.repository.maxParallel ?? "unknown"}` : "unknown";
+  const frame = dashboardFrame({
+    columns, rows: height, table: layout.table, error,
+    title: compact ? `${view} / ${pane} · ←/→` : dashboardViews.map((v, i) => i === tab ? `[${v}]` : v).join(" │ "),
+    status: `Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`,
+    filters: `/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`,
+    lines,
+    footer: [edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions", "s status h harness o owner c completed v older z sort · ←→ views"],
+  });
   return <Box flexDirection="column" height={height} width={columns}>
-    <Text color="cyan">{safeText(narrow ? `${view} / ${pane} · ←/→` : dashboardViews.map((v, i) => i === tab ? `[${v}]` : v).join("  ")).slice(0, width)}</Text>
-    <Text>{safeText(`Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`).slice(0, width)}</Text>
-    <Text color="yellow">{safeText(failure ?? snapshot?.errors.map(e => `${e.stale ? "STALE" : "ERROR"} ${e.source}: ${e.message}`).join("; ") ?? "").slice(0, width)}</Text>
-    <Text dimColor>{safeText(`/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`).slice(0, width)}</Text>
-    {lines.slice(0, capacity).map((line, i) => <Text key={i} wrap="truncate">{safeText(line).slice(0, width)}</Text>)}
-    <Text color="green">{edit ? safeText(`${edit}: ${text} · Enter apply/Esc cancel`).slice(0, width) : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions"}</Text>
-    <Text dimColor>{safeText(narrow ? "s/h/o filters c/v toggles z sort" : "s status h harness o owner c completed v older z sort · ←→ views").slice(0, width)}</Text>
+    {frame.map((line, index) => <Text key={index} wrap="truncate" color={index === 1 ? "cyan" : error && index === (compact ? 3 : 4) ? "yellow" : index === frame.length - (compact ? 2 : 3) ? "green" : undefined} dimColor={!compact && index === frame.length - 2}>{line}</Text>)}
   </Box>;
 }
 export async function runDashboardUi(options: DashboardOptions): Promise<void> {

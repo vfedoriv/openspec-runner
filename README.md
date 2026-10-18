@@ -60,7 +60,9 @@ use the `$skill-name` mention syntax.
 
 The [documentation index](docs/README.md) links the user guides, references, and
 workflow diagrams. Start with the [user guide](docs/user-guide.md) for the current
-single-repository CLI. The [team workflow guide](docs/team-workflow.md) describes
+single-repository CLI. The [dashboard guide](docs/dashboard-guide.md) explains how
+to monitor work, inspect session activity, and use dashboard actions.
+The [team workflow guide](docs/team-workflow.md) describes
 the roles, decisions, and process for work across repositories and machines.
 The [team operator reference](docs/team-workflow-reference.md) contains the direct
 CLI commands, input schemas, Git handoffs, and detailed recovery procedures.
@@ -1620,6 +1622,9 @@ Adapter references: [Codex CLI](https://learn.chatgpt.com/docs/developer-command
 [Herdr persistence](https://herdr.dev/docs/persistence-remote/).
 
 ## Console dashboard
+
+See the [dashboard guide](docs/dashboard-guide.md) for a step-by-step walkthrough,
+keyboard controls, session activity, and troubleshooting.
 
 Run the dashboard from a repository on Linux/macOS or in WSL on Windows. Native
 Windows runner execution remains unsupported. Node.js 22.13 or newer is required.

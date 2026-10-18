@@ -5,6 +5,7 @@ Start with the guide for the workflow you want to use.
 | Guide | Audience | Availability |
 |---|---|---|
 | [User guide](user-guide.md) | People installing the runner and executing changes in one repository | Current CLI |
+| [Dashboard guide](dashboard-guide.md) | People monitoring features, sessions, and shared assignments in the terminal | Current CLI |
 | [Team workflow](team-workflow.md) | Users, coordinators, and component owners | Roles, approval steps, process diagrams, and status explanations |
 | [Team operator reference](team-workflow-reference.md) | Agents and operators running the CLI directly | Command sequences, checked schemas, Git handoffs, and detailed recovery |
 | [Shared Store design](superpowers/specs/2026-10-04-store-linked-components-design.md) | People reviewing or implementing the team extension | Design for review |

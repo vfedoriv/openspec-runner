@@ -162,7 +162,8 @@ test("expanded activity can scroll to lines beyond one terminal viewport", async
   ui.requests[0].resolve(ui.page([Array.from({ length: 14 }, (_, i) => `expanded-line-${i}`).join("\n")], "tail")); await ui.flush();
   await ui.key("x");
   let inspected = "";
-  for (let i = 0; i < 10; i++) { await ui.key("\u001b[B"); inspected += ui.output; }
+  // Borders leave fewer visible rows; scroll far enough to inspect the whole record.
+  for (let i = 0; i < 14; i++) { await ui.key("\u001b[B"); inspected += ui.output; }
   assert.match(inspected, /expanded-line-13/);
 });
 test("empty older pages retain their boundary and currently inspected history", async t => {
