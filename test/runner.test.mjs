@@ -56,8 +56,12 @@ function executable(path, body) {
 }
 function fixture(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), "runner tests "));
+  const previousOrcaTerminal = process.env.ORCA_TERMINAL_HANDLE;
+  delete process.env.ORCA_TERMINAL_HANDLE;
   t.after(() => {
     process.env.PATH = basePath;
+    if (previousOrcaTerminal === undefined) delete process.env.ORCA_TERMINAL_HANDLE;
+    else process.env.ORCA_TERMINAL_HANDLE = previousOrcaTerminal;
     delete process.env.HERDR_ENV;
     delete process.env.HERDR_SESSION;
     delete process.env.FAKE_HERDR_FAIL;
@@ -509,7 +513,7 @@ test("Herdr persists partial creation and prompt-submission failures", (t) => {
   assert.equal(prompted.terminal.phase, "starting");
   assert.match(prompted.error, /herdr pane/);
 });
-test("installer owns exactly three skills and preserves existing OpenSpec skills/config", (t) => {
+test("installer owns exactly six skills and preserves existing OpenSpec skills/config", (t) => {
   const { root } = fixture(t);
   mkdirSync(join(root, ".agents/skills/openspec-apply"), { recursive: true });
   writeFileSync(
@@ -518,7 +522,7 @@ test("installer owns exactly three skills and preserves existing OpenSpec skills
   );
   const before = readFileSync(join(root, "openspec/runner.yaml"), "utf8");
   const result = init(root);
-  assert.equal(result.skills.length, 3);
+  assert.equal(result.skills.length, 6);
   assert.equal(
     readFileSync(join(root, ".agents/skills/openspec-apply/SKILL.md"), "utf8"),
     "original",
@@ -528,11 +532,14 @@ test("installer owns exactly three skills and preserves existing OpenSpec skills
     before,
   );
   const all = init(root, "all");
-  assert.equal(all.skills.length, 6);
+  assert.equal(all.skills.length, 12);
   for (const name of [
     "openspec-runner-plan",
     "openspec-runner-coordinate",
+    "openspec-runner-component",
     "openspec-runner-implement",
+    "openspec-runner-review",
+    "openspec-runner-repair",
   ]) {
     const codex = readFileSync(join(root, ".agents/skills", name, "SKILL.md"), "utf8"),
       claude = readFileSync(join(root, ".claude/skills", name, "SKILL.md"), "utf8");

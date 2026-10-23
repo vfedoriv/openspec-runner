@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { git, run, attempt } from "./system.js";
+import { git, gitRaw, run, attempt } from "./system.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import type { Settings } from "./codex.js";
 import { codexArgs } from "./codex.js";
@@ -37,7 +37,7 @@ export function terminalAdapter(root: string, selected: "auto" | "manual" | "her
 export function worktrees(
   root: string,
 ): Array<{ branch: string; path: string; head: string; locked?: string; prunable?: string }> {
-  return git(root, "worktree", "list", "--porcelain", "-z")
+  return gitRaw(root, "worktree", "list", "--porcelain", "-z")
     .split("\0\0")
     .filter(Boolean)
     .map((block) => {

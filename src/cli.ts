@@ -3,6 +3,8 @@ import { mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Runner } from "./runner.js";
+import { Feature, type FeatureSettings } from "./feature.js";
+import { readFeature } from "./feature-state.js";
 import { loadPlan, readiness, configFrom } from "./plan.js";
 import { json, repository } from "./system.js";
 import { sessionSettings } from "./codex.js";
@@ -10,11 +12,25 @@ import { getHarness, harnessIds, hasHarness, planningRules } from "./harnesses/r
 import type { HarnessSettings } from "./harnesses/types.js";
 import { createInterface } from "node:readline/promises";
 import { parse } from "yaml";
-const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
+import { dashboardCommand } from "./dashboard-cli.js";
+import { linkedCommand, linkedHelp } from "./linked-cli.js";
+export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
 models [--agent ID] [--json]   Query the selected harness model capabilities
 planning-rules --agent ID      Show versioned model/effort planning guidance
+feature <action> <change>      Manage an opt-in feature lifecycle
+  start | adopt | status      Register or inspect a feature
+  approve --file SETTINGS --dry-run   Preview a committed plan and resolved agents
+  approve --file SETTINGS --confirm TOKEN   Record user plan approval
+  review | fix [--dry-run] [--retry]  Run a fresh reviewer or bounded repair job
+  integrate (--attempt ID | --continue | --abort)  Integrate or recover a repair
+  approve --final --dry-run    Preview final result and advisory findings
+  approve --final --confirm TOKEN    Record final user approval
+  archive [--dry-run]          Archive, verify, and complete the feature
+  worker | begin | report --attempt ID   Supervised feature job protocol
+  recover --attempt ID        Record a provably stopped/interrupted job; never redispatch
+dashboard [--change NAME] [--store PATH --map FILE] [--once] [--json]
 validate <change> [--json]      Validate task metadata and OpenSpec readiness
 status <change> [--json]        Inspect dependencies, attempts, and session locations
 launch <change> --tasks IDS     Launch exactly these comma-separated task numbers
@@ -37,6 +53,7 @@ reconcile <change>              Adopt committed planning edits; invalidate old r
 begin <change> <task> --attempt ID [--session ID]
 report <change> <task> --attempt ID --file PATH
 
+${linkedHelp}
 Run coordination inside Herdr or stablyai/orca for persistent automatic sessions. Otherwise launch
 prints commands to run once in your terminals. Delivery and archival are explicit.
 `;
@@ -69,7 +86,10 @@ export function init(
   const names = [
     "openspec-runner-plan",
     "openspec-runner-coordinate",
+    "openspec-runner-component",
     "openspec-runner-implement",
+    "openspec-runner-review",
+    "openspec-runner-repair",
   ];
   const targets = selected === "all" ? ["codex", "claude"] : [selected];
   const skills: string[] = [];
@@ -90,6 +110,13 @@ export function init(
 export async function main(args = process.argv.slice(2)) {
   let jsonOutput = args.includes("--json");
   try {
+    if (args[0] === "dashboard") { await dashboardCommand(args.slice(1)); return; }
+    if (["coordination", "component"].includes(args[0])) {
+      const result = await linkedCommand(args);
+      if (args.includes("--help") || args.includes("-h")) console.log(linkedHelp);
+      else console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     const { values: v, positionals: p } = parseArgs({
       args,
       allowPositionals: true,
@@ -110,6 +137,8 @@ export async function main(args = process.argv.slice(2)) {
         file: { type: "string" },
         all: { type: "boolean" },
         confirm: { type: "string" },
+        final: { type: "boolean" },
+        retry: { type: "boolean" },
       },
     });
     const [command, change, task] = p;
@@ -126,11 +155,56 @@ export async function main(args = process.argv.slice(2)) {
     if (v.agent !== undefined && ["worker", "begin", "report"].includes(command))
       throw new Error("Worker lifecycle commands use the saved batch harness; do not pass --agent");
     let result: unknown;
-    if ((v.all || v.confirm) && command !== "cleanup") throw new Error("--all and --confirm require cleanup");
-    if (v["dry-run"] && !["cleanup", "launch", "retry"].includes(command)) throw new Error("--dry-run is supported only for cleanup and launch/retry");
+    if (v.all && command !== "cleanup") throw new Error("--all requires cleanup");
+    if (v.confirm && !["cleanup", "feature"].includes(command)) throw new Error("--confirm requires cleanup or feature approve");
+    if (v["dry-run"] && !["cleanup", "launch", "retry", "feature"].includes(command)) throw new Error("--dry-run is supported only for cleanup, launch/retry and feature previews");
+    if ((v.final || v.retry) && command !== "feature") throw new Error("--final and --retry require feature");
     if (v["default-agent"] !== undefined && command !== "init")
       throw new Error("--default-agent is supported only by init");
-    if (command === "init") result = init(process.cwd(), (v.agent as "codex" | "claude" | "all" | undefined) ?? "codex", v["default-agent"]);
+    if (command === "feature") {
+      const action = change, name = task, feature = new Feature();
+      if (!action || !name || p.length !== 3) throw new Error("Use feature <action> <change>");
+      if (v.agent || v["default-model"] || v["default-effort"] || v.base || v.tasks)
+        throw new Error("Feature agents/base are frozen by plan approval; use --file SETTINGS with feature approve");
+      if (v["dry-run"] && !["approve", "review", "fix", "archive"].includes(action))
+        throw new Error("This feature action does not support --dry-run");
+      if (v.confirm && (action !== "approve" || v["dry-run"])) throw new Error("--confirm requires feature approve without --dry-run");
+      if (v.final && action !== "approve") throw new Error("--final requires feature approve");
+      if (v.retry && !["review", "fix"].includes(action)) throw new Error("--retry requires feature review/fix");
+      if ((v.continue || v.abort) && (action !== "integrate" || v.continue && v.abort || v.attempt))
+        throw new Error("Use feature integrate with --attempt, --continue, or --abort");
+      switch (action) {
+        case "start": case "adopt": result = feature.start(name, action === "adopt"); break;
+        case "status": result = feature.status(name); break;
+        case "approve":
+          if (v.final) result = v["dry-run"] ? feature.finalPreview(name) : feature.approveFinal(name, v.confirm ?? "");
+          else {
+            if (!v.file) throw new Error("Plan approval requires --file SETTINGS containing implementation, review, and repair settings");
+            const input = json<FeatureSettings>(v.file);
+            result = v["dry-run"] ? feature.planPreview(name, input) : feature.approve(name, input, v.confirm ?? "");
+          }
+          break;
+        case "review": case "fix": {
+          const role = action === "review" ? "review" : "repair";
+          result = v["dry-run"] ? feature.jobPreview(name, role, v.retry) : feature.launch(name, role, v.retry);
+          break;
+        }
+        case "integrate": result = feature.integrate(name, v.attempt, v.continue ? "continue" : v.abort ? "abort" : undefined); break;
+        case "archive": result = v["dry-run"] ? feature.archivePreview(name) : feature.archive(name); break;
+        case "worker": case "begin": case "report": case "recover":
+          if (!v.attempt) throw new Error("Feature job protocol requires --attempt");
+          if (action === "worker") result = await feature.worker(name, v.attempt);
+          else if (action === "recover") result = feature.recover(name, v.attempt);
+          else if (action === "begin") result = feature.begin(name, v.attempt, v.session);
+          else {
+            if (!v.file) throw new Error("Feature report requires --file");
+            result = feature.report(name, v.attempt, json(v.file));
+          }
+          break;
+        default: throw new Error(`Unknown feature action: ${action}`);
+      }
+    }
+    else if (command === "init") result = init(process.cwd(), (v.agent as "codex" | "claude" | "all" | undefined) ?? "codex", v["default-agent"]);
     else if (command === "models") {
       let configuredVersion: 1 | 2 | undefined;
       let defaultAgent: string | undefined;
@@ -187,7 +261,7 @@ export async function main(args = process.argv.slice(2)) {
           break;
         }
         case "status":
-          result = r.status(change);
+          result = readFeature(r.repo.stateDir, change) ? new Feature().status(change) : r.status(change);
           break;
         case "launch":
         case "retry": {
@@ -199,8 +273,13 @@ export async function main(args = process.argv.slice(2)) {
           if (selected.some((x) => !x))
             throw new Error("Specify a task for retry");
           let inherited: HarnessSettings | undefined;
+          const managed = readFeature(r.repo.stateDir, change);
+          if (managed && (v.agent || v["default-model"] || v["default-effort"] || v.base))
+            throw new Error("Managed execution uses approved settings and base; revise plan approval to change them");
           const configured = v["default-model"] ?? agentConfig?.defaultModel ?? plan.config.defaultModel;
-          if (configured !== "session")
+          if (managed) {
+            // Runner.preview uses the fully resolved per-task approval snapshot.
+          } else if (configured !== "session")
             inherited = {
               model: configured,
               ...(selectedAgent === "codex" && v["default-effort"] ? { reasoningEffort: v["default-effort"] } : {}),

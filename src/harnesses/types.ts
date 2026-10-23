@@ -43,6 +43,7 @@ export interface HarnessCapabilities {
     modelDiscovery: boolean;
     exactResume: boolean;
     effort: boolean;
+    structuredActivity?: boolean;
   };
 }
 
@@ -88,6 +89,7 @@ export interface HarnessAdapter {
     prompt: string,
     session: string,
   ): Invocation;
+  activityInvocation?(invocation: Invocation, capabilities: HarnessCapabilities): Invocation;
   resumeInvocation(
     settings: HarnessSettings,
     cwd: string,

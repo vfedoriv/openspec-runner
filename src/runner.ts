@@ -32,6 +32,7 @@ import {
 } from "./plan.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import { getHarness } from "./harnesses/registry.js";
+import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt } from "./feature-state.js";
 import {
   createWorktree,
   startTerminal,
@@ -195,11 +196,12 @@ export class Runner {
       `${current}${prefix}# OpenSpec runner runtime worktrees\n${marker}\n`,
     );
   }
-  private worktreePath(...parts: string[]) {
+  private worktreePath(change: string, ...parts: string[]) {
     // Claude Code protects .git paths from automatic edits. Keep durable
     // runner state in repo.common, but put agent workspaces and report inputs
     // in a sibling runtime directory inside the repository root.
-    return resolve(this.repo.root, ".openspec-runner", "worktrees", ...parts);
+    const local = readFeature(this.repo.stateDir, change)?.delegated?.resources;
+    return resolve(local?.worktreeRoot ?? resolve(this.repo.root, ".openspec-runner", "worktrees"), ...parts);
   }
   path(change: string) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(change))
@@ -262,10 +264,16 @@ export class Runner {
       );
   }
   status(change: string) {
+    const feature = readFeature(this.repo.stateDir, change);
+    if (feature && (!existsSync(resolve(this.repo.root, "openspec/changes", change, "tasks.md")) ||
+        !existsSync(resolve(this.repo.root, "openspec/changes", change, "execution.yaml")) || feature.archive))
+      return { change, feature, integration: this.read(change)?.integration, head: this.read(change)?.head,
+        next: `openspec-runner feature status ${change} --json` };
     const p = loadPlan(this.repo.root, change),
       s = this.read(change);
     return {
       change,
+      feature,
       agent: p.agent,
       harness: p.agent,
       batches: s?.batches,
@@ -278,6 +286,8 @@ export class Runner {
         ...t,
         assignment: p.assignments[t.id],
         ready:
+          (!feature || (feature.phase === "implementing" && !feature.invalidated &&
+            feature.approval?.fingerprint === p.fingerprint)) &&
           (!s || s.fingerprint === p.fingerprint) &&
           !s?.transaction &&
           !(s
@@ -312,6 +322,10 @@ export class Runner {
     agent?: string,
   ) {
     const p = loadPlan(this.repo.root, change);
+    const feature = implementationGate(this.repo.stateDir, p);
+    if (feature?.delegated && settings) throw new Error("Delegated execution forbids settings overlays");
+    if (feature && agent && agent !== feature.approval!.implementation.harness)
+      throw new Error("Harness differs from approved feature settings");
     const harness = this.harness(p, agent), selectedAgent = harness.id;
     this.selection(p, ids);
     const s = this.read(change);
@@ -332,6 +346,8 @@ export class Runner {
           .map((n) => decodeState(json<unknown>(join(this.repo.stateDir, n))))
       : [];
     const running = allStates.flatMap((s) => s.attempts.filter(active));
+    const featureJobs = activeFeatureJobs(this.repo.stateDir);
+    if (featureJobs.length) throw new Error("Exclusive feature review/repair job must finish before launching tasks");
     for (const id of ids) {
       const old = s && this.latest(s, id);
       if (
@@ -358,13 +374,19 @@ export class Runner {
     }
     const selected = ids.map((id) => ({
       task: id,
-      settings: harness.resolveSettings(
+      settings: feature && !settings ? feature.approval!.tasks[id] : harness.resolveSettings(
         p.assignments[id],
         settings,
         p.config.agents[selectedAgent],
       ),
       parallel: p.assignments[id].parallel,
     }));
+    if (feature) {
+      if (!s && head !== feature.approval!.base) throw new Error("Base differs from approved feature base");
+      for (const item of selected)
+        if (!item.settings || settingsIdentity(item.settings) !== settingsIdentity(feature.approval!.tasks[item.task]))
+          throw new Error("Execution settings differ from approved feature settings");
+    }
     if (running.length + ids.length > p.config.maxParallel)
       throw new Error("Repository concurrency limit exceeded");
     if (
@@ -379,7 +401,8 @@ export class Runner {
       agent: selectedAgent,
       harness: selectedAgent,
       base: head,
-      terminal: terminalAdapter(this.repo.root, p.config.terminal),
+      terminal: terminalAdapter(this.repo.root, feature?.delegated?.resources.terminal ?? p.config.terminal),
+      worktrees: feature?.delegated?.resources.worktrees ?? p.config.worktrees,
       tasks: selected,
     };
   }
@@ -406,7 +429,7 @@ export class Runner {
           fingerprint: p.fingerprint,
           integration: {
             branch,
-            path: this.worktreePath(`${change}-${token}-integration`),
+            path: this.worktreePath(change, `${change}-${token}-integration`),
             base: preview.base,
           },
           head: preview.base,
@@ -442,7 +465,7 @@ export class Runner {
           ...(preview.agent === "claude" ? { expectedSession: randomUUID() } : {}),
           parallel: item.parallel,
           branch,
-          path: this.worktreePath(id),
+          path: this.worktreePath(change, id),
           base: state.head,
           phase: "preparing",
           terminal: {},
@@ -483,12 +506,12 @@ export class Runner {
         const workspace = createWorktree(
           this.repo.root,
           attempt,
-          prepared.plan.config.worktrees,
+          prepared.preview.worktrees,
         );
         attempt = this.updateAttempt(change, attempt.id, (current) =>
           Object.assign(current, workspace, { gitDir: git(workspace.path, "rev-parse", "--absolute-git-dir") }),
         );
-        for (const command of prepared.plan.config.setup)
+        for (const command of readFeature(this.repo.stateDir, change)?.approval?.setup ?? prepared.plan.config.setup)
           run(command[0], command.slice(1), attempt.path);
         attempt = this.updateAttempt(change, attempt.id, (current) => {
           current.setupDone = true;
@@ -543,6 +566,7 @@ export class Runner {
         a = this.latest(s, task),
         p = loadPlan(this.repo.root, change);
       this.drift(p, s);
+      implementationGate(this.repo.stateDir, p);
       if (
         !a ||
         !active(a) ||
@@ -559,20 +583,20 @@ export class Runner {
     const workspace = createWorktree(
       this.repo.root,
       attempt,
-      prepared.plan.config.worktrees,
+      readFeature(this.repo.stateDir, change)?.delegated?.resources.worktrees ?? prepared.plan.config.worktrees,
     );
     attempt = this.updateAttempt(change, attempt.id, (current) =>
       Object.assign(current, workspace, { gitDir: git(workspace.path, "rev-parse", "--absolute-git-dir") }),
     );
     if (!attempt.setupDone) {
       // Explicit recovery may rerun setup; setup commands should be idempotent.
-      for (const command of prepared.plan.config.setup)
+      for (const command of readFeature(this.repo.stateDir, change)?.approval?.setup ?? prepared.plan.config.setup)
         run(command[0], command.slice(1), attempt.path);
       attempt = this.updateAttempt(change, attempt.id, (current) => {
         current.setupDone = true;
       });
     }
-    const backend = terminalAdapter(this.repo.root, prepared.plan.config.terminal);
+    const backend = terminalAdapter(this.repo.root, readFeature(this.repo.stateDir, change)?.delegated?.resources.terminal ?? prepared.plan.config.terminal);
     if (backend === "manual") {
       attempt = this.updateAttempt(change, attempt.id, (current) => {
         current.phase = "manual";
@@ -626,7 +650,7 @@ export class Runner {
         "--file",
         reportPath,
       ]);
-    return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.`;
+    return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.` + pinnedPrompt(this.repo.stateDir, change);
   }
   command(change: string, a: TaskAttempt) {
     if (!a.session) return this.workerCommand(change, a);
@@ -645,6 +669,8 @@ export class Runner {
   }
   async worker(change: string, task: string, id: string) {
     const prepared = this.lock(() => {
+      if (readFeature(this.repo.stateDir, change))
+        implementationGate(this.repo.stateDir, loadPlan(this.repo.root, change));
       const s = this.requireState(change), a = this.latest(s, task);
       if (!a || a.id !== id || !a.setupDone)
         throw new Error("Worker attempt is not ready; inspect before retrying");
@@ -765,7 +791,7 @@ export class Runner {
       return a;
     });
   }
-  verifyResult(a: TaskAttempt, report: Report, change: string) {
+  verifyResult(a: Pick<TaskAttempt, "base" | "path" | "branch" | "fingerprint">, report: { commit?: string }, change: string) {
     if (
       !report.commit ||
       report.commit === a.base ||
@@ -850,6 +876,7 @@ export class Runner {
         return { aborted: true, head: s.head };
       }
       const p = loadPlan(this.repo.root, change);
+      const feature = implementationGate(this.repo.stateDir, p);
       this.drift(p, s);
       if (mode === "continue") {
         if (!s.transaction && !s.cleanupBatch) throw new Error("No interrupted integration");
@@ -866,6 +893,8 @@ export class Runner {
         if (a?.phase === "integrated") continue;
         if (!a || a.phase !== "completed" || !a.report)
           throw new Error(`Task ${task} needs a completed report`);
+        if (feature && (!a.worker?.exitedAt || a.worker.exitCode !== 0))
+          throw new Error(`Managed task ${task} requires a successful supervised exit receipt`);
         if (a.worker && !a.worker.exitedAt)
           throw new Error(
             `Task ${task} reported but its supervised worker has not exited yet`,
@@ -1075,6 +1104,7 @@ export class Runner {
       )
         throw new Error("Integration worktree must be clean at recorded HEAD");
       if (p.fingerprint === s.fingerprint) return { unchanged: true };
+      invalidateFeature(this.repo.stateDir, change, "Planning artifacts changed; approve the reconciled plan");
       if (
         s.baseline.some((id) => !p.assignments[id]) ||
         s.attempts.some(

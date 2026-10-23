@@ -13,6 +13,7 @@
     "dist",
     "skills",
     "harnesses",
+    "docs",
     "README.md"
   ],
   "engines": {
@@ -21,14 +22,17 @@
   "packageManager": "pnpm@11.7.0",
   "scripts": {
     "build": "tsc",
-    "test": "pnpm run build && node --test test/*.test.mjs",
+    "test": "pnpm run build && node test/helpers/run-tests.mjs test/*.test.mjs",
     "prepack": "pnpm run build"
   },
   "dependencies": {
+    "ink": "8.0.0",
+    "react": "19.3.0",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "19.3.0",
     "typescript": "^5.9.3"
   }
 }
