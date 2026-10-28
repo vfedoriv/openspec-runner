@@ -315,5 +315,3 @@ The implementation passed 204 tests and the package dry run.
 The final review approved the implementation within the limits in this document.
 These results do not extend support to excluded configurations.
 They do not resolve the real Codex startup timing risk.
-
-See the [completion checkpoint](superpowers/plans/2026-10-04-store-linked-components-checkpoint.md) for verification records and recovery references.

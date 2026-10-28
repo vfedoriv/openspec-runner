@@ -8,7 +8,7 @@ Start with the guide for the workflow you want to use.
 | [Dashboard guide](dashboard-guide.md) | People monitoring features, sessions, and shared assignments in the terminal | Current CLI |
 | [Team workflow](team-workflow.md) | Users, coordinators, and component owners | Roles, approval steps, process diagrams, and status explanations |
 | [Team operator reference](team-workflow-reference.md) | Agents and operators running the CLI directly | Command sequences, checked schemas, Git handoffs, and detailed recovery |
-| [Shared Store design](superpowers/specs/2026-10-04-store-linked-components-design.md) | People reviewing or implementing the team extension | Design for review |
+| [Shared Store design](superpowers/specs/2026-10-04-store-linked-components-design.md) | People maintaining the team extension | Implemented architecture and workflow design |
 | [Linked input builder](examples/linked-feature-inputs.mjs) | Coordinators preparing full manifest/settings/map/scope files | Checked by CLI integration tests |
 | [Command reference](../README.md#cli-reference) | Users looking up current command syntax | Current CLI |
 | [Configuration reference](../README.md#configuration) | Users configuring tasks, harnesses, checks, and local tooling | Current CLI |

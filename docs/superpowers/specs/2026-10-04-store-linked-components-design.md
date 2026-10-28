@@ -1,10 +1,10 @@
 # Shared Store contracts and delegated component changes
 
 Date: 2026-10-04
-Status: Design for user review
+Status: Implemented architecture and workflow design
 
-The workflow diagrams describe the proposed team mode. The current CLI and
-proposed workflow are documented separately in the [documentation index](../../README.md).
+The workflow diagrams describe the implemented team mode. For current CLI usage,
+see the guides in the [documentation index](../../README.md).
 
 ## 1. Intent and agreed decisions
 
