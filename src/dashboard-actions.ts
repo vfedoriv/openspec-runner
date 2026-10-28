@@ -27,6 +27,12 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   if (!task && !session && !snapshot.features.some(f => f.id === targetId) && !snapshot.assignments.some(a => a.id === targetId)) return [];
   const actions: DashboardAction[] = [{ id: `${targetId}:inspect`, label: "Inspect evidence", kind: "inspect", available: true }];
   const add = (suffix: string, label: string, kind: DashboardAction["kind"], reason?: string, argv?: string[]) => actions.push({ id: `${targetId}:${suffix}`, label, kind, available: !reason, reason, argv });
+  if (feature?.summaryCommand && !session) {
+    const argv = [...feature.summaryCommand, ...(task ? ["--task", task.task.id] : [])];
+    add("summary-inspect", "Display summary inspection command", "command", undefined, argv);
+    add("summary-refresh", "Display summary refresh command", "command", undefined, [...argv, "--refresh"]);
+    add("summary-export", "Display summary export command", "command", undefined, [...argv, "--export", "DIRECTORY"]);
+  }
   if (session) {
     add("diff", "View saved attempt diff", "diff", session.worktreeAvailable !== true ? session.worktreeAvailable === false ? "Saved worktree is missing" : "Saved worktree availability is unknown; refresh first" : !/^[a-f0-9]{40,64}$/.test(session.attempt.base) ? "Saved base is not a commit identity" : undefined);
     add("focus", "Focus saved terminal", "focus", focusReason(session));

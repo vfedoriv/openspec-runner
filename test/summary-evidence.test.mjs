@@ -78,3 +78,36 @@ test("completed feature reads archived proposal while task retains prearchive re
   const task = collectLocalSummary({ cwd: f.root, change: "demo", task: "1.1" });
   assert.ok(task.evidence.references.some(x => x.path === "openspec/changes/demo/tasks.md"));
 });
+
+test("managed completion cannot be inferred from task cleanup evidence", t => {
+  const f = integratedFixture(t);
+  const state = f.r.read("demo"); state.completion = { tasks: ["1.1"], fingerprint: state.fingerprint, head: state.head }; f.r.save(state);
+  saveFeature(f.r.repo.stateDir, { version: 1, change: "demo", phase: "reviewing", planningRoot: f.root, jobs: [], fixRounds: 0, approvalHistory: [] });
+  assert.throws(() => collectLocalSummary({ cwd: f.root, change: "demo" }), /complet/i);
+});
+
+test("unmanaged batch completion is independent of cleanup and task snapshots ignore later feature reviews", t => {
+  const f = integratedFixture(t);
+  const batch = collectLocalSummary({ cwd: f.root, change: "demo" });
+  assert.equal(batch.evidence.lifecycle, "batch-satisfied");
+  const before = collectLocalSummary({ cwd: f.root, change: "demo", task: "1.1" });
+  saveFeature(f.r.repo.stateDir, { version: 1, change: "demo", phase: "completed", planningRoot: f.root, fixRounds: 0, approvalHistory: [],
+    archive: { before: f.head, marker: "fixture", phase: "committed", directories: [], commit: f.head }, jobs: [] });
+  const after = collectLocalSummary({ cwd: f.root, change: "demo", task: "1.1" });
+  assert.equal(before.digest, after.digest);
+});
+
+test("reconciliation retains integrated work and original task fingerprint", t => {
+  const f = integratedFixture(t);
+  const before = collectLocalSummary({ cwd: f.root, change: "demo", task: "1.1" });
+  const state = f.r.read("demo"); state.fingerprint = "reconciled-plan"; f.r.save(state);
+  const after = collectLocalSummary({ cwd: f.root, change: "demo", task: "1.1" });
+  assert.equal(after.digest, before.digest);
+});
+
+test("missing recorded history leaves incomplete report evidence", t => {
+  const f = integratedFixture(t), state = f.r.read("demo"); state.head = "f".repeat(40); f.r.save(state);
+  const bundle = collectLocalSummary({ cwd: f.root, change: "demo", task: "1.1" });
+  assert.ok(bundle.evidence.gaps.some(x => /history|integration commit/i.test(x)));
+  assert.ok(bundle.evidence.facts.some(x => x.category === "work"));
+});

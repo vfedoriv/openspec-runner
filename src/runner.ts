@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { safeSummary } from "./summary-service.js";
 import { fileURLToPath } from "node:url";
 import { inspectCleanup, removeInspectedWorktree, type CleanupResult, type CleanupOptions } from "./cleanup.js";
 import { closeInspectedTerminal } from "./terminal-cleanup.js";
@@ -858,6 +859,28 @@ export class Runner {
     };
   }
   integrate(change: string, ids: string[], mode?: "continue" | "abort") {
+    let result: ReturnType<Runner["integrateCore"]> | undefined;
+    const summaries: ReturnType<typeof safeSummary>[] = [];
+    try { result = this.integrateCore(change, ids, mode); }
+    finally {
+      if (mode !== "abort") {
+        try {
+          const state = this.read(change);
+          for (const task of new Set(state?.attempts.filter(a => a.phase === "integrated").map(a => a.task)))
+            summaries.push(safeSummary({ cwd: this.repo.root, change, task }));
+        } catch { /* Summary failures never replace an integration error. */ }
+      }
+    }
+    if (mode === "abort") return result;
+    let complete = false;
+    try {
+      const feature = readFeature(this.repo.stateDir, change), state = this.read(change);
+      complete = !!(!feature && state && loadPlan(state.integration.path, change).tasks.every(t => this.satisfied(state, t.id)));
+    } catch { /* Post-transition summary assessment is observational and best-effort. */ }
+    const summary = complete ? safeSummary({ cwd: this.repo.root, change }) : undefined;
+    return { ...result, summaries, ...(summary ? { summary } : {}) };
+  }
+  private integrateCore(change: string, ids: string[], mode?: "continue" | "abort") {
     const result = this.lock(() => {
       const s = this.requireState(change),
         path = s.integration.path;

@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { safeComponentSummary } from "./summary-service.js";
 import { CoordinationStore, stableDigest, replayStatus, decodeRecord, type AssignmentRecord, type ApprovalRecord, type SubmissionRecord, validateId } from "./coordination-state.js";
 import { assertRepositoryIdentity, coordinationRevision, currentApproval } from "./coordination.js";
 import { atomic, git, json, repository } from "./system.js";
@@ -155,6 +156,10 @@ export class Component {
     return { ...completed, token: digest(completed) };
   }
   exportSubmission(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
+    const result = this.exportSubmissionCore(options);
+    return { ...result, ...(options.outcome === "completed" ? { summary: safeComponentSummary(this.repo.root, options.change, result.record.id) } : {}) };
+  }
+  private exportSubmissionCore(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
     validateId({ value: options.id }); validateId({ value: options.operationId });
     const path = resolve(this.repo.stateDir, "submissions", `${options.id}.json`);
     return new Feature(this.repo.root).runner.lock(() => {

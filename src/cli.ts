@@ -13,6 +13,7 @@ import type { HarnessSettings } from "./harnesses/types.js";
 import { createInterface } from "node:readline/promises";
 import { parse } from "yaml";
 import { dashboardCommand } from "./dashboard-cli.js";
+import { summaryCommand, formatSummaryResult } from "./summary-cli.js";
 import { linkedCommand, linkedHelp } from "./linked-cli.js";
 export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
@@ -31,6 +32,11 @@ feature <action> <change>      Manage an opt-in feature lifecycle
   worker | begin | report --attempt ID   Supervised feature job protocol
   recover --attempt ID        Record a provably stopped/interrupted job; never redispatch
 dashboard [--change NAME] [--store PATH --map FILE] [--once] [--json]
+summary CHANGE [--task ID] [--json]  Inspect a saved delivery summary
+  --refresh | --export DIRECTORY     Generate basic output or export portable files
+summary publish CHANGE --source DIGEST --file NARRATIVE [--expected-revision HASH]
+summary CHANGE --presentation-brief DIRECTORY --audience TEXT [--provider-config FILE] [--assets FILE]
+coordination summary FEATURE --store PATH --map FILE [--json]
 validate <change> [--json]      Validate task metadata and OpenSpec readiness
 status <change> [--json]        Inspect dependencies, attempts, and session locations
 launch <change> --tasks IDS     Launch exactly these comma-separated task numbers
@@ -90,6 +96,8 @@ export function init(
     "openspec-runner-implement",
     "openspec-runner-review",
     "openspec-runner-repair",
+    "openspec-runner-summarize",
+    "openspec-runner-present",
   ];
   const targets = selected === "all" ? ["codex", "claude"] : [selected];
   const skills: string[] = [];
@@ -111,10 +119,16 @@ export async function main(args = process.argv.slice(2)) {
   let jsonOutput = args.includes("--json");
   try {
     if (args[0] === "dashboard") { await dashboardCommand(args.slice(1)); return; }
+    if (args[0] === "summary" || (args[0] === "coordination" && args[1] === "summary")) {
+      summaryCommand({ cwd: process.cwd(), args }); return;
+    }
     if (["coordination", "component"].includes(args[0])) {
       const result = await linkedCommand(args);
       if (args.includes("--help") || args.includes("-h")) console.log(linkedHelp);
-      else console.log(JSON.stringify(result, null, 2));
+      else {
+        console.log(JSON.stringify(result, null, 2));
+        if (!jsonOutput && result && typeof result === "object" && "summary" in result) console.log(formatSummaryResult((result as any).summary));
+      }
       return;
     }
     const { values: v, positionals: p } = parseArgs({
@@ -438,7 +452,10 @@ export async function main(args = process.argv.slice(2)) {
         console.log(
           `${entry.task} (${entry.phase})\n${entry.error ? entry.error + "\n" : ""}${entry.command}\n`,
         );
-    else console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(JSON.stringify(result, null, 2));
+      if (result && typeof result === "object" && "summary" in result) console.log(formatSummaryResult((result as any).summary));
+    }
   } catch (e: any) {
     console.error(
       jsonOutput ? JSON.stringify({ error: e.message }) : `Error: ${e.message}`,

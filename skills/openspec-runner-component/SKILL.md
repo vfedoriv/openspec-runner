@@ -3,6 +3,8 @@ name: openspec-runner-component
 description: Import or resume an assigned shared-feature component, execute its frozen local plan, review and repair it, and export a portable submission receipt for the coordinator.
 ---
 
+After successful completed receipt export, automatically follow `openspec-runner-summarize` for the generated component-handoff summary. Retain handoff wording: acceptance and delivery are coordinator actions. Summary writing failure does not invalidate the receipt or authorize repeating implementation/export with a new identity. Slides are only by user request.
+
 # Delegated component handoff
 
 Use this workflow when a teammate owns an assignment in a shared Store. Read the workflow guide at the installed package path reported by `openspec-runner --help` for checked command syntax and complete input schemas. Distinguish this mode from an ordinary repository-local managed feature: an imported component stops at receipt export. The coordinator owns acceptance, PR merge evidence, shared completion and post-merge archival.

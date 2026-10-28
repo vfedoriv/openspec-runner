@@ -1,5 +1,7 @@
 # openspec-runner
 
+Completed tasks and features receive automatic [delivery summaries](docs/delivery-summary-guide.md), with optional narrative enrichment and presentations on request.
+
 `openspec-runner` adds durable, reviewable execution to an existing
 [OpenSpec](https://github.com/Fission-AI/OpenSpec) workflow. It can run as an
 explicit batch companion, or manage an opt-in feature from exploration and plan

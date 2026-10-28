@@ -1,5 +1,7 @@
 # Team workflow: operator reference
 
+See [delivery summary commands](delivery-summary-guide.md) for shared inspection, refresh, publication, export and requested presentation briefs.
+
 This reference is for agents and operators who run the CLI directly.
 It contains command sequences, input schemas, and detailed recovery procedures.
 Start with the [team workflow guide](team-workflow.md) for roles, steps, and process diagrams.

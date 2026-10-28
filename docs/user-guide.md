@@ -1,5 +1,7 @@
 # User guide
 
+Completed work receives automatic [delivery summaries](delivery-summary-guide.md); presentations are available on request.
+
 This guide covers the current openspec-runner CLI. It takes you from installation
 through planning, isolated implementation, integration, review, recovery, and
 delivery. The [team workflow guide](team-workflow.md) covers implemented shared Stores and teammates on different machines.

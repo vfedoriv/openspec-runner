@@ -1,5 +1,7 @@
 # Team workflow
 
+Shared completion and component handoffs receive [delivery summaries](delivery-summary-guide.md) with their distinct delivery status; slides are available on request.
+
 Use this guide when one feature needs work in several repositories.
 Each repository can have a different owner on a different machine.
 

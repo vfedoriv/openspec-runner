@@ -30,6 +30,7 @@ import {
 import { createWorktree } from "../dist/adapters.js";
 import { init } from "../dist/cli.js";
 import { locked } from "../dist/system.js";
+import { readCurrentSummary } from "../dist/summary-service.js";
 import { installFakeOrca } from "./helpers/fake-orca.mjs";
 const settings = { model: "model-a", reasoningEffort: "high" };
 const basePath = process.env.PATH;
@@ -360,8 +361,8 @@ test("conflicted integration blocks dependent tasks, supports abort then continu
   const [a, b] = r.launch("demo", ["1.1", "1.2"], settings);
   complete(r, a, "shared.txt", "one\n");
   complete(r, b, "shared.txt", "two\n");
-  r.integrate("demo", ["1.1"]);
-  assert.throws(() => r.integrate("demo", ["1.2"]), /CONFLICT|conflict/);
+  assert.throws(() => r.integrate("demo", ["1.1", "1.2"]), /CONFLICT|conflict/);
+  assert.ok(readCurrentSummary({ cwd: r.repo.root, change: "demo", task: "1.1" }));
   assert.throws(() => r.launch("demo", ["2.1"], settings), /integration/);
   r.integrate("demo", [], "abort");
   assert.equal(r.read("demo").transaction, undefined);
@@ -513,7 +514,7 @@ test("Herdr persists partial creation and prompt-submission failures", (t) => {
   assert.equal(prompted.terminal.phase, "starting");
   assert.match(prompted.error, /herdr pane/);
 });
-test("installer owns exactly six skills and preserves existing OpenSpec skills/config", (t) => {
+test("installer owns eight skills and preserves existing OpenSpec skills/config", (t) => {
   const { root } = fixture(t);
   mkdirSync(join(root, ".agents/skills/openspec-apply"), { recursive: true });
   writeFileSync(
@@ -522,7 +523,7 @@ test("installer owns exactly six skills and preserves existing OpenSpec skills/c
   );
   const before = readFileSync(join(root, "openspec/runner.yaml"), "utf8");
   const result = init(root);
-  assert.equal(result.skills.length, 6);
+  assert.equal(result.skills.length, 8);
   assert.equal(
     readFileSync(join(root, ".agents/skills/openspec-apply/SKILL.md"), "utf8"),
     "original",
@@ -532,7 +533,7 @@ test("installer owns exactly six skills and preserves existing OpenSpec skills/c
     before,
   );
   const all = init(root, "all");
-  assert.equal(all.skills.length, 12);
+  assert.equal(all.skills.length, 16);
   for (const name of [
     "openspec-runner-plan",
     "openspec-runner-coordinate",

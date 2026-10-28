@@ -1,5 +1,7 @@
 # Dashboard guide
 
+Feature/task details include saved [delivery summary status](delivery-summary-guide.md) and display-only inspection, refresh and export commands.
+
 The console dashboard shows runner progress, blockers, worker sessions, and
 shared assignments in your terminal. Use it to inspect evidence and preview
 next steps while your coordinating session operates the runner.

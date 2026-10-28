@@ -1,5 +1,7 @@
 # openspec-runner documentation
 
+[Delivery summaries and requested presentations](delivery-summary-guide.md) explains automatic completion summaries, narrative enrichment, export and slide-provider setup.
+
 Start with the guide for the workflow you want to use.
 
 | Guide | Audience | Availability |

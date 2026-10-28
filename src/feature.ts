@@ -9,6 +9,7 @@ import { createWorktree, startTerminal, terminalAdapter } from "./adapters.js";
 import { superviseWorker, type SupervisedSession } from "./worker.js";
 import { processStart } from "./processes.js";
 import { getHarness } from "./harnesses/registry.js";
+import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import {
   readFeature, saveFeature, featurePath, featureActive, activeFeatureJobs, blocking, digest,
@@ -552,6 +553,10 @@ export class Feature {
     return { ...preview, approved: s.finalApproval?.token === preview.token };
   }
   archive(change: string) {
+    const result = this.archiveCore(change);
+    return { ...result, summary: safeSummary({ cwd: this.repo.root, change }) };
+  }
+  private archiveCore(change: string) {
     return this.runner.lock(() => {
       const s = this.read(change), r = this.execution(s), path = r.integration.path;
       if (s.delegated) throw new Error("Delegated assignment cannot archive or complete the shared feature");

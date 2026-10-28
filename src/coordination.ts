@@ -1,4 +1,5 @@
 import { existsSync, realpathSync } from "node:fs";
+import { safeSharedSummary } from "./summary-service.js";
 import { CoordinationStore, decodeManifest, stableDigest, replayStatus, type FeatureManifest, type ApprovalRecord, type ComponentSnapshot, type CoordinationSnapshot, type AssignmentRecord, type CoordinationEvent, type SubmissionRecord, type VerificationEvidence, decodeRecord, validateId, type ArchiveScope, type ArchiveBases } from "./coordination-state.js";
 import { committedBlob, pinContext, pinReferenceContext, repinContext, contextFingerprint, type ResolvedContext } from "./openspec-context.js";
 import { loadPlan, assertCommitted, readiness, tasksFrom } from "./plan.js";
@@ -495,6 +496,10 @@ export class Coordination {
     return { ...payload, token: digest(payload), head: snapshot.head };
   }
   complete(options: MutationIdentity & { token: string; approvedBy: string; archive?: ArchiveScope }) {
+    const result = this.completeCore(options);
+    return { ...result, summary: safeSharedSummary(this.store.root, this.store.featureId, this.repositories) };
+  }
+  private completeCore(options: MutationIdentity & { token: string; approvedBy: string; archive?: ArchiveScope }) {
     label(options.approvedBy, "explicit completion consent");
     return coordinationOperation({ store: this.store, input: options, action: "completion", initialize: () => {
       const preview = this.completionPreview(options);
