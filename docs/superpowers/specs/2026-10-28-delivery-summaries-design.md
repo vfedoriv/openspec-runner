@@ -1,7 +1,7 @@
 # Automatic delivery summaries and requested presentations
 
 Date: 2026-10-28
-Status: Draft for user approval
+Status: Approved by user on 2026-10-28
 
 ## Intent and agreed direction
 
@@ -12,7 +12,7 @@ execution and integration; they do not provide a coherent feature narrative.
 The user selected a combined runner-and-skill approach: summaries appear
 automatically, and presentations are created only on request. The runner owns
 evidence and a basic summary; a skill produces the narrative from that evidence.
-The details below are proposed implementation choices, not yet user-approved.
+The user approved the implementation choices below on 2026-10-28.
 
 ## Goals and boundaries
 
