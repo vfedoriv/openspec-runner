@@ -183,7 +183,7 @@ flowchart TB
 
 The target project must have:
 
-- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows uses Git worktrees and manual terminals; see [Windows verification and limits](docs/WINDOWS_PORTABILITY_VERIFICATION.md).
+- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and Orca terminals; see [Windows verification and limits](docs/WINDOWS_PORTABILITY_VERIFICATION.md).
 - Node.js 22.13 or newer.
 - Git and a Git repository.
 - OpenSpec installed and initialized in the project.
@@ -1117,8 +1117,8 @@ refresh to reflect the external removal. No unrelated terminals are closed.
 are independent; Orca terminals also work with Git/Worktrunk worktrees once
 Orca can resolve their paths. This integration requires a local runtime on the
 same host and filesystem as the runner. Remote/SSH targets and WSL-to-Windows
-app bridging are unsupported. Native Windows supports Git worktrees with manual
-terminals; Orca, Herdr, and Worktrunk remain unsupported there.
+app bridging are unsupported. Native Windows supports these resource backends;
+Worktrunk uses `git-wt.exe` and owned Orca terminals explicitly use PowerShell 7.
 
 The CLI contract was checked against upstream revision
 [`fa0010e8`](https://github.com/stablyai/orca/tree/fa0010e8d6b2a7ad946fe1f1b005c6a8497c6c17).
@@ -1634,7 +1634,8 @@ See the [dashboard guide](docs/dashboard-guide.md) for a step-by-step walkthroug
 keyboard controls, session activity, and troubleshooting.
 
 Run the dashboard from a repository on Linux/macOS, WSL, or native Windows.
-Windows uses Git/manual resources and PowerShell 7 operator commands.
+Windows uses PowerShell 7 operator commands and supports Git/manual resources
+as well as the installed Herdr, Orca, and Worktrunk integrations.
 Node.js 22.13 or newer is required.
 
 ```sh

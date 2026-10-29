@@ -434,14 +434,14 @@ test("repository lock distinguishes creation errors and preserves a replacement 
 test("Worktrunk uses explicit base and hooks disabled; partial creation reconciles before fallback", (t) => {
   const { root, bin, dir } = fixture(t);
   executable(
-    join(bin, "wt"),
+    join(bin, process.platform === "win32" ? "git-wt" : "wt"),
     `const {execFileSync}=require('child_process');const a=process.argv.slice(2);if(a.includes('--help')){console.log('--no-hooks --format --base --create');process.exit(0)}if(!a.includes('--no-hooks')||!a.includes('--yes')||!a.includes('--format'))process.exit(9);const branch=a[a.indexOf('--create')+1],base=a[a.indexOf('--base')+1];execFileSync('git',['worktree','add','-b',branch,${JSON.stringify(join(dir, "wt space"))},base]);process.exit(1);`,
   );
   const base = git(root, "rev-parse", "HEAD");
   const w = createWorktree(
     root,
     { branch: "wt-task", base, path: join(dir, "fallback") },
-    "auto",
+    "worktrunk",
   );
   assert.equal(w.path, join(dir, "wt space"));
   assert.equal(existsSync(join(dir, "fallback")), false);
@@ -461,8 +461,9 @@ test("Herdr preserves focus, starts supervised worker and records returned ident
   const calls = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
   assert.ok(calls[0].includes("--no-focus"));
   assert.deepEqual(calls[1].slice(0, 3), ["pane", "run", "w9:p7"]);
-  assert.match(calls[1][3], /'worker' 'demo' '1.1'/);
-  assert.ok(calls[1][3].includes(a.id));
+  const workerText = process.platform === "win32" ? Buffer.from(calls[1][3].match(/EncodedCommand ([A-Za-z0-9+/=]+)/)[1], "base64").toString("utf16le") : calls[1][3];
+  assert.match(workerText, /'worker' 'demo' '1.1'/);
+  assert.ok(workerText.includes(a.id));
   assert.equal(a.terminal.owned, true);
   assert.equal(a.settings.model, "model-a");
   r.attach("demo", "1.1");
@@ -489,7 +490,7 @@ test("Herdr worker can immediately begin without racing the coordinator lock", (
     cli = join(process.cwd(), "bin/openspec-runner.js");
   executable(
     join(bin, "herdr"),
-    `const fs=require('fs'),{execFileSync}=require('child_process'),a=process.argv.slice(2);if(a[0]==='workspace'){fs.writeFileSync(${JSON.stringify(workspaceFile)},a[a.indexOf('--cwd')+1]);console.log(JSON.stringify({result:{workspace:{workspace_id:'w1'},root_pane:{pane_id:'w1:p1'}}}))}else if(a[1]==='run'){const m=a[3].match(/'worker' '([^']+)' '([^']+)' '--attempt' '([^']+)'/);execFileSync(process.execPath,[${JSON.stringify(cli)},'begin',m[1],m[2],'--attempt',m[3],'--session','immediate-session'],{cwd:fs.readFileSync(${JSON.stringify(workspaceFile)},'utf8'),stdio:'pipe'});console.log(JSON.stringify({result:{ok:true}}))}else console.log(JSON.stringify({result:{ok:true}}));`,
+    `const fs=require('fs'),{execFileSync}=require('child_process'),a=process.argv.slice(2);if(a[0]==='workspace'){fs.writeFileSync(${JSON.stringify(workspaceFile)},a[a.indexOf('--cwd')+1]);console.log(JSON.stringify({result:{workspace:{workspace_id:'w1'},root_pane:{pane_id:'w1:p1'}}}))}else if(a[1]==='run'){const text=a[3].includes('EncodedCommand ')?Buffer.from(a[3].split('EncodedCommand ')[1],'base64').toString('utf16le'):a[3];const m=text.match(/'worker' '([^']+)' '([^']+)' '--attempt' '([^']+)'/);execFileSync(process.execPath,[${JSON.stringify(cli)},'begin',m[1],m[2],'--attempt',m[3],'--session','immediate-session'],{cwd:fs.readFileSync(${JSON.stringify(workspaceFile)},'utf8'),stdio:'pipe'});console.log(JSON.stringify({result:{ok:true}}))}else console.log(JSON.stringify({result:{ok:true}}));`,
   );
   const a = r.launch("demo", ["1.1"], settings)[0],
     saved = r.read("demo").attempts[0];
@@ -792,8 +793,14 @@ test("Windows recovery retains resources for surviving worker descendants", { sk
   assert.throws(() => r.preview("demo", ["1.1"], settings, undefined, true), /active|uncertain|worker/i);
 });
 
-function liveTerminal(r, a, bin, dir, mode = "close") {
+function liveTerminal(r, a, bin, dir, mode = "close", t) {
   exited(r, a, bin);
+  let shellPid = process.pid;
+  if (process.platform === "win32") {
+    const shell = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { windowsHide: true, detached: true, stdio: "ignore" });
+    shellPid = shell.pid;
+    t.after(() => shell.kill());
+  }
   const state = join(dir, "pane-state.json");
   writeFileSync(state, JSON.stringify({ closed: false }));
   const pane = { pane_id: a.id, terminal_id: a.id, workspace_id: "tests", cwd: a.path };
@@ -801,7 +808,7 @@ function liveTerminal(r, a, bin, dir, mode = "close") {
     const fs=require('fs'),args=process.argv.slice(2),file=${JSON.stringify(state)},s=JSON.parse(fs.readFileSync(file));
     let result;
     if(args[1]==='list') result={panes:s.closed?[]:[${JSON.stringify(pane)}]};
-    else if(args[1]==='process-info') result={process_info:{pane_id:${JSON.stringify(a.id)},shell_pid:${process.pid},foreground_processes:[]}};
+    else if(args[1]==='process-info') result={process_info:{pane_id:${JSON.stringify(a.id)},shell_pid:${shellPid},foreground_processes:[]}};
     else if(args[1]==='read') result={text:'saved terminal log'};
     else if(args[1]==='close') {
       if(!fs.existsSync(${JSON.stringify(a.path)})) throw new Error('worktree removed before pane');
@@ -818,7 +825,7 @@ function liveTerminal(r, a, bin, dir, mode = "close") {
 test("owned terminal closes before worktree removal and its log survives", (t) => {
   const { runner: r, bin, dir } = fixture(t);
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
-  const paneState = liveTerminal(r, a, bin, dir);
+  const paneState = liveTerminal(r, a, bin, dir, "close", t);
   const result = r.integrate("demo", ["1.1"]);
   assert.equal(result.cleanup.results[0].status, "removed", JSON.stringify(result));
   assert.equal(JSON.parse(readFileSync(paneState)).closed, true);
@@ -830,7 +837,7 @@ test("terminal closure failure and edits during closure preserve the worktree", 
   for (const mode of ["fail", "edit"]) {
     const { runner: r, bin, dir } = fixture(t);
     const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
-    liveTerminal(r, a, bin, dir, mode);
+    liveTerminal(r, a, bin, dir, mode, t);
     const result = r.integrate("demo", ["1.1"]);
     assert.equal(result.cleanup.results[0].status, "failed");
     assert.equal(r.read("demo").attempts[0].phase, "integrated");
@@ -841,7 +848,7 @@ test("terminal closure failure and edits during closure preserve the worktree", 
 test("unacknowledged worker exit prevents integration, terminal closure and removal", (t) => {
   const { runner: r, bin, dir } = fixture(t);
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
-  const paneState = liveTerminal(r, a, bin, dir);
+  const paneState = liveTerminal(r, a, bin, dir, "close", t);
   const s = r.read("demo"); delete s.attempts[0].worker.exitedAt; r.save(s);
   assert.throws(
     () => r.integrate("demo", ["1.1"]),
@@ -896,7 +903,9 @@ test("Orca CLI preview is read-only and launch persists both adapters and focuse
   const launch = calls().find(args => args[0] === "terminal" && args[1] === "create");
   assert.ok(!launch.includes("--focus"));
   assert.ok(launch.includes(`id:${a.orcaWorktree.id}`));
-  assert.match(launch[launch.indexOf("--command") + 1], /worker/);
+  const launchCommand = launch[launch.indexOf("--command") + 1];
+  const workerText = process.platform === "win32" ? Buffer.from(launchCommand.match(/EncodedCommand ([A-Za-z0-9+/=]+)/)[1], "base64").toString("utf16le") : launchCommand;
+  assert.match(workerText, /worker/);
   assert.equal(r.attach("demo", "1.1").result.pane, "term-1");
   assert.throws(() => r.recover("demo", "1.1"), /cannot safely replay/);
 });

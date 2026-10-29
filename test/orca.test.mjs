@@ -1,4 +1,4 @@
-import { optionalBackendTest as test } from "./helpers/native-support.mjs";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -90,7 +90,8 @@ test("Orca creates an unfocused supervised terminal once, attaches, saves output
   assert.equal(terminal.orca.provider, "stablyai");
   const create = fake.calls().find(a => a[0] === "terminal" && a[1] === "create");
   assert.ok(!create.includes("--focus"));
-  assert.match(create[create.indexOf("--command") + 1], /^exec sh -c /);
+  assert.match(create[create.indexOf("--command") + 1], process.platform === "win32" ? /^pwsh\.exe .*EncodedCommand / : /^exec sh -c /);
+  if (process.platform === "win32") assert.equal(create[create.indexOf("--shell") + 1], "pwsh.exe");
   assert.throws(() => startTerminal(root, root, root, "test", {}, "", terminal, () => {}, "true", "codex", "orca"), /already attempted/);
   assert.equal(attachTerminal(root, terminal).pane, terminal.pane);
   const inspected = inspectTerminal(root, a);

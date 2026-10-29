@@ -1,8 +1,9 @@
 # Native Windows verification
 
 Verification date: 2026-10-29. The native implementation covers `codex`,
-`claude`, `copilot`, and `copilot-vscode` for local x64 NTFS repositories,
-Git worktrees, and manual terminals. Authenticated acceptance is tracked
+`claude`, `copilot`, and `copilot-vscode` for local x64 NTFS repositories.
+Git, Worktrunk, and Orca worktrees and manual, Herdr, and Orca terminals are
+supported. Authenticated harness acceptance is tracked
 separately below.
 
 ## Environment and prerequisites
@@ -25,7 +26,9 @@ node ./bin/openspec-runner.js init --agent copilot --default-model YOUR_MODEL --
 ```
 
 Set `worktrees: git` and `terminal: manual` in `openspec/runner.yaml`.
-`auto` also selects these resources on Windows. Use PowerShell 7 for returned
+Windows `worktrees: auto` continues to select Git. Automatic terminals follow
+the actual Herdr/Orca caller context, and otherwise remain manual.
+Use PowerShell 7 for returned
 operator commands. These commands preserve spaces, quotes, shell punctuation,
 Unicode, and multiline arguments. Internal child launches use argument arrays
 without a command shell. Recognized VS Code, npm, and pnpm Node wrappers are
@@ -69,8 +72,10 @@ compatibility with every installed version or subscription.
 
 ## Boundaries and recovery
 
-- Herdr, Orca, and Worktrunk remain unsupported on native Windows; select
-  Git/manual resources. WSL remains a separate execution environment.
+- Worktrunk requires `git-wt.exe` on Windows PATH. The runner never probes bare
+  Windows `wt`, which can open Windows Terminal. Unix retains `wt` fallback.
+  Herdr requires the caller's actual session; Orca requires a ready local
+  runtime and a registered repository. WSL remains a separate environment.
 - Delegated component execution is explicitly unsupported on Windows until
   equivalent protected-context write restrictions are verified. NTFS mode
   bits alone do not establish that protection. Local managed features remain
@@ -121,6 +126,51 @@ selecting stale PATH entries. Each has regression coverage. No minor findings
 were deferred. Implementation used the existing checkout on a feature branch
 and one coupled implementation commit; the tradeoffs are less filesystem
 isolation and a larger review/bisection unit.
+
+## Installed resource backend follow-up
+
+The follow-up removes the original Windows-only resource restrictions after
+native contract and installed-tool validation. It applies through the shared
+resource launchers to all four harnesses; it does not replace their separate
+session/report/completion protocols or establish authenticated harness acceptance.
+
+| Installed tool | Native verification |
+| --- | --- |
+| Worktrunk 0.78.0, `git-wt.exe` | Real disposable Git worktree created from an exact commit and safely reused with isolated configuration and hooks disabled |
+| Herdr 0.9.4-preview.2026-10-14-fbd2ae23927f | Isolated named server/session; actual injected caller context; worker launch, literal arguments, process exit, exact raw-pane focus, scrollback capture, and acknowledged pane closure |
+| Orca 1.4.237 | Test-owned headless runtime; worker launch in explicit `pwsh.exe`, literal arguments, process/terminal exit and closure; native worktree creation, exact-base verification, reuse, and removal |
+
+Use explicit resource choices in `openspec/runner.yaml`, for example:
+
+```yaml
+worktrees: worktrunk
+terminal: herdr
+```
+
+Run that configuration inside the actual Herdr session. For Orca, select
+`worktrees: orca` and/or `terminal: orca` after registering the repository in
+the local running Orca host. Missing tools or an unavailable runtime still
+produce actionable errors and retain ambiguous setup resources for inspection.
+
+Windows terminal workers use encoded PowerShell commands to preserve literal
+arguments and exit status. Orca's owned shell exits after its worker. Herdr
+keeps the owned shell available for inspection and closes it through the normal
+verified cleanup flow. Current Herdr CLI behavior is handled explicitly:
+successful `pane run` can emit no output, `process-info` uses `--pane`, and
+scrollback is plain text. Raw-worker attach never submits another command;
+if no interactive agent is recognized, it focuses only a verified owned
+single-pane tab. Split/changed tabs require manual inspection.
+
+The final expanded native suite passed 268 tests, skipped 113, and failed zero
+(381 total); Linux passed 367 tests, skipped 17, and failed zero (384 total).
+Package dry-run passed. A fresh
+review found a Unix installed-tool fixture isolation gap, now covered by a
+regression that pins the executable before wrapping `git-wt` on both platforms.
+Live checks used no
+model inference and touched only test-owned worktrees/terminals. Test metadata
+and dedicated runtimes were removed after verification; the original Herdr
+server was confirmed still running, and existing user sessions/settings remain
+intact.
 
 Live acceptance remains pending for each full row above: use separate
 disposable repositories and follow the Claude/Copilot verification guides.

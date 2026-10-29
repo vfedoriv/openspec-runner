@@ -319,7 +319,6 @@ export class Feature {
         throw new Error("Successful job cannot be retried at the same commit");
     }
     const worktrees = s.delegated?.resources.worktrees ?? p.config.worktrees;
-    if (process.platform === "win32" && !["auto", "git"].includes(worktrees)) throw new Error("Windows requires verified Git worktrees");
     return { role, head: r.head, base: s.approval!.base, fingerprint: p.fingerprint,
       settings: s.approval![role], findings, round: role === "repair" ? s.fixRounds + 1 : s.fixRounds,
       terminal: terminalAdapter(s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees };

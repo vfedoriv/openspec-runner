@@ -325,10 +325,6 @@ export class Runner {
     agent?: string,
   ) {
     const p = loadPlan(this.repo.root, change);
-    if (process.platform === "win32" && !["auto", "git"].includes(p.config.worktrees))
-      throw new Error("Windows requires verified Git worktrees; select worktrees: git");
-    if (process.platform === "win32" && !["auto", "manual"].includes(p.config.terminal))
-      throw new Error("Windows requires verified manual terminals; select terminal: manual");
     const feature = implementationGate(this.repo.stateDir, p);
     if (feature?.delegated && settings) throw new Error("Delegated execution forbids settings overlays");
     if (feature && agent && agent !== feature.approval!.implementation.harness)

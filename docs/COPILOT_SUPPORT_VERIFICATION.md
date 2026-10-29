@@ -2,7 +2,8 @@
 
 Copilot CLI and VS Code Copilot are distinct harnesses: `copilot` and
 `copilot-vscode`. Both execute implementation, review, and repair workers.
-Use a supported runner host, including native Windows with Git/manual resources.
+Use a supported runner host, including native Windows with Git/manual resources
+or the verified Herdr, Orca, and Worktrunk integrations.
 See [Windows verification](WINDOWS_PORTABILITY_VERIFICATION.md) for the native
 acceptance matrix and remaining live checks. Hooks, Git, the runner, and the agent must see
 the same worktree filesystem and run in the same execution environment.

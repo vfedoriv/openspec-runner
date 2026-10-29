@@ -6,6 +6,8 @@ import { codexArgs } from "./codex.js";
 import { attachOrcaTerminal, orcaContext, startOrcaTerminal, type OrcaContext } from "./orca.js";
 import { createOrcaWorktree, type OrcaWorkspace } from "./orca-worktrees.js";
 import { canonicalPath } from "./platform-paths.js";
+import { terminalCommand } from "./backend-command.js";
+import { herdrCall as herdr, focusHerdrPane } from "./herdr.js";
 export interface Workspace {
   branch: string;
   path: string;
@@ -26,10 +28,6 @@ export interface Terminal {
   phase?: string;
 }
 export function terminalAdapter(root: string, selected: "auto" | "manual" | "herdr" | "orca"): "manual" | "herdr" | "orca" {
-  if (process.platform === "win32") {
-    if (selected !== "auto" && selected !== "manual") throw new Error(`Windows terminal backend ${selected} is not verified; use manual`);
-    return "manual";
-  }
   if (selected === "manual") return "manual";
   if (selected === "orca" || (selected === "auto" && !!process.env.ORCA_TERMINAL_HANDLE)) {
     orcaContext(root);
@@ -66,10 +64,7 @@ export function createWorktree(
   spec: Workspace,
   adapter: "auto" | "git" | "worktrunk" | "orca",
 ): Workspace {
-  if (process.platform === "win32") {
-    if (adapter !== "auto" && adapter !== "git") throw new Error(`Windows worktree backend ${adapter} is not verified; use git`);
-    adapter = "git";
-  }
+  if (process.platform === "win32" && adapter === "auto") adapter = "git";
   if (adapter === "orca") return createOrcaWorktree(root, spec);
   const existing = worktrees(root).find((w) => w.branch === spec.branch);
   if (existing) {
@@ -85,7 +80,14 @@ export function createWorktree(
   if (branchExists && git(root, "rev-parse", spec.branch) !== spec.base)
     throw new Error("Existing branch differs from planned base");
   if (adapter !== "git") {
-    const help = attempt(() => run("wt", ["switch", "--help"], root));
+    const candidates = process.platform === "win32" ? ["git-wt"] : ["git-wt", "wt"];
+    let executable: string | undefined, help: string | undefined;
+    for (const candidate of candidates) {
+      const output = attempt(() => run(candidate, ["switch", "--help"], root, 10000));
+      if (output && ["--no-hooks", "--format", "--base", "--create"].every(flag => output.includes(flag))) {
+        executable = candidate; help = output; break;
+      }
+    }
     const capable =
       help &&
       ["--no-hooks", "--format", "--base", "--create"].every((f) =>
@@ -96,13 +98,14 @@ export function createWorktree(
       try {
         const result = JSON.parse(
           run(
-            "wt",
+            executable!,
             [
               "switch",
               ...(branchExists ? [] : ["--create"]),
               spec.branch,
               "--base",
               spec.base,
+              ...(help!.includes("--path") ? ["--path", spec.path] : []),
               "--no-hooks",
               "--no-cd",
               "--yes",
@@ -126,7 +129,7 @@ export function createWorktree(
       }
       if (error && adapter === "worktrunk") throw error;
     } else if (adapter === "worktrunk")
-      throw new Error("Worktrunk lacks required automation capabilities");
+      throw new Error(`Worktrunk lacks required automation capabilities; install ${process.platform === "win32" ? "git-wt.exe (bare wt may be Windows Terminal)" : "git-wt or wt"}`);
   }
   if (existsSync(spec.path))
     throw new Error(
@@ -146,16 +149,6 @@ export function createWorktree(
       : ["-b", spec.branch, spec.path, spec.base]),
   );
   return spec;
-}
-function herdr(root: string, args: string[]) {
-  if (process.env.HERDR_ENV !== "1")
-    throw new Error(
-      "Run this command inside the saved Herdr session, or use the returned manual resume command",
-    );
-  const value = JSON.parse(run("herdr", args, root, 10000));
-  if (value.error || !value.result)
-    throw new Error(`Herdr error: ${JSON.stringify(value)}`);
-  return value.result;
 }
 export function startTerminal(
   root: string,
@@ -203,7 +196,7 @@ export function startTerminal(
   terminal.phase = "starting";
   if (workerCommand) {
     save();
-    herdr(root, ["pane", "run", terminal.pane, workerCommand]);
+    herdr(root, ["pane", "run", terminal.pane, terminalCommand(workerCommand, "herdr").command]);
     terminal.phase = "submitted";
     save();
     return;
@@ -240,6 +233,5 @@ export function attachTerminal(root: string, terminal: Terminal) {
     throw new Error(
       "No recorded pane. Inspect Herdr workspace list; do not relaunch an ambiguous attempt.",
     );
-  herdr(root, ["agent", "get", terminal.pane]);
-  return herdr(root, ["agent", "focus", terminal.pane]);
+  return focusHerdrPane(root, terminal);
 }

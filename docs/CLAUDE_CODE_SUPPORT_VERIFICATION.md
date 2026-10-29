@@ -3,9 +3,9 @@
 Status: checklist pending execution; this document does not claim successful live testing.
 
 Native Windows local workers use the same Claude stream/session contract as
-Linux, with Git worktrees and manual terminals. See the [Windows verification
+Linux, including the verified native resource backends. See the [Windows verification
 record](WINDOWS_PORTABILITY_VERIFICATION.md); native fake-worker coverage does
-not establish authenticated Claude acceptance. Herdr is unsupported on Windows.
+not establish authenticated Claude acceptance. Herdr requires the caller's actual Herdr session.
 
 Run these checks against an installed, authenticated Claude Code CLI in a disposable repository. Record the Claude Code and openspec-runner versions, selected model and effort, terminal backend, and results. Automated tests with fake executables do not establish live CLI compatibility.
 

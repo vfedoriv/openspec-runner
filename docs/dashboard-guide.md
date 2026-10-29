@@ -25,9 +25,9 @@ dry-run preview. Execution and approvals remain in the CLI or coordinating sessi
 ## Open the dashboard
 
 Use Linux, macOS, WSL, or native Windows with Node.js 22.13 or newer. Native
-Windows uses Git worktrees and manual terminals; run returned commands in
-PowerShell 7. Delegated component execution and optional terminal/worktree
-backends are unsupported on Windows. Follow the
+Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and
+Orca terminals; run returned commands in PowerShell 7. Delegated component
+execution remains unsupported on Windows. Follow the
 [installation guide](../README.md#install-into-a-target-project) first if the
 runner is not available. From the target project's Git repository:
 
