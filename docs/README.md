@@ -51,3 +51,5 @@ Start with the guide for the workflow you want to use.
 
 For third-party behavior, consult the current [OpenSpec documentation](https://github.com/Fission-AI/OpenSpec/tree/main/docs).
 Project-specific behavior is described in this repository's guides and design.
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

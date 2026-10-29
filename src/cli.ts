@@ -11,10 +11,11 @@ import { sessionSettings } from "./codex.js";
 import { getHarness, harnessIds, hasHarness, planningRules } from "./harnesses/registry.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import { createInterface } from "node:readline/promises";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 import { dashboardCommand } from "./dashboard-cli.js";
 import { summaryCommand, formatSummaryResult } from "./summary-cli.js";
 import { linkedCommand, linkedHelp } from "./linked-cli.js";
+import { hookCommand } from "./harnesses/copilot-hook-cli.js";
 export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
@@ -65,20 +66,28 @@ prints commands to run once in your terminals. Delivery and archival are explici
 `;
 export function init(
   cwd = process.cwd(),
-  selected: "codex" | "claude" | "all" = "codex",
+  selected: string = "codex",
   defaultAgent?: string,
+  defaultModel?: string,
 ) {
-  if (!["codex", "claude", "all"].includes(selected))
-    throw new Error("init --agent must be codex, claude, or all");
+  if (selected !== "all" && !hasHarness(selected))
+    throw new Error(`init --agent must be ${harnessIds().join(", ")}, or all`);
   if (defaultAgent && !hasHarness(defaultAgent))
     throw new Error(`Unknown default agent ${defaultAgent}; available: ${harnessIds().join(", ")}`);
   if (defaultAgent && selected !== "all")
     throw new Error("--default-agent is supported with init --agent all");
   const { root } = repository(cwd),
     config = resolve(root, "openspec/runner.yaml");
+  const chosen = selected === "all" ? defaultAgent ?? "codex" : selected;
+  const copilotDefault = chosen === "copilot" || chosen === "copilot-vscode";
+  if (!existsSync(config) && copilotDefault && (!defaultModel || defaultModel === "session"))
+    throw new Error("Copilot init requires --default-model with an explicit supported model");
+  if (copilotDefault && defaultModel) getHarness(chosen).resolveSettings({ model: defaultModel, parallel: false, dependsOn: [] }, undefined);
   mkdirSync(dirname(config), { recursive: true });
   if (!existsSync(config)) {
-    const created = selected === "codex"
+    const created = copilotDefault
+      ? stringify({ version: 2, defaultAgent: chosen, agents: { ...(selected === "all" ? { codex: { defaultModel: "session" }, claude: { defaultModel: "sonnet", permissionMode: "dontAsk", allowedTools: [] } } : {}), [chosen]: { defaultModel } }, maxParallel: 4, worktrees: "auto", terminal: "auto", cleanup: "automatic", setup: [], verifyIntegration: [] })
+      : selected === "codex"
       ? "version: 1\ndefaultModel: session\nmaxParallel: 4\nworktrees: auto\nterminal: auto\ncleanup: automatic\nsetup: []\nverifyIntegration: []\n"
       : selected === "claude"
         ? "version: 2\ndefaultAgent: claude\nagents:\n  claude:\n    defaultModel: sonnet\n    permissionMode: dontAsk\n    allowedTools: []\nmaxParallel: 4\nworktrees: auto\nterminal: auto\ncleanup: automatic\nsetup: []\nverifyIntegration: []\n"
@@ -99,15 +108,24 @@ export function init(
     "openspec-runner-summarize",
     "openspec-runner-present",
   ];
-  const targets = selected === "all" ? ["codex", "claude"] : [selected];
+  const targets = selected === "all" ? harnessIds() : [selected];
   const skills: string[] = [];
   for (const targetAgent of targets) for (const name of names) {
-    const targetRoot = targetAgent === "claude" ? ".claude/skills" : ".agents/skills";
+    const targetRoot = targetAgent === "claude" ? ".claude/skills" : targetAgent.startsWith("copilot") ? ".github/skills" : ".agents/skills";
     const target = resolve(root, targetRoot, name);
     mkdirSync(target, { recursive: true });
     const source = fileURLToPath(new URL(`../skills/${name}/SKILL.md`, import.meta.url));
     writeFileSync(resolve(target, "SKILL.md"), readFileSync(source, "utf8"));
-    skills.push(target);
+    if (!skills.includes(target)) skills.push(target);
+  }
+  if (targets.some(id => id.startsWith("copilot"))) {
+    const hookPath = resolve(root, ".github/hooks/openspec-runner.json");
+    const hooks = Object.fromEntries(["UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "ErrorOccurred"].map(event => [event, [{ type: "command", command: `openspec-runner hook ${event}`, timeoutSec: 10 }]]));
+    const content = JSON.stringify({ version: 1, hooks }, null, 2) + "\n";
+    if (existsSync(hookPath) && readFileSync(hookPath, "utf8") !== content)
+      throw new Error(`Runner hook file differs; preserve and review ${hookPath} before installing`);
+    mkdirSync(dirname(hookPath), { recursive: true });
+    if (!existsSync(hookPath)) writeFileSync(hookPath, content, { flag: "wx" });
   }
   return {
     config,
@@ -118,6 +136,7 @@ export function init(
 export async function main(args = process.argv.slice(2)) {
   let jsonOutput = args.includes("--json");
   try {
+    if (args[0] === "hook") { await hookCommand(args.slice(1)); return; }
     if (args[0] === "dashboard") { await dashboardCommand(args.slice(1)); return; }
     if (args[0] === "summary" || (args[0] === "coordination" && args[1] === "summary")) {
       summaryCommand({ cwd: process.cwd(), args }); return;
@@ -218,7 +237,7 @@ export async function main(args = process.argv.slice(2)) {
         default: throw new Error(`Unknown feature action: ${action}`);
       }
     }
-    else if (command === "init") result = init(process.cwd(), (v.agent as "codex" | "claude" | "all" | undefined) ?? "codex", v["default-agent"]);
+    else if (command === "init") result = init(process.cwd(), v.agent ?? "codex", v["default-agent"], v["default-model"]);
     else if (command === "models") {
       let configuredVersion: 1 | 2 | undefined;
       let defaultAgent: string | undefined;
@@ -344,7 +363,7 @@ export async function main(args = process.argv.slice(2)) {
                 );
           }
           if (v["dry-run"]) {
-            const capabilities = await adapter.capabilities(r.repo.root);
+            const capabilities = await adapter.capabilities(r.repo.root, preview.tasks[0]?.settings);
             result = {
               ...preview,
               capabilities,
@@ -363,7 +382,7 @@ export async function main(args = process.argv.slice(2)) {
               })),
             };
           } else {
-            const capabilities = await adapter.capabilities(r.repo.root);
+            const capabilities = await adapter.capabilities(r.repo.root, preview.tasks[0]?.settings);
             if (!capabilities.supported)
               throw new Error(`${adapter.displayName} is not ready: ${capabilities.reasons.join("; ")}`);
             if (selectedAgent === "claude" && preview.tasks.some((entry) => entry.settings.effort) && !capabilities.features.effort)

@@ -678,3 +678,5 @@ component commands take feature ID, `--store PATH --repository ID` and optional
 The complete CLI lifecycle, generated input schema, independent clones, pure
 previews, immutable export retries, read-only record inspection, offline replay and
 archive inspection/recovery are exercised in `test/coordination-cli.test.mjs`.
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

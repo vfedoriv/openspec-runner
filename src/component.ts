@@ -64,7 +64,7 @@ export class Component {
         digest(plan.tasks.map(task => task.id).sort()) !== digest(Object.keys(assignment.settings.tasks).sort())) throw new Error("Assignment task scope/setup/checks differ from committed component plan");
     const settings = [assignment.settings.implementation, ...Object.values(assignment.settings.tasks), assignment.settings.review, assignment.settings.repair];
     for (const harnessId of new Set(settings.map(setting => setting.harness ?? "codex"))) {
-      const capability = await getHarness(harnessId).capabilities(this.repo.root);
+      const capability = await getHarness(harnessId).capabilities(this.repo.root, settings.find(setting => (setting.harness ?? "codex") === harnessId));
       if (!capability.installed || !capability.supported || !capability.features.supervisedExecution || !capability.features.sessionOwnership || !capability.features.workerReports)
         throw new Error(`Harness ${harnessId} cannot execute assignment: ${capability.reasons.join("; ")}`);
       for (const setting of settings.filter(setting => (setting.harness ?? "codex") === harnessId)) {

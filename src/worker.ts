@@ -5,6 +5,7 @@ import type { TaskAttempt } from "./runner.js";
 import { getHarness } from "./harnesses/registry.js";
 import { createActivityWriter, type ActivityWriter } from "./activity-writer.js";
 import { ClaudeStreamDecoder } from "./harnesses/claude-stream.js";
+import { superviseCopilot } from "./harnesses/copilot-supervisor.js";
 
 // Exec exits after its turn and preserves session rollouts by default. The parent
 // observes close only after the child and its report command have returned.
@@ -19,9 +20,13 @@ export async function superviseWorker(
   evidence?: (update: (current: SupervisedSession) => void) => void,
 ): Promise<number | null> {
   const harness = getHarness(a.agent ?? "codex");
-  const capabilities = await harness.capabilities(a.path);
+  const capabilities = await harness.capabilities(a.path, a.settings);
   if (!capabilities.supported)
     throw new Error(`${harness.displayName} is not ready: ${capabilities.reasons.join("; ")}`);
+  if (harness.lifecycle?.ownership === "hook") {
+    if (!a.id || !evidence) throw new Error("Copilot supervision requires durable attempt evidence");
+    return superviseCopilot({ ...a, id: a.id }, common, prompt, started, evidence);
+  }
   if (a.agent === "claude" && a.settings.effort && !capabilities.features.effort)
     throw new Error("Claude CLI does not advertise --effort; omit effort or install a compatible CLI");
   if (a.agent === "claude" && a.settings.effort && capabilities.supportedEfforts?.length && !capabilities.supportedEfforts.includes(a.settings.effort))

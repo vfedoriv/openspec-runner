@@ -8,12 +8,14 @@ import { blocking, featureActive, implementationGate, readFeature, type FeatureJ
 import { readComponentBinding } from "./component-state.js";
 import { configFrom, loadPlan, tasksFrom } from "./plan.js";
 import { processStart } from "./processes.js";
+import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import type { DashboardOptions, DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
 import { collectCoordination } from "./dashboard-coordination.js";
 
 function session(featureId: string, attempt: TaskAttempt | FeatureJob): SessionSummary {
   let observation: SessionSummary["process"] = "unknown";
-  if (attempt.worker?.exitedAt) observation = "exited";
+  if (attempt.agent === "copilot-vscode" && agentMayBeActive(attempt)) observation = "unknown";
+  else if (attempt.worker?.exitedAt) observation = "exited";
   else if (attempt.worker?.pid && attempt.worker.processStart) {
     try {
       if (processStart(attempt.worker.pid) === attempt.worker.processStart) observation = "running";

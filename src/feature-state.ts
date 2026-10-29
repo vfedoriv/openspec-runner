@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { atomic, json } from "./system.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import type { TaskAttempt } from "./runner.js";
+import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import { loadPlan, type Plan } from "./plan.js";
 import { decodeRecord, stableDigest, type AssignmentRecord } from "./coordination-state.js";
 import { componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
@@ -125,7 +126,7 @@ export function validateDelegatedBinding(binding: DelegatedBinding) {
   return assignment;
 }
 export const featureActive = (a: FeatureJob) =>
-  ["preparing", "manual", "launching", "running"].includes(a.phase) || !!(a.worker && !a.worker.exitedAt);
+  ["preparing", "manual", "launching", "running"].includes(a.phase) || agentMayBeActive(a);
 export const blocking = (f: Finding) => ["correctness", "security", "spec", "verification"].includes(f.category);
 export function validateFeatureReport(report: unknown, role: "review" | "repair"): asserts report is FeatureReport {
   const r = report as FeatureReport;

@@ -533,7 +533,7 @@ test("installer owns eight skills and preserves existing OpenSpec skills/config"
     before,
   );
   const all = init(root, "all");
-  assert.equal(all.skills.length, 16);
+  assert.equal(all.skills.length, 24);
   for (const name of [
     "openspec-runner-plan",
     "openspec-runner-coordinate",

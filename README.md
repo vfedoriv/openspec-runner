@@ -9,7 +9,7 @@ approval through isolated implementation, whole-feature review, bounded repairs,
 final approval, OpenSpec archival, and completion on a retained integration
 branch.
 
-The package installs six project-local agent skills:
+The package installs eight project-local agent skills:
 
 | Skill | Where it runs | Responsibility |
 |---|---|---|
@@ -19,8 +19,10 @@ The package installs six project-local agent skills:
 | `openspec-runner-implement` | One isolated worker per task | Implement exactly one checkbox, verify it, commit it, and submit a structured report |
 | `openspec-runner-review` | A fresh feature reviewer | Review the whole feature against the approved spec and report findings |
 | `openspec-runner-repair` | An isolated repair worker | Repair blocking findings without changing the approved task list |
+| `openspec-runner-summarize` | A summary session | Enrich a saved delivery summary |
+| `openspec-runner-present` | A presentation session | Prepare a presentation from delivery evidence |
 
-The skills guide both supported worker harnesses; the `openspec-runner` CLI
+The skills guide Codex, Claude Code, Copilot CLI, and VS Code Copilot workers; the `openspec-runner` CLI
 enforces durable state, dependency, worktree, report, and integration rules.
 The runner does not replace OpenSpec, modify OpenSpec core, change Codex or
 Claude Code authentication or permissions. Opt-in managed features can archive a
@@ -32,6 +34,8 @@ Explicit skill invocation differs by harness:
 |---|---|
 | Codex | `Use $openspec-runner-plan ...` |
 | Claude Code | `/openspec-runner-plan ...` |
+| GitHub Copilot CLI (`copilot`) | `/openspec-runner-plan ...` |
+| VS Code Copilot (`copilot-vscode`) | `/openspec-runner-plan ...` |
 
 Use the corresponding skill name for coordination, implementation, review, or repair. Claude
 Code can also load a matching skill automatically from its description, but
@@ -1722,3 +1726,5 @@ Automated acceptance uses controlled fake Codex/Claude workers and terminal stre
 Testing a real saved terminal requires the corresponding installed backend and
 matching caller context; fake-backend coverage does not establish live backend
 availability or authentication.
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](docs/COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

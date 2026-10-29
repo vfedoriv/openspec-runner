@@ -6,6 +6,7 @@ import { inspectTerminal, type TerminalInspection } from "./terminal-cleanup.js"
 import { worktrees } from "./adapters.js";
 import { inspectOrcaWorktree } from "./orca-worktrees.js";
 import type { State, TaskAttempt } from "./runner.js";
+import { agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
 
 export interface CleanupResult {
   attempt: string;
@@ -30,6 +31,8 @@ export interface CleanupOptions {
 export function inspectCleanup(repo: ReturnType<typeof repository>, s: State, a: TaskAttempt): CleanupResult {
   const result: CleanupResult = { attempt: a.id, task: a.task, path: a.path, status: "skipped", reasons: [] };
   const skip = (reason: string) => ({ ...result, reasons: [reason] });
+  refreshCopilotEvidence(a, repo.common);
+  if (a.agent === "copilot-vscode" && agentMayBeActive(a)) return skip("Worker agent may still be active; inspect its saved session before cleanup");
   if (s.transaction || s.attempts.some(x => ["preparing", "manual", "launching", "running"].includes(x.phase) && x.id === a.id))
     return skip("Active attempt or pending integration");
   const listed = worktrees(repo.root);

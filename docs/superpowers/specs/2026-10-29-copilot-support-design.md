@@ -1,7 +1,7 @@
 # GitHub Copilot CLI and VS Code worker support
 
 Date: 2026-10-29
-Status: Proposed for user approval
+Status: Approved by user on 2026-10-29
 
 ## Intent and agreed scope
 

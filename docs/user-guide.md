@@ -419,3 +419,5 @@ review the intended integration branch through your team's Git workflow.
 For detailed diagnostics and all supported flags, use the
 [troubleshooting guide](../README.md#troubleshooting) and
 [current CLI reference](../README.md#cli-reference).
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

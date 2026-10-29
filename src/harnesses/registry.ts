@@ -1,10 +1,14 @@
 import { claudeHarness } from "./claude.js";
 import { codexHarness } from "./codex.js";
+import { copilotHarness } from "./copilot.js";
+import { copilotVscodeHarness } from "./copilot-vscode.js";
 import type { HarnessAdapter, HarnessId } from "./types.js";
 
 const adapters = new Map<string, HarnessAdapter>([
   [codexHarness.id, codexHarness],
   [claudeHarness.id, claudeHarness],
+  [copilotHarness.id, copilotHarness],
+  [copilotVscodeHarness.id, copilotVscodeHarness],
 ]);
 
 export function harnessIds(): string[] {

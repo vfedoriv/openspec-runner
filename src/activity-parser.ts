@@ -67,6 +67,7 @@ class ActivityNormalizer {
     const raw = value;
     const harness = this.identity.harness.toLowerCase();
     if (harness.includes("claude")) return this.consumeClaude(raw, source, stream, observedAt);
+    if (harness === "copilot" || harness === "copilot-vscode") return [this.entry("raw", source, stream, observedAt)];
     return this.consumeCodex(raw, source, stream, observedAt);
   }
 

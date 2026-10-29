@@ -452,3 +452,5 @@ For execution problems after leaving the dashboard, use the
 [recovery reference](../README.md#recovery-and-plan-changes) and
 [CLI troubleshooting](../README.md#troubleshooting). To return to the documentation
 index, see [all guides](README.md).
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

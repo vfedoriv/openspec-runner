@@ -2,6 +2,17 @@ import type { Assignment } from "../plan.js";
 
 export type HarnessId = string;
 
+export interface WorkerReceipt {
+  token: string;
+  pid?: number;
+  processStart?: string;
+  exitedAt?: string;
+  exitCode?: number | null;
+  log: string;
+  completion?: { source: "process-exit" | "agent-stop"; at: string; session: string };
+  launcher?: { pid?: number; exitedAt?: string; exitCode?: number | null };
+}
+
 export interface HarnessSettings {
   /** Stable harness identity saved with the attempt. */
   harness?: HarnessId;
@@ -75,12 +86,18 @@ export interface HarnessAdapter {
   readonly id: HarnessId;
   readonly displayName: string;
   readonly planningRulesPath: string;
+  readonly lifecycle?: {
+    transport: "process" | "editor";
+    ownership: "environment" | "stream" | "hook";
+    reservedSession: boolean;
+    skillPrefix: string;
+  };
   resolveSettings(
     assignment: Assignment,
     inherited: HarnessSettings | undefined,
     config?: AgentConfig,
   ): HarnessSettings;
-  capabilities(cwd?: string): Promise<HarnessCapabilities>;
+  capabilities(cwd?: string, settings?: HarnessSettings): Promise<HarnessCapabilities>;
   models(): Promise<ModelDiscovery>;
   initialInvocation(
     settings: HarnessSettings,

@@ -144,9 +144,11 @@ export function configFrom(raw: unknown): Config {
     if (!hasHarness(id))
       throw new Error(`Unknown harness configuration: ${id}; available harnesses: ${harnessIds().join(", ")}`);
     if (!object(value)) throw new Error(`Agent configuration must be a mapping: ${id}`);
-    keys(value, ["defaultModel", "permissionMode", "allowedTools", "planningRules"]);
+    keys(value, ["defaultModel", "permissionMode", "allowedTools", "planningRules", ...(id.startsWith("copilot") ? ["options"] : [])]);
+    if (value.options !== undefined && !object(value.options)) throw new Error(`Invalid options for ${id}`);
     const agent = {
       defaultModel: value.defaultModel,
+      ...(value.options !== undefined ? { options: value.options } : {}),
       ...(value.permissionMode !== undefined ? { permissionMode: value.permissionMode } : {}),
       ...(value.allowedTools !== undefined ? { allowedTools: value.allowedTools } : {}),
       ...(value.planningRules !== undefined ? { planningRules: value.planningRules } : {}),
