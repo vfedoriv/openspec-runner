@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./helpers/codex-diagnostics.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -26,7 +27,7 @@ const entries = log => readFileSync(log + ".activity.jsonl", "utf8").trim().spli
 function fakeCodex(t, dir, help, body = "console.log(JSON.stringify({type:'turn.completed'}));") {
   const bin = join(dir, "bin"); mkdirSync(bin);
   const executable = join(bin, "codex");
-  writeFileSync(executable, `#!/usr/bin/env node\nif(process.argv.includes('--help'))console.log(${JSON.stringify(help)});else{require('fs').writeFileSync(${JSON.stringify(join(dir, "args.json"))},JSON.stringify(process.argv.slice(2)));${body}}`);
+  writeFileSync(executable, `#!/usr/bin/env node\n${codexDiagnostics}\nif(process.argv.includes('--help'))console.log(${JSON.stringify(help)});else{require('fs').writeFileSync(${JSON.stringify(join(dir, "args.json"))},JSON.stringify(process.argv.slice(2)));${body}}`);
   chmodSync(executable, 0o755);
   const oldPath = process.env.PATH;
   process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${oldPath}`;

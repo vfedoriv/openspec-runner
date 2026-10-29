@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./codex-diagnostics.mjs";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +11,7 @@ export const featureSettings = { implementation: { harness: "codex", model: "tes
   repair: { harness: "codex", model: "test-model", effort: "high" }, maxFixRounds: 2 };
 export const blocker = { id: "F1", category: "correctness", location: "output.txt:1", impact: "Wrong output", correction: "Repair the output" };
 export const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-export function executable(path, source) { writeFileSync(path, `#!/usr/bin/env node\n${source}`); chmodSync(path, 0o755); }
+export function executable(path, source) { writeFileSync(path, `#!/usr/bin/env node\n${codexDiagnostics}\n${source}`); chmodSync(path, 0o755); }
 
 export function featureFixture(t, options = {}) {
   const previousPath = process.env.PATH;

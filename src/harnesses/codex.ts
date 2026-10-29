@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolve, sep } from "node:path";
 import type { Assignment } from "../plan.js";
 import { containedPath, unredirectedPath } from "../platform-paths.js";
+import { scopedCodexInvocation, validateCodexInvocation } from "./codex-permissions.js";
 import {
   codexArgs,
   models as codexModels,
@@ -114,6 +115,8 @@ export const codexHarness: HarnessAdapter = {
     const legacy = settings as Settings;
     return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), prompt], cwd };
   },
+  managedInvocation: (invocation, context) => process.platform === "win32" ? scopedCodexInvocation(invocation, context) : invocation,
+  validateManagedInvocation: (invocation, context) => { if (process.platform === "win32") validateCodexInvocation(invocation, context); },
   activityInvocation(invocation, capabilities): Invocation {
     if (!capabilities.supported || !capabilities.features.structuredActivity ||
         invocation.args[0] !== "exec" || invocation.args[1] === "resume" ||

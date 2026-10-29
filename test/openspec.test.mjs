@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./helpers/codex-diagnostics.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -117,6 +118,7 @@ test(
     t.after(() => { process.env.PATH = previousPath; rmSync(fakeBin, { recursive: true, force: true }); });
     const codex = join(fakeBin, "codex");
     writeFileSync(codex, `#!/usr/bin/env node
+${codexDiagnostics}
 if (process.argv.includes('--help')) { console.log('--add-dir --model --cd'); process.exit(0); }
 (async () => {
   const { Feature } = await import(${JSON.stringify(new URL("../dist/feature.js", import.meta.url).href)});

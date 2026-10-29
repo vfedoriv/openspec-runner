@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { hostname } from "node:os";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { replaceJson } from "./platform-files.js";
 import { resolveCommand, renderArgument, renderCommand } from "./platform-command.js";
@@ -101,4 +102,10 @@ export function locked<T>(dir: string, fn: () => T): T {
 }
 export const quote = (s: string) => renderArgument(s, process.platform === "win32" ? "powershell" : "posix");
 export const shellCommand = (args: string[]) => renderCommand(args, process.platform === "win32" ? "powershell" : "posix");
+export function workerRunnerCommand(args: string[], agent: string): string {
+  const command = process.platform === "win32" && agent === "codex"
+    ? [process.execPath, fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url))]
+    : ["openspec-runner"];
+  return shellCommand([...command, ...args]);
+}
 export const clean = (cwd: string) => git(cwd, "status", "--porcelain") === "";

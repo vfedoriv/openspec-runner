@@ -21,6 +21,7 @@ import {
   run,
   clean,
   shellCommand,
+  workerRunnerCommand,
   repository,
   locked,
   attempt,
@@ -636,17 +637,15 @@ export class Runner {
     const skillInvocation = claude || copilot
       ? "/openspec-runner-implement"
       : "Use $openspec-runner-implement.";
-    const begin = claude
-      ? `openspec-runner begin ${change} ${a.task} --attempt ${a.id} --session ${a.expectedSession}`
-      : `openspec-runner begin ${change} ${a.task} --attempt ${a.id}`;
+    const begin = workerRunnerCommand(["begin", change, a.task, "--attempt", a.id,
+      ...(claude ? ["--session", a.expectedSession!] : [])], a.agent ?? "codex");
     const identity = copilot ? "the actual session returned by begin" : claude ? "the exact Claude stream session_id" : "the actual CODEX_THREAD_ID";
     const reportPath = resolve(
         dirname(a.path),
         "reports",
         `${a.id}-input.json`,
       ),
-      reportCommand = shellCommand([
-        "openspec-runner",
+      reportCommand = workerRunnerCommand([
         "report",
         change,
         a.task,
@@ -654,19 +653,25 @@ export class Runner {
         a.id,
         "--file",
         reportPath,
-      ]);
+      ], a.agent ?? "codex");
     return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.` + pinnedPrompt(this.repo.stateDir, change);
   }
   command(change: string, a: TaskAttempt) {
     if (a.agent === "copilot-vscode" && (a.worker || a.session)) return undefined;
     if (!a.session) return this.workerCommand(change, a);
     if (a.agent === "claude" && !a.identityConfirmed) return undefined;
-    const invocation = getHarness(a.agent ?? "codex").resumeInvocation(
+    const harness = getHarness(a.agent ?? "codex");
+    let invocation = harness.resumeInvocation(
       a.settings,
       a.path,
       this.repo.common,
       a.session,
     );
+    if (harness.managedInvocation && a.gitDir) {
+      const context = { common: this.repo.common, gitDir: a.gitDir, branch: a.branch };
+      invocation = harness.managedInvocation(invocation, context);
+      harness.validateManagedInvocation?.(invocation, context);
+    }
     return shellCommand([invocation.executable, ...invocation.args]);
   }
   workerCommand(change: string, a: TaskAttempt) {

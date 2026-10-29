@@ -3,9 +3,10 @@
 These are authenticated model runs on Windows, distinct from the simulated
 worker tests and the installed resource-backend checks. The disposable fixtures
 use real OpenSpec 1.15.0, Git worktrees, and runner `840be0c` plus the
-VS Code launch correction on `codex/fix-vscode-worker-launch`.
+VS Code launch correction merged into `dev` at `5e07c79`, plus the Codex
+permission correction on `codex/fix-windows-codex-worker`.
 They ask the agent to create `greeting.txt`, verify its exact content with Node,
-commit it, and submit a report. Successful runs integrate the result; Claude and
+commit it, and submit a report. Successful runs integrate the result; Claude, Codex, and
 Copilot CLI also execute a managed feature reviewer. Final approval is not recorded.
 
 ## Results
@@ -13,7 +14,7 @@ Copilot CLI also execute a managed feature reviewer. Final approval is not recor
 | Harness | Installed version | Requested model | Result |
 | --- | --- | --- | --- |
 | Claude Code | 2.1.312 | `claude-haiku-5-5` | Implementation, verification, commit, accepted report, supervised exit, integration, and review passed. Observed model matches the request. |
-| Codex | 0.165.0 | `gpt-6-luna`, low effort | Blocked: no accepted final report. Windows restrictions deny writes to linked-worktree Git administrative metadata. |
+| Codex | 0.165.0 | `gpt-6-luna`, low effort | Passed implementation, verification, commit, accepted report, supervised exit, integration, and independent managed review through the corrected production launcher. |
 | Copilot CLI | 1.0.105 | `auto` | Implementation, verification, commit, accepted report, root stop, supervised exit, integration, and review passed with the diagnostic launch changes below. |
 | VS Code Copilot | VS Code 1.144.0; bundled Copilot Chat 0.72.0 | `Auto (copilot)` | Passed implementation, verification, commit, report, root stop, supervisor completion, and integration through the corrected production launcher. Runtime events confirm the exact generated worker agent and GPT-6 Luna tool calls. Real managed review remains pending. |
 
@@ -24,9 +25,9 @@ that does not establish the model used by the CLI retest.
 
 ## Diagnostic setup and limitations
 
-The original launch paths did not pass these three retests. Copilot CLI and
-Codex adjustments below remain test-driver diagnostics. The VS Code correction
-is implemented in runner source and was retested without a launcher override:
+The original launch paths did not pass these three retests. Copilot CLI
+adjustments below remain test-driver diagnostics. The VS Code and Codex
+corrections are implemented in runner source and were retested without launcher overrides:
 
 - **Copilot CLI:** start a new prompt session with `--trust-folder -p PROMPT`,
   omit `--session-id`, and capture its actual root session through the existing
@@ -34,15 +35,20 @@ is implemented in runner source and was retested without a launcher override:
   `--session-id`. The test grants `shell` and `write` tools only for the disposable
   worker invocation; it does not alter global permissions. The shipped adapter
   still reserves a session and needs a corresponding implementation change.
-- **Codex:** expose this checkout's actual runner on a disposable tools PATH,
-  grant workspace write access and the report directory, and put temporary files
-  in an explicitly granted test-owned directory. This advances registration and
-  file verification, but Git cannot create `index.lock` or `COMMIT_EDITMSG` in its
-  worktree administrative directory. A second test uses `--approve-for-me`
-  (which cannot be combined with `--sandbox`); it still produces no accepted
-  report. A Git metadata workaround attempted by the agent is rejected by the
-  runner's clean-worktree/report validation. None of these attempts is counted
-  as a successful implementation or integration. No ACLs were weakened.
+- **Codex:** a per-worktree named profile extends `:workspace`. It grants the
+  assigned Git administrative directory, object storage, runner runtime, report
+  directory, and its branch/ref-log namespace (directory create rights are needed
+  for Windows Git lock files). Common Git configuration and other branch
+  namespaces stay read-only. The prompt pins this installation's Node/runner
+  executable, avoiding a global wrapper that cannot resolve inside the native
+  sandbox. Temporary files have an explicit runner-owned location. A no-model
+  effective-permission check rejects missing or unexpectedly broad grants before
+  inference, including on resume. The installed CLI retains the correct named
+  profile even with process-local legacy `sandbox_mode` overrides; incompatible
+  diagnostics fail closed. Native probes verify Git writes and denied writes to
+  common configuration, main, `.git`, `.codex`, `.agents`, and `.aws`. No global
+  configuration, credentials, or ACLs were changed. Earlier failed diagnostic
+  attempts remain in the evidence directory.
 - **VS Code:** open the assigned folder/profile before submitting any prompt.
   Initialize editable Agent mode and select the generated custom agent with
   empty chat commands; these do not perform model inference. Only then arm the
@@ -58,7 +64,7 @@ is implemented in runner source and was retested without a launcher override:
 - **Claude:** explicitly permit its native `PowerShell` tool in the disposable
   fixture. Bash-only permissions caused the first run to stop before edits.
 
-The implementation-only test does not establish repair, cancellation, recovery,
+These small task and review tests do not establish repair, cancellation, recovery,
 mixed-harness operation, or the full acceptance checklists for any harness.
 Git/manual resources were used; these runs do not combine real model inference
 with Herdr or Orca terminals.
@@ -75,7 +81,23 @@ worktrees, runner logs, hook leases, reports, and the diagnostic driver.
   root session: `37586b32-d56f-474c-a019-1fbea0148f9e`;
   commit: `63c668a19ed55af229eb03fe67b2ae955f20796d`;
   review: `c6b1f17a-bbb6-4b27-b720-fd644c627d7d`.
-- Codex blocked retests: `codex-retest-*`, `codex-auto-review-*`.
+- Codex historical blocked retests: `codex-retest-*`, `codex-auto-review-*`.
+- Corrected Codex implementation: `55520544-0a89-4c69-b300-ab6c366fe0f0`;
+  session `01a188ca-bfcc-7dc1-946f-fbd88b8141c5`;
+  commit `475936826713511ee37f1dde740a52d01540ca22`. Accepted report,
+  zero supervisor exit, and integration are saved in `codex-scoped-*`.
+  Independent managed review `32887a32-d605-4e60-965f-fbed8cee4cb3`
+  completed with accepted report, zero exit, and no findings.
+- Final launcher including effective-permission preflight: implementation
+  `5d68e65d-b0d1-481a-8407-4faccc8273f6`, session
+  `01a188d8-823d-7273-bcaa-c741b9dfd17b`, commit
+  `4aabde47dc961c885ec822ccfa4d9a2df9cc3549`; integrated. Fresh review
+  `353a86c7-9b85-415f-877e-cf2a8ca00a6b`, session
+  `01a188d9-b974-7c62-b439-813029f773b2`; accepted report, no findings.
+  Both supervised processes exit zero. See `codex-verified2-*` evidence.
+  Git's automatic shared ref maintenance emitted a denied `packed-refs.lock`
+  warning; the scoped branch commit succeeded and the worktree was clean.
+  Shared maintenance remains outside worker permissions.
 - VS Code blocked retest: `f711ad36-05a2-4e0c-b8a6-02cdce805d91`.
   After manual trust, session `a7a9d7ad-6ef4-4540-9d47-24ca0eb89d4f`
   bound at `17:03:33.924Z` and stopped at `17:03:52.938Z`, after the
@@ -126,3 +148,22 @@ no actionable issues.
 - [VS Code agent hooks](https://code.visualstudio.com/docs/agent-customization/hooks)
 
 Installed CLI help was also checked for supported flags and conflicting options.
+
+## Codex permission correction verification
+
+The focused native test exercises the installed Codex permission diagnostics and
+Windows sandbox without model inference, including positive Git writes and
+negative protected-file writes. Regression tests cover profile identity,
+initial/resumed invocations, and rejection of missing, unrestricted, or broader
+effective permissions. An independent code review found no remaining actionable
+issues after the resume and effective-configuration checks were added.
+
+Final verification: Windows full suite 274 passed, 114 skipped, zero failures;
+Linux full suite 371 passed, 20 skipped, zero failures. The installed native
+Codex test passes all four focused tests, including sandbox probes. Package
+dry-run and `git diff --check` pass. Linux used Node 22.13.0 and pnpm 11.7.0
+on a native WSL filesystem; installed native integrations remain skipped there.
+
+- [Codex permission profiles](https://learn.chatgpt.com/docs/permissions)
+- [Codex protected paths](https://learn.chatgpt.com/docs/agent-approvals-security)
+- [Codex Windows sandbox](https://learn.chatgpt.com/docs/windows/windows-sandbox)

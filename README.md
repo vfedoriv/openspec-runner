@@ -191,6 +191,14 @@ The target project must have:
   authenticated, and available on `PATH`.
 - The planning artifacts committed before the first launch.
 
+Native Windows Codex workers require a CLI with named permission profiles and
+`debug prompt-input` diagnostics (verified with 0.165.0). The runner creates a
+process-local profile for its linked worktree, Git commit metadata, reports, and
+temporary files, and verifies effective permissions before starting a model.
+Unsupported or overriding permission settings fail with a diagnostic before
+inference. Initial and resumed workers use the same profile. User configuration
+and machine ACLs are unchanged. See the [real Windows acceptance record](docs/REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
+
 Optional integrations:
 
 - [Worktrunk](https://github.com/max-sixty/worktrunk) for worktree creation. With

@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./helpers/codex-diagnostics.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
@@ -19,7 +20,7 @@ for (const id of supported) test(`${id} supervises implementation, review, repai
   const old = process.env.PATH; process.env.PATH = `${bin}${delimiter}${old}`;
   t.after(() => { process.env.PATH = old; rmSync(dir, { recursive: true, force: true }); });
   const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-  const executable = (name, body) => { const path = join(bin, name); writeFileSync(path, `#!/usr/bin/env node\n${body}`); chmodSync(path, 0o755); };
+  const executable = (name, body) => { const path = join(bin, name); writeFileSync(path, `#!/usr/bin/env node\n${codexDiagnostics}\n${body}`); chmodSync(path, 0o755); };
   executable("openspec", "console.log(JSON.stringify(process.argv[2] === 'status' ? {artifacts:[]} : {state:'ready'}));");
   git("init", "-b", "main"); git("config", "user.email", "test@example.invalid"); git("config", "user.name", "Runner Test");
   init(root, id, undefined, "model");

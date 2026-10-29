@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Runner, decodeState } from "./runner.js";
 import { loadPlan, assertCommitted, readiness, type Plan } from "./plan.js";
-import { atomic, clean, git, json, run, shellCommand, quote, attempt } from "./system.js";
+import { atomic, clean, git, json, run, shellCommand, quote, attempt, workerRunnerCommand } from "./system.js";
 import { createWorktree, startTerminal, terminalAdapter } from "./adapters.js";
 import { superviseWorker, type SupervisedSession } from "./worker.js";
 import { processStart } from "./processes.js";
@@ -382,14 +382,17 @@ export class Feature {
   prompt(change: string, j: FeatureJob) {
     const s = this.read(change), skill = `openspec-runner-${j.role === "review" ? "review" : "repair"}`;
     const input = resolve(dirname(j.path), "reports", `${j.id}-input.json`);
+    const begin = workerRunnerCommand(["feature", "begin", change, "--attempt", j.id,
+      ...(j.expectedSession ? ["--session", j.expectedSession] : [])], j.agent ?? "codex");
+    const report = workerRunnerCommand(["feature", "report", change, "--attempt", j.id, "--file", input], j.agent ?? "codex");
     return `${j.agent === "claude" || getHarness(j.agent).lifecycle?.ownership === "hook" ? "/" : "Use $"}${skill}\nChange: ${change}\nAttempt: ${j.id}\n` +
-      `First run: openspec-runner feature begin ${change} --attempt ${j.id}${j.expectedSession ? ` --session ${j.expectedSession}` : ""}\n` +
+      `First run: ${begin}\n` +
       `Review base: ${s.approval!.base}\nHead: ${j.base}\nFingerprint: ${j.fingerprint}\n` +
       `Role: ${j.role}. ${j.role === "review" ? "Review the entire feature; do not edit tracked files." : "Repair only the supplied blockers; do not change planning artifacts or checkboxes. Commit repairs."}\n` +
       `Findings/history: ${JSON.stringify(j.role === "repair" ? j.findings : s.jobs.filter(x => x.role === "review" && x.id !== j.id).at(-1)?.report?.findings ?? [])}\n` +
       `Report fields: attempt, session (use the session returned by begin), outcome (completed/blocked/failed), head (${j.base}), fingerprint (${j.fingerprint}), summary, verification (nonempty strings), ` +
       `${j.role === "review" ? "findings (array of {id, category: correctness/security/spec/verification/style/improvement, location, impact, correction})" : "commit (full HEAD SHA for completed repairs)"}.\n` +
-      `Write JSON at ${input}; submit: openspec-runner feature report ${change} --attempt ${j.id} --file ${quote(input)}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
+      `Write JSON at ${input}; submit: ${report}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
   }
   begin(change: string, id: string, session?: string) {
     return this.updateJob(change, id, j => {

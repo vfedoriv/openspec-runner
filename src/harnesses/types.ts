@@ -66,6 +66,14 @@ export interface Invocation {
   cwd: string;
   stdin?: string;
   env?: Record<string, string>;
+  /** Runtime directories created by the coordinator before a managed launch. */
+  prepareDirectories?: string[];
+}
+
+export interface ManagedInvocationContext {
+  common: string;
+  gitDir: string;
+  branch: string;
 }
 
 export interface ModelDiscovery {
@@ -109,6 +117,8 @@ export interface HarnessAdapter {
     session: string,
   ): Invocation;
   activityInvocation?(invocation: Invocation, capabilities: HarnessCapabilities): Invocation;
+  managedInvocation?(invocation: Invocation, context: ManagedInvocationContext): Invocation;
+  validateManagedInvocation?(invocation: Invocation, context: ManagedInvocationContext): void;
   resumeInvocation(
     settings: HarnessSettings,
     cwd: string,

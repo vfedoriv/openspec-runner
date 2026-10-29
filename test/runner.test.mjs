@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./helpers/codex-diagnostics.mjs";
 import { fileURLToPath } from "node:url";
 import { localRunnerTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
@@ -55,7 +56,7 @@ function git(root, ...args) {
   }).trim();
 }
 function executable(path, body) {
-  writeFileSync(path, "#!/usr/bin/env node\n" + body);
+  writeFileSync(path, "#!/usr/bin/env node\n" + codexDiagnostics + body);
   chmodSync(path, 0o755);
 }
 function fixture(t, options = {}) {
@@ -599,11 +600,17 @@ test("manual resume keeps resolved model and effort after caller switches models
   const a = r.launch("demo", ["1.1"], settings)[0];
   new Runner(a.path).begin("demo", "1.1", a.id, "saved-session");
   const attached = r.attach("demo", "1.1");
-  assert.match(attached.command, /'resume' 'saved-session'/);
+  assert.match(attached.command, /'resume'/);
+  assert.match(attached.command, /'saved-session'/);
   assert.match(attached.command, /'model-a'/);
   assert.match(attached.command, /high/);
-  assert.match(attached.command, /'--add-dir'/);
-  assert.ok(attached.command.includes(r.repo.common));
+  if (process.platform === "win32") {
+    assert.match(attached.command, /default_permissions/);
+    assert.doesNotMatch(attached.command, /'--add-dir'/);
+  } else {
+    assert.match(attached.command, /'--add-dir'/);
+    assert.ok(attached.command.includes(r.repo.common));
+  }
 });
 test("uncommitted planning files and invalid selected base cannot launch", (t) => {
   const { runner: r, root } = fixture(t);

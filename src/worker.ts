@@ -12,7 +12,7 @@ import { observeProcess, stopOwnedProcess, windowsTreeIsGone } from "./platform-
 // Exec exits after its turn and preserves session rollouts by default. The parent
 // observes close only after the child and its report command have returned.
 export type SupervisedSession = Pick<TaskAttempt, "agent" | "path" | "settings" | "expectedSession" |
-  "session" | "worker" | "identityConfirmed" | "observedSession" | "terminalEvidence"> & { id?: string };
+    "session" | "worker" | "identityConfirmed" | "observedSession" | "terminalEvidence"> & Partial<Pick<TaskAttempt, "gitDir" | "branch">> & { id?: string };
 
 export async function superviseWorker(
   a: SupervisedSession,
@@ -43,9 +43,14 @@ export async function superviseWorker(
     prompt,
     session,
   );
+  if (harness.managedInvocation && a.gitDir && a.branch)
+    invocation = harness.managedInvocation(invocation, { common, gitDir: a.gitDir, branch: a.branch });
   if (a.id && capabilities.features.structuredActivity && harness.activityInvocation) {
     try { invocation = harness.activityInvocation(invocation, capabilities); } catch { /* Optional capture hook. */ }
   }
+  for (const directory of invocation.prepareDirectories ?? []) mkdirSync(directory, { recursive: true });
+  if (a.gitDir && a.branch)
+    harness.validateManagedInvocation?.(invocation, { common, gitDir: a.gitDir, branch: a.branch });
   mkdirSync(dirname(a.worker!.log), { recursive: true });
   const fd = openSync(a.worker!.log, "ax", 0o600);
   let activity: ActivityWriter | undefined;
