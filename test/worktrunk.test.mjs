@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { optionalBackendTest as test } from "./helpers/native-support.mjs";
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';

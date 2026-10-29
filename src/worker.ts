@@ -6,6 +6,8 @@ import { getHarness } from "./harnesses/registry.js";
 import { createActivityWriter, type ActivityWriter } from "./activity-writer.js";
 import { ClaudeStreamDecoder } from "./harnesses/claude-stream.js";
 import { superviseCopilot } from "./harnesses/copilot-supervisor.js";
+import { resolveCommand } from "./platform-command.js";
+import { observeProcess, stopOwnedProcess, windowsTreeIsGone } from "./platform-process.js";
 
 // Exec exits after its turn and preserves session rollouts by default. The parent
 // observes close only after the child and its report command have returned.
@@ -53,13 +55,25 @@ export async function superviseWorker(
   try {
     return await new Promise((resolvePromise, reject) => {
       let failure: unknown;
+      let createdAt: string | undefined;
+      let stopping: Promise<void> | undefined;
       const environment = { ...process.env, ...(invocation.env ?? {}) };
       if (a.agent === "claude") delete environment.CODEX_THREAD_ID;
-      const child = spawn(invocation.executable, invocation.args, {
+      const command = resolveCommand({ executable: invocation.executable, args: invocation.args, cwd: invocation.cwd, env: environment });
+      const child = spawn(command.executable, command.args, {
         cwd: invocation.cwd,
-        env: environment,
+        env: command.env,
+        windowsHide: true,
         stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
+      const stop = () => {
+        stopping ??= (async () => {
+          const result = child.pid && createdAt
+            ? await stopOwnedProcess({ pid: child.pid, createdAt, timeoutMs: 3000 })
+            : { stopped: false, uncertain: true };
+          if (result.uncertain) evidence?.(current => { current.worker!.terminationUncertain = true; });
+        })();
+      };
       const decoder = a.agent === "claude"
         ? new ClaudeStreamDecoder((event) => {
             if (!event.sessionId) return;
@@ -91,7 +105,7 @@ export async function superviseWorker(
           })
         : undefined;
       child.once("spawn", () => {
-        try { started(child.pid!); } catch (error) { failure = error; }
+        try { createdAt = observeProcess(child.pid!)?.createdAt; started(child.pid!); } catch (error) { failure = error; stop(); }
         if (invocation.stdin !== undefined) {
           child.stdin!.write(invocation.stdin);
           child.stdin!.end();
@@ -105,7 +119,7 @@ export async function superviseWorker(
           decoder?.feed(chunk);
         } catch (error) {
           failure = error;
-          child.kill();
+          stop();
         }
       });
       child.stderr!.on("data", chunk => {
@@ -113,7 +127,11 @@ export async function superviseWorker(
         writeSync(fd, chunk); process.stderr.write(chunk);
       });
       child.once("error", error => { failure = error; });
-      child.once("close", code => {
+      child.stdin?.on("error", error => { failure ??= error; stop(); });
+      child.once("close", async code => {
+        try { await stopping; } catch (error) { failure ??= error; }
+        if (process.platform === "win32" && child.pid && (!createdAt || !windowsTreeIsGone(child.pid, createdAt)))
+          evidence?.(current => { current.worker!.terminationUncertain = true; });
         try {
           decoder?.end();
         } catch (error) {

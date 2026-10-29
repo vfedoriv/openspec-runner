@@ -1,10 +1,11 @@
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { featureFixture, git } from "./helpers/feature-fixture.mjs";
-const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
 test("summary CLI reads and exports archived evidence without starting an agent", async t => {
   const f = featureFixture(t);
   writeFileSync(join(f.root, "openspec/changes/demo/proposal.md"), `Explain results from ${f.root}`);

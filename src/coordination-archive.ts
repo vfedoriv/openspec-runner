@@ -147,7 +147,7 @@ export function prepareApprovedArchive(options: { store: CoordinationStore; inpu
           // Every dirty/untracked path was validated immediately above in this private checkout.
           git(receipt.path, "add", "--all", "--force", "--", ".");
           if (git(receipt.path, "write-tree") !== receipt.tree) throw new Error("Produced archive blob tree changed since durable receipt");
-          git(receipt.path, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-m", `Archive ${target.change}\n\n${marker}`);
+          git(receipt.path, "-c", "commit.gpgsign=false", "commit", "-m", `Archive ${target.change}\n\n${marker}`);
         } else if (git(receipt.path, "rev-parse", `${head}^{tree}`) !== receipt.tree || !clean(receipt.path) || git(receipt.path, "show", "-s", "--format=%P", head) !== target.base || !git(receipt.path, "show", "-s", "--format=%B", head).includes(marker) || digest(changedPaths({ root, base: target.base, commit: head })) !== digest(receipt.paths)) throw new Error("Archive commit recovery requires exact operation identity and scope");
         receipt.commit = git(receipt.path, "rev-parse", "HEAD");
         const existing = attempt(() => git(root, "rev-parse", `refs/heads/${receipt.branch}`));

@@ -40,6 +40,7 @@ export class Component {
     return binding;
   }
   async inspect(options: ComponentInspection) {
+    if (process.platform === "win32") throw new Error("Windows delegated-context write protection is not verified; delegated execution is unsupported on this host");
     known(options); assertRepositoryIdentity({ root: this.repo.root, repository: this.repository });
     const store = new CoordinationStore({ root: options.storeRoot, featureId: options.featureId });
     const historyRevision = coordinationRevision({ store, revision: options.historyRevision }), snapshot = store.readSnapshot({ revision: historyRevision });

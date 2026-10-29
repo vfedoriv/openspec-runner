@@ -75,7 +75,7 @@ test("a supervised Claude worker records matching stream identity and exit evide
   mkdirSync(root);
   mkdirSync(bin);
   const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
+  process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${oldPath}`;
   t.after(() => {
     process.env.PATH = oldPath;
     rmSync(dir, { recursive: true, force: true });
@@ -89,6 +89,7 @@ test("a supervised Claude worker records matching stream identity and exit evide
     if(args.includes('--version')) console.log('2.1.119 (Claude Code)');
     else if(args.includes('--help')) console.log('-p --output-format stream-json --verbose --model --session-id --resume --permission-mode --allowedTools --add-dir --effort');
     else (async()=>{
+      for await (const chunk of process.stdin) {}
       console.log(JSON.stringify({type:'system',session_id:session}));
       const {Runner}=await import(${JSON.stringify(module)}), r=new Runner(process.cwd());
       r.begin('demo','1.1',${JSON.stringify("ATTEMPT")},session);
@@ -115,7 +116,7 @@ test("a supervised Claude worker records matching stream identity and exit evide
     runner.prompt("demo", { ...initial, agent: "codex" }),
     /^Use \$openspec-runner-implement\./,
   );
-  assert.match(initial.prompt, /\.openspec-runner\/worktrees\/reports/);
+  assert.match(initial.prompt.replaceAll("\\", "/"), /\.openspec-runner\/worktrees\/reports/);
   assert.equal(git("status", "--short"), "");
   const script = readFileSync(join(bin, "claude"), "utf8").replaceAll("ATTEMPT", initial.id);
   writeFileSync(join(bin, "claude"), script);

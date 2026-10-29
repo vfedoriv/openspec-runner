@@ -101,6 +101,7 @@ export function pinnedPrompt(stateDir: string, change: string): string {
   return `\nDelegated assignment: ${delegated.featureId}/${delegated.assignmentId}. Read only the pinned Store context at:\n${delegated.contextPaths.join("\n")}\nThese pinned paths are the authoritative shared contracts and linked specifications. Never re-fetch or substitute a registered Store checkout, including through openspec instructions or context commands. OpenSpec commands may inspect repository-local component artifacts only. Do not approve, archive, or complete this shared feature.`;
 }
 export function validateDelegatedBinding(binding: DelegatedBinding) {
+  if (process.platform === "win32") throw new Error("Windows delegated-context write protection is not verified; delegated execution is unsupported on this host");
   const stateDir = dirname(dirname(binding.bindingPath)), change = binding.bindingPath.split(/[\\/]/).at(-1)!.replace(/\.json$/, "");
   const runtime = readComponentBinding({ stateDir, change });
   if (!runtime || stableDigest({ value: binding }) !== stableDigest({ value: delegationForBinding({ stateDir, binding: runtime }) }))

@@ -13,6 +13,7 @@ import { inspectCleanup, removeInspectedWorktree, type CleanupResult, type Clean
 import { closeInspectedTerminal } from "./terminal-cleanup.js";
 import { superviseWorker } from "./worker.js";
 import { processStart } from "./processes.js";
+import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import {
   atomic,
   json,
@@ -324,6 +325,10 @@ export class Runner {
     agent?: string,
   ) {
     const p = loadPlan(this.repo.root, change);
+    if (process.platform === "win32" && !["auto", "git"].includes(p.config.worktrees))
+      throw new Error("Windows requires verified Git worktrees; select worktrees: git");
+    if (process.platform === "win32" && !["auto", "manual"].includes(p.config.terminal))
+      throw new Error("Windows requires verified manual terminals; select terminal: manual");
     const feature = implementationGate(this.repo.stateDir, p);
     if (feature?.delegated && settings) throw new Error("Delegated execution forbids settings overlays");
     if (feature && agent && agent !== feature.approval!.implementation.harness)
@@ -681,10 +686,18 @@ export class Runner {
         throw new Error("Worker attempt is not ready; inspect before retrying");
       if (a.worker) {
         if (a.worker.exitedAt) throw new Error("Worker already exited; inspect its saved report and log");
-        if (a.worker.pid && (!a.worker.processStart || processStart(a.worker.pid) === a.worker.processStart))
+        if (a.worker.processPlatform && a.worker.processPlatform !== process.platform)
+          throw new Error("Worker process identity belongs to another platform; retain resources");
+        if (process.platform === "win32" && a.worker.processStart && /^\d+$/.test(a.worker.processStart))
+          throw new Error("Legacy Linux process identity cannot be recovered on Windows");
+        const observedStart = a.worker.pid ? processStart(a.worker.pid) : undefined;
+        if (a.worker.pid && (!a.worker.processStart || (!observedStart && !processIsGone(a.worker.pid)) || observedStart === a.worker.processStart))
           throw new Error("Worker is still running or its process identity is uncertain");
         a.worker.exitedAt = new Date().toISOString();
         a.worker.exitCode = null;
+        if (process.platform === "win32" && a.agent !== "copilot-vscode" && a.worker.pid &&
+            (!a.worker.processStart || !windowsTreeIsGone(a.worker.pid, a.worker.processStart)))
+          a.worker.terminationUncertain = true;
         if (!a.report || a.agent === "copilot" || a.agent === "copilot-vscode") {
           a.phase = "failed";
           a.error = "Worker supervisor disappeared without an accepted report; inspect the log and explicitly retry";
@@ -709,9 +722,11 @@ export class Runner {
         this.repo.common,
         this.prompt(change, a),
         (pid) => {
+          const identity = processStart(pid);
           this.updateAttempt(change, id, (current) => {
             current.worker!.pid = pid;
-            current.worker!.processStart = processStart(pid);
+            current.worker!.processStart = identity;
+            current.worker!.processPlatform = process.platform;
           });
         },
         (update) => this.updateAttempt(change, id, update),

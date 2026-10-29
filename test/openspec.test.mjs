@@ -127,7 +127,7 @@ if (process.argv.includes('--help')) { console.log('--add-dir --model --cd'); pr
 })().catch(e => { console.error(e); process.exitCode = 1; });
 `);
     chmodSync(codex, 0o755);
-    process.env.PATH = fakeBin + ":" + previousPath;
+    process.env.PATH = fakeBin + (process.platform === "win32" ? ";" : ":") + previousPath;
     const review = feature.launch("runner-acceptance", "review");
     assert.equal((await feature.worker("runner-acceptance", review.id)).exitCode, 0);
     feature.approveFinal("runner-acceptance", feature.finalPreview("runner-acceptance").token);

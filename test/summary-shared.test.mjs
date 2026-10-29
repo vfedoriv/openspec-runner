@@ -1,4 +1,4 @@
-import test from "node:test";
+import { delegatedContextTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";

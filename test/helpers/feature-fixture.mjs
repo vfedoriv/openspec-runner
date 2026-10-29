@@ -19,7 +19,7 @@ export function featureFixture(t, options = {}) {
   mkdirSync(root); mkdirSync(bin); writeFileSync(controlPath, "{}");
   const savedEnv = Object.fromEntries(["HERDR_ENV", "ORCA_TERMINAL_HANDLE", "CODEX_THREAD_ID"].map(k => [k, process.env[k]]));
   for (const k of Object.keys(savedEnv)) delete process.env[k];
-  process.env.PATH = `${bin}:${previousPath}`;
+  process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${previousPath}`;
   t.after(() => {
     process.env.PATH = previousPath;
     for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }

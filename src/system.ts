@@ -12,11 +12,17 @@ import {
 import { dirname, resolve } from "node:path";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
+import { replaceJson } from "./platform-files.js";
+import { resolveCommand, renderArgument, renderCommand } from "./platform-command.js";
+import { canonicalPath, gitHooksPath } from "./platform-paths.js";
 
 export function runRaw(cmd: string, args: string[], cwd: string, timeout?: number): string {
   try {
-    return execFileSync(cmd, args, {
+    const invocation = resolveCommand({ executable: cmd, args, cwd });
+    return execFileSync(invocation.executable, invocation.args, {
       cwd,
+      env: invocation.env,
+      windowsHide: true,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 16 * 1024 * 1024,
@@ -32,9 +38,9 @@ export function run(cmd: string, args: string[], cwd: string, timeout?: number):
   return runRaw(cmd, args, cwd, timeout).trim();
 }
 export const git = (cwd: string, ...args: string[]) =>
-  run("git", ["-c", "core.hooksPath=/dev/null", ...args], cwd);
+  run("git", ["-c", `core.hooksPath=${gitHooksPath()}`, ...args], cwd);
 export const gitRaw = (cwd: string, ...args: string[]) =>
-  runRaw("git", ["-c", "core.hooksPath=/dev/null", ...args], cwd);
+  runRaw("git", ["-c", `core.hooksPath=${gitHooksPath()}`, ...args], cwd);
 export function attempt<T>(fn: () => T): T | undefined {
   try {
     return fn();
@@ -46,26 +52,11 @@ export function json<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 export function atomic(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  const fd = openSync(tmp, "wx", 0o600);
-  try {
-    writeFileSync(fd, JSON.stringify(value, null, 2) + "\n");
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
-  const directory = openSync(dirname(path), "r");
-  try {
-    fsyncSync(directory);
-  } finally {
-    closeSync(directory);
-  }
+  replaceJson(path, value);
 }
 export function repository(cwd = process.cwd()) {
-  const root = git(cwd, "rev-parse", "--show-toplevel");
-  const common = resolve(root, git(root, "rev-parse", "--git-common-dir"));
+  const root = canonicalPath(git(cwd, "rev-parse", "--show-toplevel"));
+  const common = canonicalPath(resolve(root, git(root, "rev-parse", "--git-common-dir")));
   return { root, common, stateDir: resolve(common, "openspec-runner") };
 }
 export function locked<T>(dir: string, fn: () => T): T {
@@ -76,9 +67,21 @@ export function locked<T>(dir: string, fn: () => T): T {
       host: hostname(),
       token: randomUUID(),
     });
-  try {
-    writeFileSync(file, token, { flag: "wx", mode: 0o600 });
-  } catch (error: any) {
+  const deadline = Date.now() + 3000;
+  while (true) {
+    try { writeFileSync(file, token, { flag: "wx", mode: 0o600 }); break; }
+    catch (error: any) {
+      // A supervisor and its reporting child may reach the short
+      // critical section together. Wait only for a live, other local owner;
+      // never delete/adopt a stale lock or wait for our own nested acquisition.
+      if (error.code === "EEXIST" && Date.now() < deadline) {
+        const owner = attempt(() => JSON.parse(readFileSync(file, "utf8")));
+        if (owner?.host === hostname() && Number.isSafeInteger(owner.pid) && owner.pid > 0 && owner.pid !== process.pid &&
+            attempt(() => { process.kill(owner.pid, 0); return true; })) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+          continue;
+        }
+      }
     // Stale-lock removal is explicit: unlinking automatically races another contender.
     if (error?.code === "EEXIST")
       throw new Error(
@@ -88,6 +91,7 @@ export function locked<T>(dir: string, fn: () => T): T {
       `Cannot create runner lock at ${file}: ${error?.code ?? error?.message}`,
       { cause: error },
     );
+    }
   }
   try {
     return fn();
@@ -95,6 +99,6 @@ export function locked<T>(dir: string, fn: () => T): T {
     if (attempt(() => readFileSync(file, "utf8")) === token) unlinkSync(file);
   }
 }
-export const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
-export const shellCommand = (args: string[]) => args.map(quote).join(" ");
+export const quote = (s: string) => renderArgument(s, process.platform === "win32" ? "powershell" : "posix");
+export const shellCommand = (args: string[]) => renderCommand(args, process.platform === "win32" ? "powershell" : "posix");
 export const clean = (cwd: string) => git(cwd, "status", "--porcelain") === "";

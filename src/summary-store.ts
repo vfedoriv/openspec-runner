@@ -6,6 +6,7 @@ import { summaryDigest, summarySubjectKey } from "./summary-evidence.js";
 import { renderBasicSummary, renderNarrative } from "./summary-render.js";
 import type { SummaryBundle, SummaryHandle, SummaryNarrative, SummarySubject } from "./summary-types.js";
 import { portableVerificationEvidence } from "./submission.js";
+import { replaceBytes } from "./platform-files.js";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 function safe(path: string): string {
@@ -22,8 +23,7 @@ function location(stateDir: string, subject: SummarySubject, digest: string) {
 }
 function textFile(path: string, text: string) {
   safe(path); mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, text, { flag: "wx", mode: 0o600 }); renameSync(temporary, path);
+  replaceBytes(path, Buffer.from(text));
 }
 export function readSummary(options: { stateDir: string; subject: SummarySubject; sourceDigest: string }): SummaryHandle | undefined {
   const dir = location(options.stateDir, options.subject, options.sourceDigest);

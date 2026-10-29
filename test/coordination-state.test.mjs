@@ -1,4 +1,5 @@
 import test from "node:test";
+import { writeGitWrapper } from "./helpers/git-wrapper.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -104,13 +105,13 @@ test("record commits recover exact operation identity and cannot commit unrelate
 test("concurrent branch advancement cannot publish a record against an unexpected parent", (t) => {
   const { root, write } = fixture(t), before = git(root, "rev-parse", "HEAD");
   const other = git(root, "commit-tree", git(root, "rev-parse", "HEAD^{tree}"), "-p", before, "-m", "External concurrent commit");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
   const wrapperDir = mkdtempSync(join(tmpdir(), "runner-fake-git-")); t.after(() => rmSync(wrapperDir, { recursive: true, force: true }));
   const wrapper = join(wrapperDir, "git");
-  writeFileSync(wrapper, `#!/bin/sh\ncase " $* " in\n  *" update-ref "*|*" commit --only "*)\n    if [ ! -e '${wrapperDir}/race-fired' ]; then\n      touch '${wrapperDir}/race-fired'\n      '${realGit}' -C '${root}' update-ref refs/heads/coordination '${other}' '${before}'\n    fi\n    ;;\nesac\nexec '${realGit}' "$@"\n`);
+  writeGitWrapper(wrapper, realGit, `if ((args.includes('update-ref') || (args.includes('commit') && args.includes('--only'))) && !fs.existsSync(${JSON.stringify(join(wrapperDir, "race-fired"))})) { fs.writeFileSync(${JSON.stringify(join(wrapperDir, "race-fired"))}, '1'); cp.execFileSync(realGit, ['-C', ${JSON.stringify(root)}, 'update-ref', 'refs/heads/coordination', ${JSON.stringify(other)}, ${JSON.stringify(before)}]); }`);
   chmodSync(wrapper, 0o755);
   const originalPath = process.env.PATH;
-  process.env.PATH = `${wrapperDir}:${originalPath}`;
+  process.env.PATH = `${wrapperDir}${process.platform === "win32" ? ";" : ":"}${originalPath}`;
   try {
     assert.throws(() => write(approval()), /head|reference|lock|expected/i);
     assert.equal(git(root, "rev-parse", "HEAD"), other);
@@ -139,12 +140,12 @@ test("an independent Store clone reconstructs status from committed portable rec
 test("unchanged Store reads avoid repeated Git work without sharing mutable snapshots", (t) => {
   const { root, store, write } = fixture(t); write(approval()); write(assignment());
   const snapshot = store.readSnapshot(); store.authoritativeApproval({ snapshot });
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
   const bin = mkdtempSync(join(tmpdir(), "runner-count-git-")), log = join(bin, "calls");
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(log)}\nexec ${quote(realGit)} "$@"\n`); chmodSync(join(bin, "git"), 0o755);
-  const previousPath = process.env.PATH; process.env.PATH = `${bin}:${previousPath}`;
+  writeGitWrapper(join(bin, "git"), realGit, `fs.appendFileSync(${JSON.stringify(log)}, args.join(' ') + '\\n');`);
+  const previousPath = process.env.PATH; process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${previousPath}`;
   try {
     snapshot.manifest.components.api.settings.implementation.model = "changed";
     snapshot.records.find(record => record.kind === "assignment").owner = "changed";
@@ -164,11 +165,11 @@ test("unchanged Store reads avoid repeated Git work without sharing mutable snap
 
 test("lost index refresh after record commit recovers the exact commit without dirty index state", (t) => {
   const { root, write } = fixture(t), before = git(root, "rev-parse", "HEAD");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
   const wrapperDir = mkdtempSync(join(tmpdir(), "runner-fake-git-")); t.after(() => rmSync(wrapperDir, { recursive: true, force: true }));
   const wrapper = join(wrapperDir, "git");
-  writeFileSync(wrapper, `#!/bin/sh\ncase " $* " in\n  *" add -- runner/features/feature/approvals/approval.json "*) exit 1 ;;\nesac\nexec '${realGit}' "$@"\n`); chmodSync(wrapper, 0o755);
-  const originalPath = process.env.PATH; process.env.PATH = `${wrapperDir}:${originalPath}`;
+  writeGitWrapper(wrapper, realGit, `if (args.includes('add') && args.includes('runner/features/feature/approvals/approval.json')) process.exit(1);`);
+  const originalPath = process.env.PATH; process.env.PATH = `${wrapperDir}${process.platform === "win32" ? ";" : ":"}${originalPath}`;
   try { assert.throws(() => write(approval()), /git/); } finally { process.env.PATH = originalPath; }
   const committed = git(root, "rev-parse", "HEAD"); assert.notEqual(committed, before);
   assert.equal(write(approval(), { expectedHead: before }).head, committed);

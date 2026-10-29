@@ -3,6 +3,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Assignment } from "../plan.js";
+import { containedPath, unredirectedPath } from "../platform-paths.js";
 import type { AgentConfig, HarnessSettings, PlanningRulesResult } from "./types.js";
 
 export type CopilotId = "copilot" | "copilot-vscode";
@@ -39,8 +40,8 @@ export function copilotRulesFile(id: CopilotId): string {
 export function copilotRules(id: CopilotId, root?: string, config?: AgentConfig): PlanningRulesResult {
   const paths = [{ path: copilotRulesFile(id), source: `bundled:harnesses/${id}/planning-rules.md` }];
   if (root && config?.planningRules) {
-    const path = realpathSync(resolve(root, config.planningRules));
-    if (!path.startsWith(realpathSync(root) + sep)) throw new Error("Planning supplement must remain inside repository");
+    const path = resolve(root, config.planningRules);
+    if (!containedPath(root, path) || !unredirectedPath(path)) throw new Error("Planning supplement must remain inside repository");
     paths.push({ path, source: config.planningRules });
   }
   return { harness: id, documents: paths.map(({ path, source }) => {

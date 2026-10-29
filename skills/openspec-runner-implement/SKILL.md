@@ -5,6 +5,8 @@ description: Implement exactly one assigned OpenSpec checkbox in an openspec-run
 
 Require the change name, task number, attempt ID, harness, and registration identity supplied by the runner prompt. Begin inside the assigned worktree with the exact `openspec-runner begin ...` command in that prompt. Codex registers its actual `CODEX_THREAD_ID`; Claude registers the reserved UUID supplied with `--session`. If registration fails, stop before editing. Do not switch harnesses or inherit a Codex identity in a Claude worker.
 
+On native Windows, execute the supplied commands in PowerShell 7 with Git/manual resources. Preserve the supplied path quoting and harness session identity. Delegated component execution is unsupported there until protected-context restrictions are verified. If process termination is uncertain, retain the worktree and stop for inspection; an accepted report alone does not authorize cleanup.
+
 Read the change's artifacts and the assigned task. Implement only that checkbox, perform its stated verification, and commit the implementation. Do not alter tasks.md, execution.yaml, runner.yaml, other shared change artifacts, or move to another checkbox. If the task needs planning changes or cannot be completed, report blocked with the reason and stop. Do not merge or integrate your own result.
 
 Write report JSON to a temporary path outside the worktree with these fields:

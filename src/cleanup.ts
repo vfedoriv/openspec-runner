@@ -7,6 +7,7 @@ import { worktrees } from "./adapters.js";
 import { inspectOrcaWorktree } from "./orca-worktrees.js";
 import type { State, TaskAttempt } from "./runner.js";
 import { agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
+import { samePath, containedPath, unredirectedPath } from "./platform-paths.js";
 
 export interface CleanupResult {
   attempt: string;
@@ -32,13 +33,13 @@ export function inspectCleanup(repo: ReturnType<typeof repository>, s: State, a:
   const result: CleanupResult = { attempt: a.id, task: a.task, path: a.path, status: "skipped", reasons: [] };
   const skip = (reason: string) => ({ ...result, reasons: [reason] });
   refreshCopilotEvidence(a, repo.common);
-  if (a.agent === "copilot-vscode" && agentMayBeActive(a)) return skip("Worker agent may still be active; inspect its saved session before cleanup");
+  if (agentMayBeActive(a)) return skip("Worker agent may still be active or termination is uncertain; inspect its saved session before cleanup");
   if (s.transaction || s.attempts.some(x => ["preparing", "manual", "launching", "running"].includes(x.phase) && x.id === a.id))
     return skip("Active attempt or pending integration");
   const listed = worktrees(repo.root);
-  if ([repo.root, s.integration.path, listed[0]?.path].includes(a.path))
+  if ([repo.root, s.integration.path, listed[0]?.path].some(path => path && samePath(path, a.path)))
     return skip("Main, invoking, or integration worktree is protected");
-  const w = listed.find(w => w.path === a.path);
+  const w = listed.find(w => samePath(w.path, a.path));
   if (!w) {
     const moved = a.gitDir && listed.find((candidate) =>
       attempt(() => git(candidate.path, "rev-parse", "--absolute-git-dir")) === a.gitDir,
@@ -53,12 +54,12 @@ export function inspectCleanup(repo: ReturnType<typeof repository>, s: State, a:
   }
   if (!existsSync(a.path) || w.prunable !== undefined)
     return skip("Worktree registration is stale; inspect it before cleanup");
-  if (realpathSync(a.path) !== resolve(a.path) || lstatSync(a.path).isSymbolicLink())
+  if (!unredirectedPath(a.path))
     return skip("Worktree path is redirected; ownership is uncertain");
   const actual = repository(a.path);
   const gitDir = git(a.path, "rev-parse", "--absolute-git-dir");
-  if (realpathSync(actual.common) !== realpathSync(repo.common) ||
-      !gitDir.startsWith(resolve(repo.common, "worktrees") + sep) ||
+  if (!samePath(actual.common, repo.common) ||
+      !containedPath(resolve(repo.common, "worktrees"), gitDir) ||
       (a.gitDir ? a.gitDir !== gitDir : w.branch !== a.branch))
     return skip("Worktree identity differs from the recorded attempt; resolve ownership first");
   const issues: string[] = [];

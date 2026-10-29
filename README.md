@@ -183,7 +183,7 @@ flowchart TB
 
 The target project must have:
 
-- Linux, macOS, or WSL. Native Windows is outside v1.
+- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows uses Git worktrees and manual terminals; see [Windows verification and limits](docs/WINDOWS_PORTABILITY_VERIFICATION.md).
 - Node.js 22.13 or newer.
 - Git and a Git repository.
 - OpenSpec installed and initialized in the project.
@@ -1117,8 +1117,8 @@ refresh to reflect the external removal. No unrelated terminals are closed.
 are independent; Orca terminals also work with Git/Worktrunk worktrees once
 Orca can resolve their paths. This integration requires a local runtime on the
 same host and filesystem as the runner. Remote/SSH targets and WSL-to-Windows
-app bridging are unsupported. Native Windows remains outside runner support;
-use Linux, macOS, or an Orca runtime inside the same WSL environment.
+app bridging are unsupported. Native Windows supports Git worktrees with manual
+terminals; Orca, Herdr, and Worktrunk remain unsupported there.
 
 The CLI contract was checked against upstream revision
 [`fa0010e8`](https://github.com/stablyai/orca/tree/fa0010e8d6b2a7ad946fe1f1b005c6a8497c6c17).
@@ -1582,9 +1582,10 @@ pnpm test
 pnpm pack --dry-run
 ```
 
-Run the complete suite on Linux or WSL with Node.js 22.13 or newer and pnpm on
-the Linux PATH. Native Windows does not support the integration suite's POSIX
-fake executables. To run the managed-feature checks first and then the full suite:
+Run the complete suite on Linux/WSL or native Windows with Node.js 22.13 or
+newer and pnpm on PATH. Windows runs the four-harness local worker matrix;
+tests for unsupported delegated protection and optional backends are explicitly
+skipped. To run the managed-feature checks first and then the full suite:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -1598,8 +1599,8 @@ The real OpenSpec interoperability test requires `openspec` on PATH; otherwise
 it is skipped. It creates a disposable project and exercises approval, a fake
 supervised reviewer, final approval, real OpenSpec spec synchronization, and
 archival. Real Codex/Claude authentication is not required for the test suite.
-On Windows, `pnpm run build` and
-`node --test test/feature-contract.test.mjs` check types and portable contracts.
+See the [Windows verification record](docs/WINDOWS_PORTABILITY_VERIFICATION.md)
+for native test coverage and the separate authenticated acceptance matrix.
 
 Tests use temporary repositories and fake Codex, Claude Code, Worktrunk, and
 Herdr executables.
@@ -1632,8 +1633,9 @@ Adapter references: [Codex CLI](https://learn.chatgpt.com/docs/developer-command
 See the [dashboard guide](docs/dashboard-guide.md) for a step-by-step walkthrough,
 keyboard controls, session activity, and troubleshooting.
 
-Run the dashboard from a repository on Linux/macOS or in WSL on Windows. Native
-Windows runner execution remains unsupported. Node.js 22.13 or newer is required.
+Run the dashboard from a repository on Linux/macOS, WSL, or native Windows.
+Windows uses Git/manual resources and PowerShell 7 operator commands.
+Node.js 22.13 or newer is required.
 
 ```sh
 openspec-runner dashboard

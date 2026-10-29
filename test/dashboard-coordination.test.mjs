@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { delegatedContextTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -185,7 +185,7 @@ test("coordination rejects malformed and mismatched map entries using shared map
 
 test("coordination snapshot never writes files refs checks or worker tools", t => {
   const f = fixture(t); bind(f);
-  const actualGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const actualGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
   executable(join(f.bin, "git"), `
 const cp = require('node:child_process');
 const args = process.argv.slice(2), command = args[0] === '-c' ? args[2] : args[0];

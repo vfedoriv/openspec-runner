@@ -16,6 +16,7 @@ import { dashboardCommand } from "./dashboard-cli.js";
 import { summaryCommand, formatSummaryResult } from "./summary-cli.js";
 import { linkedCommand, linkedHelp } from "./linked-cli.js";
 import { hookCommand } from "./harnesses/copilot-hook-cli.js";
+import { renderCommand } from "./platform-command.js";
 export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
@@ -120,10 +121,16 @@ export function init(
   }
   if (targets.some(id => id.startsWith("copilot"))) {
     const hookPath = resolve(root, ".github/hooks/openspec-runner.json");
-    const hooks = Object.fromEntries(["UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "ErrorOccurred"].map(event => [event, [{ type: "command", command: `openspec-runner hook ${event}`, timeoutSec: 10 }]]));
+    const hooks = Object.fromEntries(["UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "ErrorOccurred"].map(event => [event, [{ type: "command", command: `openspec-runner hook ${event}`, powershell: process.platform === "win32"
+      ? `${renderCommand([process.execPath, fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url)), "hook", event], "powershell")}; exit $LASTEXITCODE`
+      : `& openspec-runner hook ${event}; exit $LASTEXITCODE`, timeoutSec: 10 }]]));
     const content = JSON.stringify({ version: 1, hooks }, null, 2) + "\n";
-    if (existsSync(hookPath) && readFileSync(hookPath, "utf8") !== content)
-      throw new Error(`Runner hook file differs; preserve and review ${hookPath} before installing`);
+    if (existsSync(hookPath) && readFileSync(hookPath, "utf8").replace(/\r\n/g, "\n") !== content) {
+      const legacyHooks = Object.fromEntries(["UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "ErrorOccurred"].map(event => [event, [{ type: "command", command: `openspec-runner hook ${event}`, timeoutSec: 10 }]]));
+      if (readFileSync(hookPath, "utf8").replace(/\r\n/g, "\n") !== JSON.stringify({ version: 1, hooks: legacyHooks }, null, 2) + "\n")
+        throw new Error(`Runner hook file differs; preserve and review ${hookPath} before installing`);
+      writeFileSync(hookPath, content);
+    }
     mkdirSync(dirname(hookPath), { recursive: true });
     if (!existsSync(hookPath)) writeFileSync(hookPath, content, { flag: "wx" });
   }
@@ -179,8 +186,6 @@ export async function main(args = process.argv.slice(2)) {
       console.log(help);
       return;
     }
-    if (process.platform === "win32")
-      throw new Error("Native Windows is outside v1; use WSL");
     if (args.filter((arg) => arg === "--agent" || arg.startsWith("--agent=")).length > 1)
       throw new Error("Specify --agent at most once");
     if (v.agent !== undefined && !hasHarness(v.agent) && v.agent !== "all")

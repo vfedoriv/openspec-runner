@@ -1,4 +1,4 @@
-import test from "node:test";
+import { delegatedContextTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
@@ -274,7 +274,7 @@ test("archive commit recovery binds produced blob tree rather than only changed 
   f.c.approveArchive({ scope, token: p.token, approvedBy: "user", expectedHead: p.head, id: "archive-approval", operationId: "op-archive-approval" });
   p = f.c.archivePreview({ scope }); const args = { scope, token: p.token, expectedHead: p.head, id: "archive", operationId: "op-archive" };
   git(f.root, "config", "diff.renames", "false");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
   const wrapper = join(f.bin, "git"), quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
   writeFileSync(wrapper, `#!/bin/sh\ncase "$PWD" in\n  *archive-checkouts*) for arg in "$@"; do [ "$arg" != commit ] || exit 1; done ;;\nesac\nexec ${quote(realGit)} "$@"\n`); chmodSync(wrapper, 0o755);
   try { assert.throws(() => f.c.prepareArchive(args), /git|commit/i); }

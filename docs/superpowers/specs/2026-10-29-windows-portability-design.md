@@ -1,7 +1,7 @@
 # Windows portability layer scope
 
 Date: 2026-10-29
-Status: Planning baseline; implementation not yet authorized
+Status: Implementation approved; native verification and live acceptance are tracked in `docs/WINDOWS_PORTABILITY_VERIFICATION.md`.
 Baseline: Copilot implementation `32fdba3`, integrated into local `dev`.
 
 ## Intent

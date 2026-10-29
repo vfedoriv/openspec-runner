@@ -4,10 +4,11 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Runner, decodeState } from "./runner.js";
 import { loadPlan, assertCommitted, readiness, type Plan } from "./plan.js";
-import { atomic, clean, git, json, run, shellCommand, attempt } from "./system.js";
+import { atomic, clean, git, json, run, shellCommand, quote, attempt } from "./system.js";
 import { createWorktree, startTerminal, terminalAdapter } from "./adapters.js";
 import { superviseWorker, type SupervisedSession } from "./worker.js";
 import { processStart } from "./processes.js";
+import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import { getHarness } from "./harnesses/registry.js";
 import { completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
 import { safeSummary } from "./summary-service.js";
@@ -317,9 +318,11 @@ export class Feature {
           (previous.role !== "review" || clean(previous.path) && git(previous.path, "rev-parse", "HEAD") === previous.base))
         throw new Error("Successful job cannot be retried at the same commit");
     }
+    const worktrees = s.delegated?.resources.worktrees ?? p.config.worktrees;
+    if (process.platform === "win32" && !["auto", "git"].includes(worktrees)) throw new Error("Windows requires verified Git worktrees");
     return { role, head: r.head, base: s.approval!.base, fingerprint: p.fingerprint,
       settings: s.approval![role], findings, round: role === "repair" ? s.fixRounds + 1 : s.fixRounds,
-      terminal: terminalAdapter(s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees: s.delegated?.resources.worktrees ?? p.config.worktrees };
+      terminal: terminalAdapter(s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees };
   }
   launch(change: string, role: "review" | "repair", retry = false) {
     const reserved = this.runner.lock(() => {
@@ -387,7 +390,7 @@ export class Feature {
       `Findings/history: ${JSON.stringify(j.role === "repair" ? j.findings : s.jobs.filter(x => x.role === "review" && x.id !== j.id).at(-1)?.report?.findings ?? [])}\n` +
       `Report fields: attempt, session (use the session returned by begin), outcome (completed/blocked/failed), head (${j.base}), fingerprint (${j.fingerprint}), summary, verification (nonempty strings), ` +
       `${j.role === "review" ? "findings (array of {id, category: correctness/security/spec/verification/style/improvement, location, impact, correction})" : "commit (full HEAD SHA for completed repairs)"}.\n` +
-      `Write JSON at ${input}; submit: openspec-runner feature report ${change} --attempt ${j.id} --file ${shellCommand([input])}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
+      `Write JSON at ${input}; submit: openspec-runner feature report ${change} --attempt ${j.id} --file ${quote(input)}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
   }
   begin(change: string, id: string, session?: string) {
     return this.updateJob(change, id, j => {
@@ -435,7 +438,8 @@ export class Feature {
     let exitCode: number | null = null, failure: unknown;
     try {
       exitCode = await superviseWorker(j, this.repo.common, this.prompt(change, j), pid => {
-        this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = processStart(pid); });
+        const identity = processStart(pid);
+        this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = identity; current.worker!.processPlatform = process.platform; });
       }, (fn: (current: SupervisedSession) => void) => { this.updateJob(change, id, fn); });
     } catch (error) { failure = error; }
     this.update(change, s => {
@@ -466,9 +470,13 @@ export class Feature {
         return;
       }
       if (j.worker?.pid) {
-        if (!j.worker.processStart || process.platform !== "linux" || processStart(j.worker.pid) === j.worker.processStart)
+        const observedStart = processStart(j.worker.pid);
+        if (!j.worker.processStart || (j.worker.processPlatform && j.worker.processPlatform !== process.platform) ||
+            (process.platform === "win32" && /^\d+$/.test(j.worker.processStart)) || (!observedStart && !processIsGone(j.worker.pid)) || observedStart === j.worker.processStart)
           throw new Error("Worker is running or process identity is uncertain; retain its resources");
         j.worker.exitedAt = now(); j.worker.exitCode = null;
+        if (process.platform === "win32" && j.agent !== "copilot-vscode" && !windowsTreeIsGone(j.worker.pid, j.worker.processStart))
+          j.worker.terminationUncertain = true;
       } else if (j.worker || j.terminal.phase || j.session)
         throw new Error("Startup is ambiguous; inspect saved process/terminal evidence before recovery");
       j.phase = "failed";

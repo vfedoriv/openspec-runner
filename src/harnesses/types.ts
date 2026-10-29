@@ -6,11 +6,13 @@ export interface WorkerReceipt {
   token: string;
   pid?: number;
   processStart?: string;
+  processPlatform?: NodeJS.Platform;
+  terminationUncertain?: boolean;
   exitedAt?: string;
   exitCode?: number | null;
   log: string;
   completion?: { source: "process-exit" | "agent-stop"; at: string; session: string };
-  launcher?: { pid?: number; exitedAt?: string; exitCode?: number | null };
+  launcher?: { pid?: number; processStart?: string; exitedAt?: string; exitCode?: number | null };
 }
 
 export interface HarnessSettings {

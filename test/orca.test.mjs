@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { optionalBackendTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -23,7 +23,7 @@ function fixture(t) {
   git("init", "-b", "main"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.invalid");
   writeFileSync(join(root, "tracked.txt"), "base"); git("add", "."); git("commit", "-m", "base");
   const base = git("rev-parse", "HEAD");
-  process.env.PATH = `${bin}:${process.env.PATH}`;
+  process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`;
   delete process.env.ORCA_TERMINAL_HANDLE;
   const fake = installFakeOrca(dir, root, bin);
   const spec = { branch: "openspec-runner/task", path: join(dir, "planned"), base };

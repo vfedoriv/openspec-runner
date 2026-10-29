@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { atomic, json, locked } from "../system.js";
+import { samePath } from "../platform-paths.js";
 
 export interface HookEvent {
   kind: "prompt" | "stop" | "end" | "error" | "tool";
@@ -51,7 +52,7 @@ export function normalizeHook(eventName: string, value: unknown): HookEvent {
   };
 }
 export function transitionHook(lease: HookLease, event: HookEvent): HookLease {
-  if (event.cwd !== lease.worktree) throw new Error("Hook worktree identity mismatch");
+  if (!samePath(event.cwd, lease.worktree)) throw new Error("Hook worktree identity mismatch");
   if (event.subagent && event.kind !== "tool") throw new Error("Hook must describe the root session");
   if (!Number.isFinite(Date.parse(event.at)) || Date.parse(event.at) < Date.parse(lease.armedAt))
     throw new Error("Stale hook event");
@@ -96,7 +97,7 @@ export function recordHook(input: { stateDir: string; event: HookEvent }): { out
     if (!existsSync(dir)) return { output: {}, exitCode: 0 };
     const event = { ...input.event, cwd: realpathSync(input.event.cwd) };
     const leases = readdirSync(dir).filter(n => n.endsWith(".json") && n !== "lock.json").map(n => json<HookLease>(resolve(dir, n)))
-      .filter(l => l.worktree === event.cwd);
+      .filter(l => samePath(l.worktree, event.cwd));
     if (!leases.length) return { output: {}, exitCode: 0 };
     if (leases.length !== 1) throw new Error("Ambiguous hook worktree ownership");
     const previous = leases[0];

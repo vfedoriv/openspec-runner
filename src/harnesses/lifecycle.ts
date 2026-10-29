@@ -15,6 +15,7 @@ export function refreshCopilotEvidence(a: Attempt, common: string): void {
 }
 
 export function completionProblem(a: Attempt): string | undefined {
+  if (a.worker?.terminationUncertain) return "Worker termination is uncertain; retain its resources";
   if (a.worker && !a.worker.exitedAt) return "supervised worker has not exited yet";
   if (a.worker?.exitCode !== undefined && a.worker.exitCode !== 0)
     return `Supervised worker exited with code ${a.worker.exitCode}; successful completion is required before integrating`;
@@ -39,6 +40,7 @@ export function completionProblem(a: Attempt): string | undefined {
 }
 
 export function agentMayBeActive(a: Attempt): boolean {
+  if (a.worker?.terminationUncertain) return true;
   if (a.agent === "copilot" && a.worker?.launcher?.pid && !a.worker.launcher.exitedAt) return true;
   if (a.agent === "copilot-vscode" && a.worker)
     return !a.identityConfirmed || a.terminalEvidence?.type !== "agent-stop";

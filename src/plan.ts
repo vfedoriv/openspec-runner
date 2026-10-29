@@ -11,6 +11,7 @@ import { parse } from "yaml";
 import { git, run } from "./system.js";
 import { hasHarness, harnessIds } from "./harnesses/registry.js";
 import type { AgentConfig } from "./harnesses/types.js";
+import { containedPath, unredirectedPath } from "./platform-paths.js";
 export interface Assignment {
   model?: string;
   effort?: string;
@@ -60,7 +61,7 @@ function identifier(x: unknown): x is string {
 export function tasksFrom(text: string): Task[] {
   const tasks: Task[] = [];
   let fence: string | undefined;
-  text.split("\n").forEach((line, i) => {
+  text.replace(/\r\n/g, "\n").split("\n").forEach((line, i) => {
     const f = line.match(/^\s*(`{3,}|~{3,})/);
     if (f) {
       if (!fence) fence = f[1];
@@ -296,7 +297,7 @@ export function loadPlan(root: string, change: string): Plan {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(change))
     throw new Error("Expected a repository-local change name");
   const directory = resolve(root, "openspec", "changes", change);
-  if (!realpathSync(directory).startsWith(realpathSync(root) + sep))
+  if (!containedPath(root, directory) || !unredirectedPath(directory))
     throw new Error("External planning stores are outside v1");
   const tasks = tasksFrom(readFileSync(resolve(directory, "tasks.md"), "utf8"));
   const config = configFrom(
@@ -315,7 +316,7 @@ export function loadPlan(root: string, change: string): Plan {
       if (s.isSymbolicLink())
         throw new Error(`Planning artifact cannot be a symlink: ${p}`);
       if (s.isDirectory()) walk(p);
-      else if (s.isFile()) files.push(relative(root, p));
+      else if (s.isFile()) files.push(relative(root, p).split(sep).join("/"));
     }
   }
   walk(directory);
@@ -328,18 +329,18 @@ export function loadPlan(root: string, change: string): Plan {
   for (const agent of Object.values(config.agents)) {
     if (!agent.planningRules) continue;
     const supplement = resolve(root, agent.planningRules);
-    if (!supplement.startsWith(resolve(root) + sep))
+    if (!containedPath(root, supplement) || !unredirectedPath(supplement))
       throw new Error("Planning rules supplement must remain inside the repository");
     if (!existsSync(supplement) || !lstatSync(supplement).isFile())
       throw new Error(`Planning rules supplement does not exist: ${agent.planningRules}`);
     if (lstatSync(supplement).isSymbolicLink())
       throw new Error(`Planning rules supplement cannot be a symlink: ${supplement}`);
-    files.push(relative(root, supplement));
+    files.push(relative(root, supplement).split(sep).join("/"));
   }
   const hash = createHash("sha256");
   for (const p of files.sort()) {
-    let content = readFileSync(resolve(root, p), "utf8");
-    if (p === relative(root, resolve(directory, "tasks.md"))) {
+    let content = readFileSync(resolve(root, p), "utf8").replace(/\r\n/g, "\n");
+    if (p === relative(root, resolve(directory, "tasks.md")).split(sep).join("/")) {
       const lines = content.split("\n");
       for (const task of tasks)
         lines[task.line] = lines[task.line].replace(/\[[ xX]\]/, "[ ]");
@@ -350,7 +351,7 @@ export function loadPlan(root: string, change: string): Plan {
   return {
     change,
     directory,
-    relativeDir: relative(root, directory),
+    relativeDir: relative(root, directory).split(sep).join("/"),
     tasks,
     assignments,
     config,
@@ -363,7 +364,7 @@ export function assertCommitted(root: string, plan: Plan, ref = "HEAD") {
   for (const file of plan.files) {
     // Compare bytes against the selected commit, including untracked planning files.
     const committed = run("git", ["show", `${ref}:${file}`], root);
-    if (committed !== readFileSync(resolve(root, file), "utf8").trim())
+    if (committed.replace(/\r\n/g, "\n") !== readFileSync(resolve(root, file), "utf8").replace(/\r\n/g, "\n").trim())
       throw new Error(
         `Commit current planning artifact before launch: ${file}`,
       );

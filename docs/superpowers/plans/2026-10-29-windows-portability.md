@@ -20,7 +20,7 @@
 - Preserve user's editor profile, hooks, authentication, and existing project configuration.
 - Windows Codex and Claude Code support is required in the same delivery as both Copilot surfaces. Only Worktrunk/Herdr/Orca backends remain optional follow-up scope.
 - Preserve each harness's native model/effort, session, permission, stream, and resume behavior; the platform layer does not convert one harness protocol into another.
-- This is a planning deliverable. Begin implementation only after the user chooses to proceed.
+- The user approved implementation. Verification and live acceptance status are recorded in `docs/WINDOWS_PORTABILITY_VERIFICATION.md`.
 
 ## Review Focus
 

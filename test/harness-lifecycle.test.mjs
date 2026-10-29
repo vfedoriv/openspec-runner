@@ -6,6 +6,19 @@ const fixture = (agent) => ({ agent, session: "session-1", observedSession: "ses
   report: { outcome: "completed" }, worker: { exitedAt: "now", exitCode: 0 },
   terminalEvidence: { type: "result", subtype: "success" } });
 
+test("uncertain termination blocks completion and cleanup for every harness", async () => {
+  const { inspectCleanup } = await import("../dist/cleanup.js");
+  for (const agent of ["codex", "claude", "copilot", "copilot-vscode"]) {
+    const attempt = fixture(agent);
+    attempt.worker.terminationUncertain = true;
+    attempt.id = "test"; attempt.task = "1.1"; attempt.path = "/uninspected";
+    assert.match(lifecycle.completionProblem(attempt), /termination.*uncertain/i);
+    const result = inspectCleanup({ common: "/missing-common" }, {}, attempt);
+    assert.equal(result.status, "skipped");
+    assert.match(result.reasons[0], /active|uncertain/i);
+  }
+});
+
 test("legacy Codex and Claude completion preserves process and stream requirements", () => {
   assert.equal(typeof lifecycle.completionProblem, "function");
   assert.equal(lifecycle.completionProblem(fixture("codex")), undefined);

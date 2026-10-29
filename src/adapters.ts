@@ -5,6 +5,7 @@ import type { Settings } from "./codex.js";
 import { codexArgs } from "./codex.js";
 import { attachOrcaTerminal, orcaContext, startOrcaTerminal, type OrcaContext } from "./orca.js";
 import { createOrcaWorktree, type OrcaWorkspace } from "./orca-worktrees.js";
+import { canonicalPath } from "./platform-paths.js";
 export interface Workspace {
   branch: string;
   path: string;
@@ -25,6 +26,10 @@ export interface Terminal {
   phase?: string;
 }
 export function terminalAdapter(root: string, selected: "auto" | "manual" | "herdr" | "orca"): "manual" | "herdr" | "orca" {
+  if (process.platform === "win32") {
+    if (selected !== "auto" && selected !== "manual") throw new Error(`Windows terminal backend ${selected} is not verified; use manual`);
+    return "manual";
+  }
   if (selected === "manual") return "manual";
   if (selected === "orca" || (selected === "auto" && !!process.env.ORCA_TERMINAL_HANDLE)) {
     orcaContext(root);
@@ -49,7 +54,7 @@ export function worktrees(
       );
       return {
         branch: fields.branch?.replace(/^refs\/heads\//, ""),
-        path: fields.worktree,
+        path: canonicalPath(fields.worktree),
         head: fields.HEAD,
         locked: fields.locked,
         prunable: fields.prunable,
@@ -61,6 +66,10 @@ export function createWorktree(
   spec: Workspace,
   adapter: "auto" | "git" | "worktrunk" | "orca",
 ): Workspace {
+  if (process.platform === "win32") {
+    if (adapter !== "auto" && adapter !== "git") throw new Error(`Windows worktree backend ${adapter} is not verified; use git`);
+    adapter = "git";
+  }
   if (adapter === "orca") return createOrcaWorktree(root, spec);
   const existing = worktrees(root).find((w) => w.branch === spec.branch);
   if (existing) {

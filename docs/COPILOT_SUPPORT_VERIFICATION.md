@@ -2,8 +2,9 @@
 
 Copilot CLI and VS Code Copilot are distinct harnesses: `copilot` and
 `copilot-vscode`. Both execute implementation, review, and repair workers.
-Use an existing supported runner host (Linux/WSL); native Windows runner
-execution remains unsupported. Hooks, Git, the runner, and the agent must see
+Use a supported runner host, including native Windows with Git/manual resources.
+See [Windows verification](WINDOWS_PORTABILITY_VERIFICATION.md) for the native
+acceptance matrix and remaining live checks. Hooks, Git, the runner, and the agent must see
 the same worktree filesystem and run in the same execution environment.
 
 ## Install and configure
@@ -61,7 +62,7 @@ the shared installed hook file uses the compatible PascalCase schema for both.
 
 ## Automated verification
 
-Run `pnpm test` on Linux/WSL and `pnpm pack --dry-run`. New behavior tests cover
+Run `pnpm test` on Linux/WSL and Windows, and `pnpm pack --dry-run`. New behavior tests cover
 model/options validation, installation preservation, ownership/replay rules,
 completion evidence, and fake CLI/editor workers executing implementation,
 whole-feature review, repair, integration, and a fresh final review.

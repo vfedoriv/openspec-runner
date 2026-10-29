@@ -6,6 +6,8 @@ import type { SupervisedSession } from "../worker.js";
 import { getHarness } from "./registry.js";
 import { armHookLease, readHookLease, type HookLease } from "./copilot-hooks.js";
 import { prepareEditorAgent } from "./copilot-editor.js";
+import { resolveCommand } from "../platform-command.js";
+import { observeProcess, stopOwnedProcess, windowsTreeIsGone } from "../platform-process.js";
 
 export function copilotDecision(lease: HookLease | undefined, exit: number | null | undefined, editor: boolean): number | undefined {
   if (!editor && exit === undefined) return undefined;
@@ -36,14 +38,17 @@ export async function superviseCopilot(
   const log = openSync(a.worker!.log, "ax", 0o600);
   let child: ReturnType<typeof spawn> | undefined;
   let exit: number | null | undefined, failure: Error | undefined;
+  let childIdentity: string | undefined;
   try {
     started(process.pid);
     const environment = { ...process.env, ...invocation.env };
     delete environment.CODEX_THREAD_ID;
-    child = spawn(invocation.executable, invocation.args, { cwd: invocation.cwd, env: environment, stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+    const command = resolveCommand({ executable: invocation.executable, args: invocation.args, cwd: invocation.cwd, env: environment });
+    child = spawn(command.executable, command.args, { cwd: invocation.cwd, env: command.env, windowsHide: true, stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     child.once("spawn", () => {
       try {
-        evidence(current => { current.worker!.launcher = { pid: child!.pid }; });
+        if (!editor) childIdentity = observeProcess(child!.pid!)?.createdAt;
+        evidence(current => { current.worker!.launcher = { pid: child!.pid, processStart: childIdentity }; });
         if (invocation.stdin !== undefined) child!.stdin!.end(invocation.stdin);
       } catch (error) { failure = error as Error; }
     });
@@ -74,13 +79,15 @@ export async function superviseCopilot(
       await new Promise(resolvePromise => setTimeout(resolvePromise, 100));
     }
   } finally {
+    if (!editor && process.platform === "win32" && child?.pid && exit !== undefined && (!childIdentity || !windowsTreeIsGone(child.pid, childIdentity)))
+      evidence(current => { current.worker!.terminationUncertain = true; });
     // The editor can outlive its launcher: never kill unrelated GUI processes.
     if (!editor && child?.pid && exit === undefined) {
-      child.kill("SIGTERM");
-      const wait = async () => { const deadline = Date.now() + 1000; while (exit === undefined && Date.now() < deadline) await new Promise(r => setTimeout(r, 20)); };
-      await wait();
-      if (exit === undefined) { child.kill("SIGKILL"); await wait(); }
-      // If still unconfirmed, the saved launcher has no exitedAt; liveness gates retain it.
+      const stopped = childIdentity ? await stopOwnedProcess({ pid: child.pid, createdAt: childIdentity, timeoutMs: 3000 }) : { stopped: false, uncertain: true };
+      evidence(current => { current.worker!.terminationUncertain = stopped.uncertain; });
+      const closeDeadline = Date.now() + 1000;
+      while (exit === undefined && Date.now() < closeDeadline) await new Promise(r => setTimeout(r, 20));
+      if (exit === undefined) evidence(current => { current.worker!.terminationUncertain = true; });
     }
     child?.stdout?.removeAllListeners("data");
     child?.stderr?.removeAllListeners("data");

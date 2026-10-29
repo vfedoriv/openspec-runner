@@ -94,7 +94,7 @@ next actions.
 
 ## Install and initialize
 
-You need Linux, macOS, or WSL, Node.js 22.13 or newer, Git, an initialized
+You need Linux, macOS, WSL, or native Windows x64 on local NTFS, Node.js 22.13 or newer, Git, an initialized
 OpenSpec project, and an installed, authenticated Codex or Claude Code harness.
 Worktrunk, Herdr, and Orca are optional. See the [requirements](../README.md#requirements)
 for supported environments and integrations.

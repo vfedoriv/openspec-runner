@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { localRunnerTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
 import {
   mkdtempSync,
@@ -12,7 +13,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import { observeProcess } from "../dist/platform-process.js";
 import { Runner } from "../dist/runner.js";
 import {
   tasksFrom,
@@ -72,7 +75,7 @@ function fixture(t, options = {}) {
     bin = join(dir, "bin");
   mkdirSync(root);
   mkdirSync(bin);
-  process.env.PATH = bin + ":" + basePath;
+  process.env.PATH = bin + (process.platform === "win32" ? ";" : ":") + basePath;
   executable(
     join(bin, "openspec"),
     `console.log(JSON.stringify(process.argv[2]==='status'?{artifacts:[{id:'tasks',status:'done'}]}:{state:'ready'}));`,
@@ -403,7 +406,8 @@ test("repository lock distinguishes creation errors and preserves a replacement 
   const { runner: r } = fixture(t),
     lockFile = join(r.repo.stateDir, "lock.json");
   mkdirSync(r.repo.stateDir, { recursive: true });
-  chmodSync(r.repo.stateDir, 0o500);
+  if (process.platform === "win32") mkdirSync(lockFile);
+  else chmodSync(r.repo.stateDir, 0o500);
   try {
     let error;
     try {
@@ -412,11 +416,15 @@ test("repository lock distinguishes creation errors and preserves a replacement 
       error = caught;
     }
     assert.ok(error);
-    assert.match(error.message, /Cannot create runner lock/);
-    assert.doesNotMatch(error.message, /Repository is locked/);
-    assert.ok(["EACCES", "EPERM"].includes(error.cause?.code));
+    if (process.platform === "win32") assert.match(error.message, /Cannot create runner lock|Repository is locked/);
+    else {
+      assert.match(error.message, /Cannot create runner lock/);
+      assert.doesNotMatch(error.message, /Repository is locked/);
+      assert.ok(["EACCES", "EPERM"].includes(error.cause?.code));
+    }
   } finally {
-    chmodSync(r.repo.stateDir, 0o700);
+    if (process.platform === "win32") rmSync(lockFile, { recursive: true });
+    else chmodSync(r.repo.stateDir, 0o700);
   }
   const replacement = JSON.stringify({ token: "replacement-owner" });
   locked(r.repo.stateDir, () => writeFileSync(lockFile, replacement));
@@ -594,7 +602,7 @@ test("manual resume keeps resolved model and effort after caller switches models
   assert.match(attached.command, /'model-a'/);
   assert.match(attached.command, /high/);
   assert.match(attached.command, /'--add-dir'/);
-  assert.match(attached.command, new RegExp(r.repo.common.replaceAll("/", "\\/")));
+  assert.ok(attached.command.includes(r.repo.common));
 });
 test("uncommitted planning files and invalid selected base cannot launch", (t) => {
   const { runner: r, root } = fixture(t);
@@ -768,6 +776,22 @@ test("worker command recovers a lost supervisor exit receipt", async (t) => {
   assert.equal(r.read("demo").attempts[0].phase, "blocked");
 });
 
+test("Windows recovery retains resources for surviving worker descendants", { skip: process.platform !== "win32" }, async t => {
+  const { runner: r } = fixture(t), a = r.launch("demo", ["1.1"], settings)[0];
+  const source = `const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});console.log(c.pid);process.stdin.once('data',()=>process.exit(0));`;
+  const parent = spawn(process.execPath, ["-e", source], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+  const [bytes] = await once(parent.stdout, "data"), pid = Number(bytes.toString());
+  t.after(() => { try { process.kill(pid); } catch {} try { parent.kill(); } catch {} });
+  const identity = observeProcess(parent.pid);
+  const closed = once(parent, "close"); parent.stdin.end("exit"); await closed;
+  const state = r.read("demo");
+  state.attempts[0].worker = { token: "lost-parent", pid: parent.pid, processStart: identity.createdAt, processPlatform: "win32", log: join(r.repo.stateDir, "logs", `${a.id}.log`) };
+  r.save(state);
+  await r.worker("demo", "1.1", a.id);
+  assert.equal(r.read("demo").attempts[0].worker.terminationUncertain, true);
+  assert.throws(() => r.preview("demo", ["1.1"], settings, undefined, true), /active|uncertain|worker/i);
+});
+
 function liveTerminal(r, a, bin, dir, mode = "close") {
   exited(r, a, bin);
   const state = join(dir, "pane-state.json");
@@ -831,7 +855,7 @@ test("unacknowledged worker exit prevents integration, terminal closure and remo
 test("CLI dry-run and JSON confirmation expose exact candidates without terminal prompts", (t) => {
   const { runner: r, root } = fixture(t, { cleanup: "manual" });
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a); r.integrate("demo", ["1.1"]);
-  const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+  const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const before = readFileSync(r.path("demo"), "utf8");
   const result = JSON.parse(execFileSync(process.execPath, [cli, "cleanup", "demo", "--tasks", "1.1", "--dry-run", "--json"], { cwd: root, encoding: "utf8" }));
   assert.equal(result.results[0].status, "confirmation-required");
@@ -856,7 +880,7 @@ function orcaFixture(t, fail = false) {
 
 test("Orca CLI preview is read-only and launch persists both adapters and focuses only its pane", t => {
   const { runner: r, root, calls } = orcaFixture(t);
-  const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+  const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const preview = JSON.parse(execFileSync(process.execPath,
     [cli, "launch", "demo", "--tasks", "1.1", "--default-model", "model-a", "--dry-run", "--json"],
     { cwd: root, encoding: "utf8" }));
