@@ -6,13 +6,17 @@ Baseline: Copilot implementation `32fdba3`, integrated into local `dev`.
 
 ## Intent
 
-Run the existing task and managed-feature lifecycle natively on Windows, using
-Git worktrees, manual terminals, GitHub Copilot CLI, and VS Code Copilot. Preserve
-session ownership, report, completion, approval, and recovery guarantees.
+Run the existing task and managed-feature lifecycle natively on Windows for
+every supported harness: Codex (`codex`), Claude Code (`claude`), GitHub Copilot
+CLI (`copilot`), and VS Code Copilot (`copilot-vscode`). Use Git worktrees and
+manual terminals initially. Preserve each harness's session ownership, report,
+completion, approval, model/effort, and recovery guarantees.
 
 The user requested that the existing Copilot changes first be committed in dev,
 then a Windows portability plan be created. This document records that plan's
 requirements; platform and API choices below are proposals for implementation.
+The user clarified that Windows portability must cover all supported harnesses;
+Codex and Claude Code are required scope, not optional follow-up work.
 
 ## Evidence from this machine
 
@@ -34,8 +38,9 @@ requirements; platform and API choices below are proposals for implementation.
   expansion, shebang executables, chmod, and POSIX process behavior.
 
 These observations establish portability work, not authenticated end-to-end
-Copilot compatibility. Authentication, editor agent discovery, model selection,
-and actual hook delivery still require disposable native smoke tests.
+compatibility for any harness. Codex and Claude Code Windows installation and
+authentication have not been verified in this investigation. All four harnesses
+require their own disposable native smoke tests for their actual protocols.
 
 ## Approach and boundary
 
@@ -48,8 +53,24 @@ Initial validation targets local Windows x64/NTFS, supported Node >=22.13,
 Git for Windows, and PowerShell. Git worktrees and manual terminals are the
 first supported resource combination. Worktrunk, Herdr, and Orca on Windows
 remain explicitly unsupported until their own native contract tests pass.
-Existing Linux/WSL behavior must continue to pass its full suite. Do not infer
-that Codex/Claude runtime compatibility is verified by a Copilot smoke test.
+Existing Linux/WSL behavior must continue to pass its full suite. All four
+harnesses are first-release Windows targets. Do not infer one harness's runtime
+compatibility from another's smoke test. Missing authentication or an unavailable
+installed tool marks its live verification pending; it does not remove that
+harness from implementation or automated acceptance scope.
+
+## Required harness contracts
+
+| Harness | Native Windows contract |
+|---|---|
+| Codex | Resolve native/package-installed CLI; execute workers and model-discovery app-server with literal argv; register the actual CODEX_THREAD_ID; retain supported model/effort and calling-session behavior; require the existing accepted-report/process-exit gates; resume only the exact saved session. |
+| Claude Code | Resolve native/package-installed CLI; preserve stdin prompts, stream-json decoding, reserved/observed UUID equality, permission/tool/add-directory arguments and supported effort; exclude inherited CODEX_THREAD_ID; require matching successful stream result plus supervised exit before integration; resume only the confirmed UUID. |
+| Copilot CLI | Resolve native/package-installed CLI; retain exact reserved session, hook ownership, report-before-root-stop ordering, explicit tools/paths, zero process exit, and confirmed-session resume. |
+| VS Code Copilot | Resolve the selected installation/profile; discover the correct custom agent/model; retain hook ownership and explicit agent-stop completion independent of launcher exit; attach must not fabricate exact chat resume. |
+
+Use the same platform command/process/path boundaries for all four. Never force
+Codex or Claude through the Copilot hook protocol. Preserve homogeneous batches
+and explicitly approved different harnesses for implementation/review/repair roles.
 
 ## Required behavior
 
@@ -90,7 +111,7 @@ automatic path migration, session substitution, permission widening, or redispat
 
 Acceptance requires native fake-worker implementation/review/repair and recovery
 tests, unchanged Linux/WSL regressions, package verification, Windows JSON/dry-run
-checks, and an authenticated disposable task with each installed Copilot surface.
+checks, and an authenticated disposable task with each of the four harnesses.
 Report requested versus independently observed models accurately. Live-tool tests
 must preserve the user's normal project, editor settings, hooks, and authentication.
 
