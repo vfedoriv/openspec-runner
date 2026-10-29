@@ -5,7 +5,8 @@ import { resolve, dirname } from "node:path";
 import type { SupervisedSession } from "../worker.js";
 import { getHarness } from "./registry.js";
 import { armHookLease, readHookLease, type HookLease } from "./copilot-hooks.js";
-import { prepareEditorAgent } from "./copilot-editor.js";
+import { prepareEditorAgent, editorPreparationCommands } from "./copilot-editor.js";
+import { run } from "../system.js";
 import { resolveCommand } from "../platform-command.js";
 import { observeProcess, stopOwnedProcess, windowsTreeIsGone } from "../platform-process.js";
 
@@ -27,11 +28,15 @@ export async function superviseCopilot(
   const hookConfig = JSON.parse(readFileSync(hook, "utf8"));
   if (!hookConfig.hooks || !(hookConfig.hooks.UserPromptSubmit || hookConfig.hooks.userPromptSubmitted) || !(hookConfig.hooks.Stop || hookConfig.hooks.agentStop))
     throw new Error("Copilot hook installation lacks required ownership/stop events");
+  const mode = editor ? prepareEditorAgent({ worktree: a.path, attempt: a.id, model: a.settings.model,
+    hookFormat: a.settings.options?.hookFormat === "copilot" ? "copilot" : "vscode" }).mode : a.expectedSession!;
+  if (editor) for (const command of editorPreparationCommands(a.settings, a.path, mode))
+    run(command.executable, command.args, command.cwd, 10000);
+  // Preparation never submits a prompt. Arm ownership only for the actual
+  // task so empty bootstrap sessions cannot claim or terminate its lease.
   const nonce = randomUUID();
   const lease = armHookLease({ stateDir, attempt: a.id, harness: a.agent!, worktree: a.path, generation: a.worker!.token, nonce,
     ...(a.expectedSession ? { expectedSession: a.expectedSession } : {}) });
-  const mode = editor ? prepareEditorAgent({ worktree: a.path, attempt: a.id, model: a.settings.model,
-    hookFormat: a.settings.options?.hookFormat === "copilot" ? "copilot" : "vscode" }).mode : a.expectedSession!;
   mkdirSync(resolve(dirname(a.path), "reports"), { recursive: true });
   const invocation = harness.initialInvocation(a.settings, a.path, common, `${prompt}\n[openspec-runner:${a.id}:${nonce}]`, mode);
   mkdirSync(dirname(a.worker!.log), { recursive: true });

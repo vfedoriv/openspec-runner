@@ -59,6 +59,7 @@ for (const id of supported) test(`${id} supervises implementation, review, repai
     else if(args.includes('--list-extensions')) console.log('GitHub.copilot-chat');
     else if(args[0]==='app-server') {require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id) console.log(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[{model:'model',id:'model',defaultReasoningEffort:'high'}],nextCursor:null}:{}}));});}
     else if(args[0]==='exec') {const c=require('node:child_process').spawn(process.execPath,[${JSON.stringify(helper)},args.at(-1)],{stdio:'inherit'});c.on('exit',code=>process.exit(code??1));}
+    else if(${JSON.stringify(id)}==='copilot-vscode' && (args[0]!=='chat'||args.length===3)) process.exit(0);
     else if(args[0]==='chat') { const {spawn}=require('node:child_process'),{openSync}=require('node:fs');const fd=openSync(${JSON.stringify(join(bin, "editor.log"))},'a'); const c=spawn(process.execPath,[${JSON.stringify(helper)},args.at(-1)],{cwd:process.cwd(),stdio:['ignore',fd,fd],detached:true,windowsHide:true}); c.unref(); }
     else { let text=''; process.stdin.on('data',c=>text+=c);process.stdin.on('end',()=>{ const {spawn}=require('node:child_process');const c=spawn(process.execPath,[${JSON.stringify(helper)},text,args[args.indexOf('--session-id')+1]],{stdio:'inherit'});c.on('exit',code=>process.exit(code??1)); }); }
   `;

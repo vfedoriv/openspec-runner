@@ -2,6 +2,19 @@ import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { stringify } from "yaml";
 import { repository } from "../system.js";
+import type { HarnessSettings, Invocation } from "./types.js";
+
+export function editorPreparationCommands(settings: HarnessSettings, cwd: string, mode: string): Invocation[] {
+  const executable = String(settings.options?.executable ?? "code");
+  return [
+    { executable, cwd, args: [cwd, ...(typeof settings.options?.profile === "string" ? ["--profile", settings.options.profile] : [])] },
+    // Clear a remembered Ask mode without sending a model request. Custom
+    // modes are discovered asynchronously; an unresolved mode must not leave
+    // the subsequent worker inheriting a read-only Ask session.
+    { executable, cwd, args: ["chat", "--mode", "agent"] },
+    { executable, cwd, args: ["chat", "--mode", mode] },
+  ];
+}
 
 export function prepareEditorAgent(input: { worktree: string; attempt: string; model: string; hookFormat: "copilot" | "vscode" }): { mode: string; path: string } {
   if (!/^[a-zA-Z0-9_-]+$/.test(input.attempt)) throw new Error("Invalid editor attempt");

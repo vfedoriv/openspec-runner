@@ -73,6 +73,13 @@ editor version or subscription.
 
 ## Authenticated smoke checklist
 
+Later Windows live runs are recorded in
+[real Windows harness acceptance](REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
+The corrected VS Code launcher passed implementation through integration with
+GPT-6 Luna and the exact generated custom agent. Copilot CLI passed implementation
+and review with diagnostic launch adjustments that still need a production fix.
+The complete checklist below, including recovery and cancellation, remains open.
+
 Automated validation on 2026-10-29: Ubuntu/WSL, Node 22.13.0, pnpm 11.7.0;
 `pnpm test` passed with 350 passed, 2 skipped, and 0 failed. Package dry-run
 passed. Fake-worker CLI checks exercised JSON model/planning output, read-only

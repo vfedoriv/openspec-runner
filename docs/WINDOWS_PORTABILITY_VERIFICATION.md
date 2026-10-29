@@ -44,6 +44,11 @@ runner-generated configurations are migrated.
 
 ## Harness acceptance matrix
 
+This table records the initial portability-stage checks. Later authenticated
+results, including real Claude/Copilot implementation and review, the corrected
+VS Code worker through integration, and the remaining Codex permission blocker,
+are recorded in [real Windows harness acceptance](REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
+
 | Harness | Installed capability | Native simulated lifecycle | Authenticated prompt | Live managed lifecycle/recovery |
 | --- | --- | --- | --- | --- |
 | Codex | Native CLI not found on normal user PATH | Passed | Pending | Pending |

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { relative } from "node:path";
 import { git, gitRaw, run, attempt } from "./system.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import type { Settings } from "./codex.js";
@@ -145,8 +146,8 @@ export function createWorktree(
     "worktree",
     "add",
     ...(branchNowExists
-      ? [spec.path, spec.branch]
-      : ["-b", spec.branch, spec.path, spec.base]),
+      ? [process.platform === "win32" ? relative(root, spec.path) : spec.path, spec.branch]
+      : ["-b", spec.branch, process.platform === "win32" ? relative(root, spec.path) : spec.path, spec.base]),
   );
   return spec;
 }

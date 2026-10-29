@@ -49,3 +49,22 @@ test("CLI invocation uses exact UUID and editor never offers fictional chat resu
   assert.ok(invocation.args.some(arg => arg.replaceAll("\\", "/").endsWith("/reports")));
   assert.throws(() => editor.resumeInvocation({ model: "model" }, "/work", "/common", uuid), /exact.*resume|resume.*unsupported/i);
 });
+
+test("editor task submission targets cwd without empty-window or last-window routing", () => {
+  const editor = getHarness("copilot-vscode");
+  const invocation = editor.initialInvocation({ model: "model", options: { profile: "Workers" } }, "/assigned worktree", "/common", "task prompt", "worker-agent");
+  assert.equal(invocation.cwd, "/assigned worktree");
+  assert.deepEqual(invocation.args, ["chat", "--mode", "worker-agent", "task prompt"]);
+});
+
+test("editor preparation clears inherited Ask mode before selecting the worker without inference", async () => {
+  const editor = await import("../dist/harnesses/copilot-editor.js");
+  assert.equal(typeof editor.editorPreparationCommands, "function");
+  const commands = editor.editorPreparationCommands({ model: "model", options: { profile: "Workers" } }, "/assigned worktree", "worker-agent");
+  assert.deepEqual(commands.map(command => command.args), [
+    ["/assigned worktree", "--profile", "Workers"],
+    ["chat", "--mode", "agent"],
+    ["chat", "--mode", "worker-agent"],
+  ]);
+  assert.ok(commands.every(command => command.cwd === "/assigned worktree" && command.stdin === undefined));
+});

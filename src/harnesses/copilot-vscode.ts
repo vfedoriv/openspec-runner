@@ -34,8 +34,9 @@ export const copilotVscodeHarness: HarnessAdapter = {
   },
   async models() { return { harness: "copilot-vscode", status: "unavailable", exhaustive: false, reason: "Use an explicit VS Code model selector from the authenticated editor; a requested model is not runtime attestation" }; },
   initialInvocation(settings, cwd, _common, prompt, mode) {
-    return { executable: String(settings.options?.executable ?? "code"), args: ["chat", "--new-window", "--mode", mode,
-      ...(typeof settings.options?.profile === "string" ? ["--profile", settings.options.profile] : []), prompt], cwd };
+    // Window/profile flags suppress the CLI's automatic cwd folder targeting.
+    // Prepare the assigned folder/profile separately, then let chat target cwd.
+    return { executable: String(settings.options?.executable ?? "code"), args: ["chat", "--mode", mode, prompt], cwd };
   },
   resumeInvocation() { throw new Error("VS Code exact chat resume is unsupported; open the assigned worktree and locate the saved chat session"); },
   planningRules: (r, c) => copilotRules("copilot-vscode", r, c),
