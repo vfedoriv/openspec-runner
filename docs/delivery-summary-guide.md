@@ -48,8 +48,8 @@ Completion meanings remain distinct:
 
 ## Narrative enrichment
 
-`init --agent codex`, `init --agent claude`, or `init --agent all` installs the
-summarize/present skills alongside existing workflows. Rerun init in existing
+`init` installs the summarize/present skills alongside existing workflows for
+each selected harness, including Copilot CLI and VS Code Copilot. Rerun init in existing
 projects to update installed skills; it preserves an existing runner configuration.
 Coordinating agents enrich completed feature/batch/handoff summaries automatically.
 Individual tasks reuse worker prose rather than requiring another writing session.

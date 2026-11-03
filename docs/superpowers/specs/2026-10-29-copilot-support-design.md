@@ -3,6 +3,12 @@
 Date: 2026-10-29
 Status: Approved by user on 2026-10-29
 
+> Historical design scope. Local Copilot adapters are implemented, but version-1
+> shared coordination records still accept only Codex/Claude settings. Windows
+> local execution was added later; delegated Windows execution remains blocked.
+> See [current limits](../../DOCUMENTED_LIMITS.md) and
+> [Copilot verification](../../COPILOT_SUPPORT_VERIFICATION.md).
+
 ## Intent and agreed scope
 
 Add GitHub Copilot CLI and the VS Code Copilot extension as selectable execution

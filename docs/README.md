@@ -15,6 +15,8 @@ Start with the guide for the workflow you want to use.
 | [Command reference](../README.md#cli-reference) | Users looking up current command syntax | Current CLI |
 | [Configuration reference](../README.md#configuration) | Users configuring tasks, harnesses, checks, and local tooling | Current CLI |
 | [Recovery reference](../README.md#recovery-and-plan-changes) | Users recovering an interrupted execution | Current CLI |
+| [Documented limits](DOCUMENTED_LIMITS.md) | Operators checking execution and shared coordination boundaries | Current limits and historical evidence scope |
+| [Maintenance priorities](maintenance-priorities.md) | Maintainers choosing the next fixes | Source-based review dated 2026-11-03 |
 
 ## Start here
 

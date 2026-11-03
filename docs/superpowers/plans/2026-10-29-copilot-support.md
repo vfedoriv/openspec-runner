@@ -1,5 +1,10 @@
 # Copilot Worker Support Implementation Plan
 
+> Historical implementation plan. The Copilot adapters have shipped. The original
+> Windows exclusion below was superseded by the portability work. See [Copilot
+> verification](../../COPILOT_SUPPORT_VERIFICATION.md) for current launch limits and
+> acceptance gaps.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Execute implementation, review, and repair workers through GitHub Copilot CLI and VS Code Copilot using native chat and lifecycle hooks.

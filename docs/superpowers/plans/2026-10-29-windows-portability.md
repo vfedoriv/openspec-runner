@@ -1,5 +1,11 @@
 # Windows Portability Layer Implementation Plan
 
+> Historical implementation plan. The portability implementation has shipped. Unchecked
+> boxes are the original execution checklist, not a current backlog. See [Windows
+> verification](../../WINDOWS_PORTABILITY_VERIFICATION.md) and [real harness
+> acceptance](../../REAL_WINDOWS_HARNESS_ACCEPTANCE.md) for delivered behavior and
+> remaining acceptance gaps.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Execute the existing task and managed-feature workflows natively on Windows for all four supported harnesses—Codex, Claude Code, Copilot CLI, and VS Code Copilot—without weakening their distinct lifecycle or recovery guarantees.

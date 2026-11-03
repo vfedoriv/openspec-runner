@@ -1,5 +1,9 @@
 # Windows Backends Implementation Plan
 
+> Historical implementation plan. The backend implementation has shipped.
+> See [Windows backend verification](../../WINDOWS_PORTABILITY_VERIFICATION.md#installed-resource-backend-follow-up)
+> for supported resources and remaining live acceptance gaps.
+
 > **For agentic workers:** Use superpowers:executing-plans inline; perform one fresh whole-change review at the end.
 
 **Goal:** Enable verified native Windows Worktrunk, Herdr, and Orca resource adapters for every harness.

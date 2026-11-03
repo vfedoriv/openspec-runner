@@ -46,7 +46,7 @@ runner-generated configurations are migrated.
 
 This table records the initial portability-stage checks. Later authenticated
 results, including real Claude/Copilot implementation and review, the corrected
-VS Code worker through integration, and the remaining Codex permission blocker,
+VS Code worker through integration, and the resolved Codex permission blocker,
 are recorded in [real Windows harness acceptance](REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
 
 | Harness | Installed capability | Native simulated lifecycle | Authenticated prompt | Live managed lifecycle/recovery |
@@ -106,7 +106,7 @@ compatibility with every installed version or subscription.
   cancellation is tested natively; interactive console Ctrl-C restoration
   remains a manual smoke check.
 
-## Verification record
+## Verification record (initial portability stage)
 
 The final native Windows `pnpm test` passed 241 tests, with 133 explicitly
 skipped and zero failed (374 total). This includes reopened-binding preflight,

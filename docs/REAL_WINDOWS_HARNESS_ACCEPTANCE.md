@@ -4,7 +4,7 @@ These are authenticated model runs on Windows, distinct from the simulated
 worker tests and the installed resource-backend checks. The disposable fixtures
 use real OpenSpec 1.15.0, Git worktrees, and runner `840be0c` plus the
 VS Code launch correction merged into `dev` at `5e07c79`, plus the Codex
-permission correction on `codex/fix-windows-codex-worker`.
+permission correction committed at `9b4865e`.
 They ask the agent to create `greeting.txt`, verify its exact content with Node,
 commit it, and submit a report. Successful runs integrate the result; Claude, Codex, and
 Copilot CLI also execute a managed feature reviewer. Final approval is not recorded.

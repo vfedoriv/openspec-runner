@@ -28,4 +28,4 @@ Tests use `node:test` with `node:assert/strict`. Name files `*.test.mjs` and wri
 
 ## Commit & Pull Request Guidelines
 
-History currently contains only `create openspec-runner`; use short, imperative commit subjects that describe one coherent change. Pull requests should explain the triggering problem, resulting CLI behavior, and verification performed. Link relevant issues or OpenSpec changes. Include sample command/output for user-visible CLI changes and call out compatibility or state-migration effects.
+Use short, imperative commit subjects that describe one coherent change. Pull requests should explain the triggering problem, resulting CLI behavior, and verification performed. Link relevant issues or OpenSpec changes. Include sample command/output for user-visible CLI changes and call out compatibility or state-migration effects.

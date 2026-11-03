@@ -63,8 +63,12 @@ sequenceDiagram
 
 Use Linux, macOS or WSL, Node.js 22.13+, Git, the runner, and the approved authenticated
 harness. Initialize each component with `openspec-runner init --agent codex` (or
-`claude`/`all`). Init installs six skills, including `openspec-runner-component`.
+`claude`/`all`). Init installs eight skills, including `openspec-runner-component`.
 Commit the generated skills/config and all planning inputs before shared approval.
+
+Delegated execution remains unsupported on native Windows. Version-1 shared
+assignment settings accept only Codex or Claude; local Copilot worker support
+does not extend that contract. See [documented limits](DOCUMENTED_LIMITS.md#7-delegated-execution-has-narrower-support-than-local-workers).
 
 Use an installed OpenSpec build with the required Stores JSON capabilities. Configure
 its Store registration and component references according to the [OpenSpec Stores guide](https://github.com/Fission-AI/OpenSpec/blob/main/docs/stores-beta/user-guide.md).

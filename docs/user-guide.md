@@ -95,7 +95,8 @@ next actions.
 ## Install and initialize
 
 You need Linux, macOS, WSL, or native Windows x64 on local NTFS, Node.js 22.13 or newer, Git, an initialized
-OpenSpec project, and an installed, authenticated Codex or Claude Code harness.
+OpenSpec project, and an installed, authenticated Codex, Claude Code, Copilot CLI,
+or VS Code Copilot harness. See the [Copilot setup and launch limits](COPILOT_SUPPORT_VERIFICATION.md).
 Worktrunk, Herdr, and Orca are optional. See the [requirements](../README.md#requirements)
 for supported environments and integrations.
 
@@ -114,7 +115,9 @@ Then, inside the target project's Git repository:
 openspec-runner init --agent all
 ```
 
-Use `--agent codex` or `--agent claude` to install only that harness's skills.
+Use `--agent codex`, `--agent claude`, `--agent copilot`, or
+`--agent copilot-vscode` to install only that harness's skills. New Copilot
+configurations also require `--default-model` with an explicit supported model.
 If you prefer a local project dependency, follow the
 [installation alternatives](../README.md#install-into-a-target-project).
 
@@ -142,6 +145,9 @@ versioned planning artifacts.
 |---|---|
 | `openspec-runner-plan` | Exploring the problem and preparing artifacts, assignments, and approval settings |
 | `openspec-runner-coordinate` | Selecting ready work and resuming implementation, integration, review, and repairs |
+| `openspec-runner-component` | Importing a shared component assignment and exporting its handoff |
+| `openspec-runner-summarize` | Enriching saved delivery summaries |
+| `openspec-runner-present` | Preparing a requested presentation from delivery evidence |
 | `openspec-runner-implement` | One runner-assigned task worker |
 | `openspec-runner-review` | A fresh whole-feature reviewer |
 | `openspec-runner-repair` | An isolated attempt to address blocking findings |

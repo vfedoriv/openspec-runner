@@ -1,11 +1,9 @@
 # Documented limits
 
-This document explains the limits of Store-linked component coordination.
-The implementation is available in commit `3a86abb`.
-
-The document uses short sentences, active verbs, and direct instructions.
-Product names, command names, and code identifiers are technical names.
-The text follows ASD-STE100 writing principles. Formal STE compliance has not been verified.
+This document explains current execution and Store-linked coordination limits.
+The Store-linked baseline was introduced in commit `3a86abb`; the limits below
+were checked against source at `9b4865e` on 2026-11-03.
+See the [maintenance priorities](maintenance-priorities.md) for recommended next work.
 
 ## Terms
 
@@ -197,59 +195,30 @@ flowchart TD
 
 See [Changes, failures, and recovery](team-workflow.md#changes-failures-and-recovery).
 
-## 4. Real Codex worker startup has a known timing risk
+## 4. Codex worker startup contention has bounded retries
 
-**Type: Known pre-existing production risk. This risk remains unresolved.**
+**Type: Mitigated historical risk; startup ordering is unchanged.**
 
-### Cause
+Codex receives its prompt through command-line arguments before the parent saves
+its PID under the repository lock. A fast child can request `begin` while that
+registration is in progress.
 
-The supervisor starts a worker process.
-The parent then records the worker PID while it holds the repository lock.
-A fast child can request `Feature.begin` before the parent releases that lock.
-The request can fail with `Repository is locked`.
-The worker can fail before it registers its session.
+The current `locked()` implementation in `src/system.ts` retries for up to three
+seconds when another live local process owns the lock. A regression test in
+`test/platform-files.test.mjs` verifies serialization while another process holds
+the lock for 500 milliseconds. The earlier claim that this contention always
+fails immediately is obsolete.
 
-Codex receives its prompt through command-line arguments.
-It can start processing before parent registration finishes.
-The real Claude stdin dispatch occurs after registration.
+This mitigation does not establish a readiness handshake. Contention exceeding
+the deadline, unreadable owner metadata, or an unverifiable owner can still fail.
+The fake feature worker also waits for its PID to be saved and the lock to be
+absent, so those fixtures do not independently test production startup ordering.
+No current live failure frequency has been established.
 
-```mermaid
-sequenceDiagram
-    participant P as Parent supervisor
-    participant C as Codex worker
-    participant R as Repository state
-    P->>C: Start process with prompt arguments
-    P->>R: Acquire lock and record worker PID
-    C->>R: Request Feature.begin before lock release
-    R-->>C: Repository is locked
-    P->>R: Release lock
-    Note over C,R: The worker can fail before session registration
-```
-
-### Test correction
-
-The fake test workers now wait for two conditions:
-
-- The saved worker PID equals the fake worker PID.
-- The repository lock is absent.
-
-The wait has a ten-second limit.
-After that limit, the fake worker fails with an explicit timeout.
-This correction makes the review and export tests reliable.
-It preserves the rules that reject unsuccessful worker evidence.
-
-### Remaining effect
-
-The correction changes the test fixture.
-It does not change real Codex startup ordering.
-The 204 passing tests do not prove that this production timing risk is absent.
-The frequency of this problem with real Codex workers has not been measured.
-
-If this failure occurs, inspect the job status and logs before recovery.
-Do not accept incomplete evidence or remove the repository lock to force progress.
-
-A future production fix must establish worker readiness before the child can request a state change.
-It must preserve the lock and successful-exit checks.
+If startup fails, inspect job status and logs before recovery. Preserve lock
+ownership and successful-exit checks. Further startup work should test a fast
+child without fixture waits and decide whether explicit readiness is needed
+beyond the existing retry policy.
 
 ## 5. Operators control Git synchronization and PR publication
 
@@ -309,9 +278,41 @@ flowchart TD
 
 See [Lifecycle, delivery, and archival](superpowers/specs/2026-10-04-store-linked-components-design.md#8-lifecycle-delivery-and-archival).
 
+## 6. Copilot CLI production launch is not live-verified
+
+**Type: Known compatibility gap.**
+
+The shipped CLI adapter reserves a session UUID and sends the prompt through
+stdin. The recorded authenticated Windows run instead needed
+`--trust-folder -p PROMPT` without `--session-id`. That installed CLI rejected
+combining trust with the reserved session option. The successful diagnostic run
+does not establish that the shipped launcher works.
+
+The correction must keep nonce-bound root-session ownership, report-before-stop
+ordering, and successful process exit. See the [live acceptance
+record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md#diagnostic-setup-and-limitations).
+
+## 7. Delegated execution has narrower support than local workers
+
+**Type: Current platform and shared-record contract limits.**
+
+Native Windows local tasks and managed features support all four harness
+adapters. Delegated component execution is rejected on Windows because pinned
+context write protection has not been verified. Use Linux, macOS, or WSL for
+delegated execution; do not remove the guard or rely on Unix mode bits on NTFS.
+
+The version-1 shared coordination record validator accepts only `codex` and
+`claude` harness settings. Copilot local worker support therefore does not imply
+Store-linked Copilot assignment support, even on a non-Windows host. Extending
+that contract needs compatibility tests for existing records, import, review,
+repair, and exported receipts.
+
 ## Verification scope
 
-The implementation passed 204 tests and the package dry run.
-The final review approved the implementation within the limits in this document.
-These results do not extend support to excluded configurations.
-They do not resolve the real Codex startup timing risk.
+The original Store-linked acceptance recorded 204 passing tests and a package
+dry run. This is historical evidence, not a current suite count. Later
+platform and harness verification is recorded in the [Windows verification
+guide](WINDOWS_PORTABILITY_VERIFICATION.md) and [real harness acceptance
+record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md). Neither simulated tests nor the
+narrow live runs extend support to excluded configurations or prove that all
+startup interleavings have been tested.

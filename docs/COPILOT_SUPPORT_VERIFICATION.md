@@ -84,11 +84,14 @@ Automated validation on 2026-10-29: Ubuntu/WSL, Node 22.13.0, pnpm 11.7.0;
 `pnpm test` passed with 350 passed, 2 skipped, and 0 failed. Package dry-run
 passed. Fake-worker CLI checks exercised JSON model/planning output, read-only
 launch previews, implementation/review/repair, integration, and interrupted
-supervisor recovery for the editor. Both authenticated runtime checks below
-remain pending.
+supervisor recovery for the editor. This is the historical pre-smoke automated
+record; the later authenticated results above supersede its live-testing status.
 
-Real CLI/editor smoke validation is **pending** until performed on the target
-machine. Record worker and editor versions, OS/host, Copilot extension version,
+Full CLI/editor acceptance, including cancellation and recovery, remains
+**pending**. The shipped CLI launch path also needs the production correction
+described in the live acceptance record; diagnostic-driver success does not
+verify that path. Repeat smoke validation on the target machine after changes.
+Record worker and editor versions, OS/host, Copilot extension version,
 hook schema, requested model, and any independently observed model evidence.
 
 - [ ] Preview a committed change with `launch CHANGE --tasks 1.1 --agent HARNESS

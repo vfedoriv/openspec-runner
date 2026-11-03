@@ -1,6 +1,9 @@
 # Claude Code live acceptance testing
 
-Status: checklist pending execution; this document does not claim successful live testing.
+Status: the full checklist remains pending. A narrower authenticated Windows
+implementation, integration, and managed review passed; see the
+[real Windows acceptance record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
+Those runs do not establish the unchecked recovery or multi-task cases below.
 
 Native Windows local workers use the same Claude stream/session contract as
 Linux, including the verified native resource backends. See the [Windows verification

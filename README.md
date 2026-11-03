@@ -72,6 +72,8 @@ The [team workflow guide](docs/team-workflow.md) describes
 the roles, decisions, and process for work across repositories and machines.
 The [team operator reference](docs/team-workflow-reference.md) contains the direct
 CLI commands, input schemas, Git handoffs, and detailed recovery procedures.
+See [documented limits](docs/DOCUMENTED_LIMITS.md) for current execution boundaries
+and [maintenance priorities](docs/maintenance-priorities.md) for recommended next fixes.
 
 ## How it fits into OpenSpec
 
@@ -187,7 +189,7 @@ The target project must have:
 - Node.js 22.13 or newer.
 - Git and a Git repository.
 - OpenSpec installed and initialized in the project.
-- At least one selected worker harness—Codex or Claude Code—installed,
+- At least one selected worker harness—Codex, Claude Code, Copilot CLI, or VS Code Copilot—installed,
   authenticated, and available on `PATH`.
 - The planning artifacts committed before the first launch.
 
@@ -277,21 +279,33 @@ target-project/
 │   └── skills/
 │       ├── openspec-runner-plan/SKILL.md
 │       ├── openspec-runner-coordinate/SKILL.md
+│       ├── openspec-runner-component/SKILL.md
+│       ├── openspec-runner-summarize/SKILL.md
+│       ├── openspec-runner-present/SKILL.md
 │       ├── openspec-runner-implement/SKILL.md
 │       ├── openspec-runner-review/SKILL.md
 │       └── openspec-runner-repair/SKILL.md
 ├── .claude/
 │   └── skills/              # installed by init --agent claude|all
+├── .github/
+│   ├── skills/              # installed by init --agent copilot|copilot-vscode|all
+│   └── hooks/openspec-runner.json
 └── openspec/
     └── runner.yaml
 ```
 
 `init` is safe to rerun after rebuilding or upgrading the runner. `codex` remains
 the compatibility default; `claude` creates a version-2 config with an explicit
-`sonnet` default and `dontAsk` permissions; `all` installs both skill targets and
-allows `--default-agent codex|claude` for a new version-2 config:
+`sonnet` default and `dontAsk` permissions; `all` installs all four harness targets
+(across `.agents`, `.claude`, and `.github`) and allows
+`--default-agent codex|claude|copilot|copilot-vscode` for a new version-2 config.
+Copilot defaults require an explicit `--default-model` when creating a config.
+Copilot setup and the known CLI launch limitation are described in the
+[Copilot verification guide](docs/COPILOT_SUPPORT_VERIFICATION.md).
 
-- It updates only the six runner-owned `SKILL.md` files.
+- It updates the eight runner-owned `SKILL.md` files in each selected skill target.
+- Copilot targets also install runner hooks, preserving differing user hook files
+  for explicit review rather than overwriting them.
 - It does not remove or replace unrelated project skills.
 - It creates `openspec/runner.yaml` only when absent, preserving existing runner
   configuration.
@@ -301,7 +315,11 @@ Review and commit the installed files so every task worktree receives the same
 skills and configuration:
 
 ```sh
-git add .agents/skills/openspec-runner-* .claude/skills/openspec-runner-* openspec/runner.yaml
+# Stage the paths created for your selected harnesses:
+git add openspec/runner.yaml
+git add .agents/skills/openspec-runner-*  # Codex
+# git add .claude/skills/openspec-runner-*  # Claude Code
+# git add .github/skills/openspec-runner-* .github/hooks/openspec-runner.json  # Copilot
 git commit -m "Install OpenSpec runner skills"
 ```
 
