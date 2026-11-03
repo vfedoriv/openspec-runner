@@ -192,7 +192,7 @@ Implementation commit `fecce5fdf90a65f2b396b74a86320ac30bac76ec` contains
 only `greeting.txt`; its committed blob contains HELLO_COPILOT and LF. The reviewer
 correctly found that `core.autocrlf=true` produces CRLF in a fresh Windows checkout
 without a path-specific attributes rule. The fixture remains in `fixing`; no
-repair, final approval, or archival is claimed. This verifies production startup,
+repair, final approval, or archival is claimed. The [expanded live acceptance record](LIVE_ACCEPTANCE_2026-11-04.md) records the subsequent repair and clean fresh review. This initial run verifies production startup,
 ownership, reporting, integration, and review execution, not a clean final feature
 review or the complete recovery/cancellation checklist.
 

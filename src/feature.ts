@@ -10,7 +10,7 @@ import { superviseWorker, type SupervisedSession } from "./worker.js";
 import { processStart } from "./processes.js";
 import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import { getHarness } from "./harnesses/registry.js";
-import { completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
+import { completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
 import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import {
@@ -467,6 +467,10 @@ export class Feature {
       if (j.agent === "copilot-vscode" && agentMayBeActive(j))
         throw new Error("Editor agent activity is uncertain; retain its worktree and inspect the saved chat");
       if (j.worker?.exitedAt) {
+        if (j.agent === "copilot" && j.worker.exitCode === null && !agentMayBeActive(j)) {
+          j.phase = "failed";
+          return;
+        }
         if (j.agent !== "copilot-vscode" || !j.terminalEvidence) throw new Error("Job already exited; inspect and explicitly retry");
         j.phase = "failed"; j.error = "Editor turn stop confirmed after supervisor exit; inspect and explicitly retry";
         return;
@@ -482,6 +486,7 @@ export class Feature {
       } else if (j.worker || j.terminal.phase || j.session)
         throw new Error("Startup is ambiguous; inspect saved process/terminal evidence before recovery");
       j.phase = "failed";
+      recoverCopilotLauncher(j);
       s.error = j.error = "Interrupted job; inspect retained resources and explicitly retry";
     });
   }

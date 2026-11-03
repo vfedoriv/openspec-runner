@@ -2,7 +2,9 @@
 
 This document explains current execution and Store-linked coordination limits.
 The Store-linked baseline was introduced in commit `3a86abb`; the limits below
-were checked against source at `9b4865e` on 2026-11-03.
+were initially checked against source at `9b4865e` on 2026-11-03. Execution
+acceptance and Windows recovery notes were updated on 2026-11-04 against
+`6e52e98` plus the subsequent recovery correction.
 See the [maintenance priorities](maintenance-priorities.md) for recommended next work.
 
 ## Terms
@@ -293,12 +295,16 @@ session ID. Previously reserved attempts require inspection and an explicit
 fresh retry; their identities are not rewritten.
 
 Regression coverage preserves report-before-stop ordering, process exit, root
-ownership, and legacy-attempt diagnostics. Authenticated production implementation,
-integration, and managed review execution passed on 2026-11-04 after OpenSpec was
-installed. The reviewer found a fixture line-ending defect, so the fixture remains
-in `fixing`; clean final approval, repair, recovery, and cancellation remain
-outside that result. See the [live acceptance
-record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md#copilot-production-launcher-follow-up--2026-11-04).
+ownership, and legacy-attempt diagnostics. Real implementation/integration,
+repair, fresh review, cancellation, and interrupted-supervisor recovery are now
+recorded in the [expanded acceptance results](LIVE_ACCEPTANCE_2026-11-04.md).
+
+A lost Windows Copilot supervisor is still unsuccessful execution. Recovery can
+acknowledge its stale launcher only after a matching root stop and proof that
+both saved process trees are gone. The task/job stays failed with null exit
+evidence and no invented success receipt. Unknown or live identities remain
+blocked. This does not establish interactive resume, credential-failure behavior,
+every harness/backend combination, or final approval/archival.
 
 ## 7. Delegated execution has narrower support than local workers
 

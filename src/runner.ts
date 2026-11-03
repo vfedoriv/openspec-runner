@@ -686,6 +686,12 @@ export class Runner {
       if (!a || a.id !== id || !a.setupDone)
         throw new Error("Worker attempt is not ready; inspect before retrying");
       if (a.worker) {
+        refreshCopilotEvidence(a, this.repo.common);
+        if (a.agent === "copilot" && a.worker.exitedAt && a.worker.exitCode === null && !agentMayBeActive(a)) {
+          a.phase = "failed";
+          this.save(s);
+          return { a, recovered: true };
+        }
         if (a.worker.exitedAt) throw new Error("Worker already exited; inspect its saved report and log");
         if (a.worker.processPlatform && a.worker.processPlatform !== process.platform)
           throw new Error("Worker process identity belongs to another platform; retain resources");
@@ -703,6 +709,7 @@ export class Runner {
           a.phase = "failed";
           a.error = "Worker supervisor disappeared without an accepted report; inspect the log and explicitly retry";
         }
+        refreshCopilotEvidence(a, this.repo.common);
         this.save(s);
         return { a, recovered: true };
       }

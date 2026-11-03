@@ -2,8 +2,31 @@ import type { TaskAttempt } from "../runner.js";
 import type { FeatureJob } from "../feature-state.js";
 import { readHookLease } from "./copilot-hooks.js";
 import { resolve } from "node:path";
+import { processIsGone, windowsTreeIsGone } from "../platform-process.js";
 
 type Attempt = TaskAttempt | FeatureJob;
+
+export function recoverCopilotLauncher(a: Attempt, proof = {
+  platform: process.platform,
+  processIsGone,
+  treeIsGone: windowsTreeIsGone,
+}): void {
+  const worker = a.worker, launcher = worker?.launcher;
+  // A model turn can outlive its launcher. Require its matching root stop as
+  // well as both absent process trees; null exits never prove successful work.
+  if (a.agent !== "copilot" || proof.platform !== "win32" || worker?.processPlatform !== "win32" ||
+      !a.session || !a.identityConfirmed || a.observedSession !== a.session || a.terminalEvidence?.type !== "agent-stop" ||
+      !worker.exitedAt || worker.exitCode !== null || !worker.pid || !launcher?.pid ||
+      !worker.processStart || !launcher.processStart ||
+      !Number.isFinite(Date.parse(worker.processStart)) || !Number.isFinite(Date.parse(launcher.processStart))) return;
+  if (!proof.processIsGone(worker.pid) || !proof.processIsGone(launcher.pid) ||
+      !proof.treeIsGone(worker.pid, worker.processStart) || !proof.treeIsGone(launcher.pid, launcher.processStart)) return;
+  if (!launcher.exitedAt) {
+    launcher.exitedAt = new Date().toISOString();
+    launcher.exitCode = null;
+  }
+  delete worker.terminationUncertain;
+}
 
 export function refreshCopilotEvidence(a: Attempt, common: string): void {
   if (a.agent !== "copilot" && a.agent !== "copilot-vscode") return;
@@ -12,6 +35,7 @@ export function refreshCopilotEvidence(a: Attempt, common: string): void {
   if (a.expectedSession && a.expectedSession !== lease.session) throw new Error("Copilot reserved session mismatch");
   a.observedSession = lease.session; a.identityConfirmed = true;
   if (lease.stoppedAt) a.terminalEvidence = { type: "agent-stop", metadata: { is_error: !!lease.error || !lease.reportAccepted } };
+  recoverCopilotLauncher(a);
 }
 
 export function completionProblem(a: Attempt): string | undefined {

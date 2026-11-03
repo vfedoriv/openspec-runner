@@ -7,10 +7,11 @@ import { join, delimiter } from "node:path";
 import { stringify } from "yaml";
 import { harnessIds } from "../dist/harnesses/registry.js";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { Runner } from "../dist/runner.js";
 import { init } from "../dist/cli.js";
 import { Feature } from "../dist/feature.js";
+import { observeProcess } from "../dist/platform-process.js";
 
 const supported = ["codex", "claude", "copilot", "copilot-vscode"];
 test("native lifecycle matrix includes every registered harness", () => assert.deepEqual([...harnessIds()].sort(), [...supported].sort()));
@@ -36,7 +37,7 @@ for (const id of supported) test(`${id} supervises implementation, review, repai
   const helper = join(bin, "worker.mjs");
   const findings = join(bin, "findings.json"); writeFileSync(findings, "[]");
   writeFileSync(helper, `import { Runner } from ${JSON.stringify(runnerModule)}; import {Feature} from ${JSON.stringify(featureModule)};
-    import { execFileSync } from 'node:child_process'; import {writeFileSync,readFileSync} from 'node:fs';
+    import { execFileSync, spawn } from 'node:child_process'; import {writeFileSync,readFileSync} from 'node:fs';
     import { randomUUID } from 'node:crypto';
     const prompt=process.argv[2], session=process.argv[3]||randomUUID(), harness=${JSON.stringify(id)};
     const attempt=prompt.match(/Attempt: ([a-zA-Z0-9_-]+)/)[1];
@@ -103,6 +104,29 @@ for (const id of supported) test(`${id} supervises implementation, review, repai
   assert.equal(models.exhaustive, id === "codex");
   const rules = JSON.parse(execFileSync(process.execPath, [runnerBin, "planning-rules", "--agent", id, "--json"], { cwd: root, encoding: "utf8" }));
   assert.equal(rules.harness, id);
+  let stoppedIdentity;
+  const interruptedWorker = worker => {
+    worker.pid = stoppedIdentity.pid; worker.processStart = stoppedIdentity.createdAt;
+    worker.processPlatform = "win32"; worker.exitCode = null; worker.terminationUncertain = true;
+    worker.launcher = { pid: stoppedIdentity.pid, processStart: stoppedIdentity.createdAt };
+    delete worker.completion;
+  };
+  if (id === "copilot" && process.platform === "win32") {
+    const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { windowsHide: true });
+    await new Promise(resolve => child.once("spawn", resolve));
+    stoppedIdentity = observeProcess(child.pid); assert.ok(stoppedIdentity);
+    const closed = new Promise(resolve => child.once("close", resolve)); child.kill(); await closed;
+    const successful = runner.read("demo"), interrupted = structuredClone(successful);
+    interruptedWorker(interrupted.attempts[0].worker); runner.save(interrupted);
+    assert.equal((await runner.worker("demo", "1.1", attempt.id)).recovered, true);
+    const recovered = runner.read("demo").attempts[0];
+    assert.equal(recovered.phase, "failed"); assert.equal(recovered.worker.exitCode, null);
+    assert.equal(recovered.worker.launcher.exitCode, null); assert.equal(recovered.worker.completion, undefined);
+    assert.equal(recovered.report.outcome, "completed");
+    assert.throws(() => runner.integrate("demo", ["1.1"]), /completed|successful|code null|integrat/i);
+    assert.doesNotThrow(() => runner.preview("demo", ["1.1"], undefined, undefined, true));
+    runner.save(successful);
+  }
   runner.integrate("demo", ["1.1"]);
   assert.equal(runner.read("demo").attempts[0].phase, "integrated");
   writeFileSync(findings, JSON.stringify([{ id: "bug", category: "correctness", location: "result.txt", impact: "fixture defect", correction: "add repair" }]));
@@ -116,4 +140,15 @@ for (const id of supported) test(`${id} supervises implementation, review, repai
   const final = feature.launch("demo", "review");
   assert.equal((await runJob(final)).exitCode, 0);
   assert.equal(feature.read("demo").phase, "awaiting-final-approval");
+  if (stoppedIdentity) {
+    const successful = feature.read("demo"), interrupted = structuredClone(successful);
+    interruptedWorker(interrupted.jobs.at(-1).worker); feature.save(interrupted);
+    feature.recover("demo", final.id);
+    const recovered = feature.read("demo").jobs.at(-1);
+    assert.equal(recovered.phase, "failed"); assert.equal(recovered.worker.exitCode, null);
+    assert.equal(recovered.worker.launcher.exitCode, null); assert.equal(recovered.worker.completion, undefined);
+    assert.doesNotThrow(() => feature.jobPreview("demo", "review", true));
+    feature.save(successful);
+  }
+
 });

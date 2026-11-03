@@ -4,7 +4,9 @@ Verification date: 2026-10-29. The native implementation covers `codex`,
 `claude`, `copilot`, and `copilot-vscode` for local x64 NTFS repositories.
 Git, Worktrunk, and Orca worktrees and manual, Herdr, and Orca terminals are
 supported. Authenticated harness acceptance is tracked
-separately below.
+separately below. The [expanded live acceptance record](LIVE_ACCEPTANCE_2026-11-04.md)
+adds real review/repair, cancellation, recovery, mixed roles, and terminal-backed
+inference; the older matrices below remain historical verification stages.
 
 ## Environment and prerequisites
 

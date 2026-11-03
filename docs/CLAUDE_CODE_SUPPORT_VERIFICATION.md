@@ -3,7 +3,10 @@
 Status: the full checklist remains pending. A narrower authenticated Windows
 implementation, integration, and managed review passed; see the
 [real Windows acceptance record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
-Those runs do not establish the unchecked recovery or multi-task cases below.
+The [expanded live record](LIVE_ACCEPTANCE_2026-11-04.md) additionally covers
+parallel/dependent tasks, Codex review, cancellation, denied tools, and
+Herdr/Worktrunk execution with safe cleanup. Unchecked items below include
+broader host, planner, and interactive-resume cases.
 
 Native Windows local workers use the same Claude stream/session contract as
 Linux, including the verified native resource backends. See the [Windows verification
@@ -21,15 +24,15 @@ Run these checks against an installed, authenticated Claude Code CLI in a dispos
 
 ## Successful task lifecycle
 
-- [ ] Plan two independent tasks and a later task depending on both. Launch the independent tasks in one Claude-only batch.
+- [x] Plan two independent tasks and a later task depending on both. Launch the independent tasks in one Claude-only batch.
 - [ ] Verify each attempt has one begin registration, a matching stream-confirmed session UUID, one accepted report, a clean committed task worktree, and an actual supervisor exit receipt. A reserved UUID or accepted report alone is insufficient.
 - [ ] Exercise manual terminals and Herdr separately. Detach and reattach without duplicate submission; verify retained sessions and exact saved resume details.
-- [ ] Integrate the independent tasks, then launch and integrate the dependent task. Confirm dependencies unlock only after integration and only integration changes canonical task checkboxes.
-- [ ] Verify cleanup retains sessions, logs, and branches. Attaching to a completed attempt must not resume a removed worktree.
+- [x] Integrate the independent tasks, then launch and integrate the dependent task. Confirm dependencies unlock only after integration and only integration changes canonical task checkboxes.
+- [x] Verify cleanup retains sessions, logs, and branches. Attaching to a completed attempt must not resume a removed worktree.
 
 ## Failure and recovery
 
-- [ ] Exercise a denied permission and confirm actionable diagnostics and durable attempt state.
+- [x] Exercise a denied permission and confirm actionable diagnostics and durable attempt state.
 - [ ] Exercise an unsuccessful worker report and an interrupted worker. Inspect each attempt and explicitly retry; verify there is no automatic resubmission.
 - [ ] Verify authentication and invalid-model failures produce actionable diagnostics without a successful task outcome.
 - [ ] Confirm integration and cleanup remain blocked until actual process exit is established, including when a report was already accepted.

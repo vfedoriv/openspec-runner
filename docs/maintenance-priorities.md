@@ -33,22 +33,21 @@ session identity; rejection of unrelated chats, stop-before-report, and nonzero
 exit; authenticated implementation/integration and managed review using the
 production launcher without overrides. Include cancellation and recovery.
 
-### 2. Close real-harness acceptance gaps
+### 2. Expanded live acceptance: core gaps covered, full matrix remains open
 
-The real Windows record establishes narrow implementation and review successes,
-not the complete lifecycle. VS Code managed review remains pending. Repair,
-cancellation, interrupted-supervisor recovery, mixed-harness role selection,
-and real inference combined with terminal backends remain unverified there.
+The [expanded 2026-11-04 acceptance record](LIVE_ACCEPTANCE_2026-11-04.md) covers
+Copilot repair/fresh review, real cancellations, CLI supervisor recovery, Claude
+parallel/dependent tasks with a Codex reviewer, VS Code managed review, and
+real inference with Orca and Herdr/Worktrunk resources.
 
-Run the existing acceptance checklists in disposable projects after the Copilot launch
-fix. Record exact versions, permissions, requested/observed models, session
-identities, reports, exits, and retained recovery resources. Keep simulated,
-installed-tool, and authenticated results distinct.
+The crash test exposed and drove a fix for stale Windows Copilot launcher
+acknowledgement. Recovery still requires a matching root stop and provably absent
+process trees; it cannot turn a lost supervisor into successful execution.
 
-Evidence: [real acceptance record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md),
-[Claude checklist](CLAUDE_CODE_SUPPORT_VERIFICATION.md),
-[Copilot checklist](COPILOT_SUPPORT_VERIFICATION.md), and
-[backend matrix](WINDOWS_PORTABILITY_VERIFICATION.md#installed-resource-backend-follow-up).
+The full harness/backend product, interactive exact-session resume, and
+credential-failure cases remain open. Use the evidence matrix rather than
+assuming all combinations passed. Keep simulated, installed-tool and
+authenticated results distinct.
 
 ### 3. Verify startup readiness beyond bounded lock retries
 

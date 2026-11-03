@@ -81,7 +81,9 @@ and review with diagnostic launch adjustments. The production adapter now uses
 new prompt mode and hook-observed identity. The 2026-11-04 production retest
 passed implementation/integration and review execution; its review reported a
 fixture line-ending defect, leaving the fixture in `fixing`.
-The complete checklist below, including recovery and cancellation, remains open.
+The [expanded live record](LIVE_ACCEPTANCE_2026-11-04.md) adds real repair/fresh
+review, cancellation, interrupted-supervisor recovery, VS Code managed review and interrupted-supervisor recovery,
+and Orca-backed inference. The full cross-product checklist remains open.
 
 Automated validation on 2026-10-29: Ubuntu/WSL, Node 22.13.0, pnpm 11.7.0;
 `pnpm test` passed with 350 passed, 2 skipped, and 0 failed. Package dry-run
@@ -117,8 +119,9 @@ hook schema, requested model, and any independently observed model evidence.
   receipt. The editor window can remain open.
 - [ ] Repeat with a managed reviewer, a blocking finding, a repair worker, and
   a fresh reviewer. Confirm the existing final user approval remains required.
-- [ ] Inspect/import a delegated component using the approved Copilot settings;
-  execute it and export a portable receipt after a successful supervised review.
+- Not applicable to the current shared-record contract: Copilot assignments are
+  rejected by its Codex/Claude-only validator, and native Windows delegation is
+  excluded. Test delegated Copilot execution only after that contract is extended.
 - [ ] Disable hooks or cancel a worker. Confirm no result integrates and the
   saved worktree/log/session remain available for inspection.
 - [ ] Interrupt the editor supervisor. Retry/cleanup must retain uncertain
