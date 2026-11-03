@@ -751,6 +751,8 @@ test("supervised exec records actual exit after report and prevents duplicate wo
   executable(join(bin, "codex"), `
     if(process.argv.includes('--help')) { console.log('--add-dir --model --cd'); }
     else (async()=>{
+      let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+      if(!prompt)throw new Error('Missing registered prompt');
       const {Runner}=await import(${JSON.stringify(module)});
       const r=new Runner(process.cwd());
       r.begin('demo','1.1',${JSON.stringify(a.id)},'exec-session');

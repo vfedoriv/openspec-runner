@@ -17,6 +17,7 @@ Start with the guide for the workflow you want to use.
 | [Recovery reference](../README.md#recovery-and-plan-changes) | Users recovering an interrupted execution | Current CLI |
 | [Documented limits](DOCUMENTED_LIMITS.md) | Operators checking execution and shared coordination boundaries | Current limits and historical evidence scope |
 | [Expanded live acceptance](LIVE_ACCEPTANCE_2026-11-04.md) | Maintainers checking real lifecycle evidence | 2026-11-04 results and remaining scope |
+| [Startup readiness verification](WORKER_STARTUP_VERIFICATION.md) | Maintainers checking worker dispatch ordering | Fast-child tests and native CLI acceptance |
 | [Maintenance priorities](maintenance-priorities.md) | Maintainers choosing the next fixes | Source-based review dated 2026-11-03 |
 
 ## Start here

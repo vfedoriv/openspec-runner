@@ -4,7 +4,8 @@ This document explains current execution and Store-linked coordination limits.
 The Store-linked baseline was introduced in commit `3a86abb`; the limits below
 were initially checked against source at `9b4865e` on 2026-11-03. Execution
 acceptance and Windows recovery notes were updated on 2026-11-04 against
-`6e52e98` plus the subsequent recovery correction.
+`6e52e98` plus the subsequent recovery correction. Startup notes were then
+updated against `0c8fc7f` plus the registration-gated stdin correction.
 See the [maintenance priorities](maintenance-priorities.md) for recommended next work.
 
 ## Terms
@@ -197,30 +198,25 @@ flowchart TD
 
 See [Changes, failures, and recovery](team-workflow.md#changes-failures-and-recovery).
 
-## 4. Codex worker startup contention has bounded retries
+## 4. Initial worker prompts wait for registration
 
-**Type: Mitigated historical risk; startup ordering is unchanged.**
+**Type: Corrected startup ordering with bounded lock contention.**
 
-Codex receives its prompt through command-line arguments before the parent saves
-its PID under the repository lock. A fast child can request `begin` while that
-registration is in progress.
+Codex and Claude initial workers receive their task prompts on stdin only after
+successful synchronous PID registration and repository lock release. Failed
+registration destroys stdin without delivering the prompt. Permission preflight,
+session identity, successful exit checks, and explicit retries remain required.
+Interactive resume is unchanged.
 
-The current `locked()` implementation in `src/system.ts` retries for up to three
-seconds when another live local process owns the lock. A regression test in
-`test/platform-files.test.mjs` verifies serialization while another process holds
-the lock for 500 milliseconds. The earlier claim that this contention always
-fails immediately is obsolete.
+The old Codex argument-prompt startup ordering is superseded by the
+[startup readiness verification](WORKER_STARTUP_VERIFICATION.md). Its native
+fast-child tests replace reliance on the feature fixture's saved-PID/lock polling.
 
-This mitigation does not establish a readiness handshake. Contention exceeding
-the deadline, unreadable owner metadata, or an unverifiable owner can still fail.
-The fake feature worker also waits for its PID to be saved and the lock to be
-absent, so those fixtures do not independently test production startup ordering.
-No current live failure frequency has been established.
-
-If startup fails, inspect job status and logs before recovery. Preserve lock
-ownership and successful-exit checks. Further startup work should test a fast
-child without fixture waits and decide whether explicit readiness is needed
-beyond the existing retry policy.
+The lock implementation still retries for up to three seconds when another live
+local process owns it. Long contention, unreadable metadata, or unverifiable
+ownership can fail. Do not remove the repository lock to force progress; inspect
+status and logs before recovery. This correction does not claim to eliminate all
+contention during later reporting or coordination.
 
 ## 5. Operators control Git synchronization and PR publication
 

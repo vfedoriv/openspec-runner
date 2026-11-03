@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve, sep } from "node:path";
@@ -111,9 +111,9 @@ export const codexHarness: HarnessAdapter = {
       exhaustive: true,
     };
   },
-  initialInvocation(settings, cwd, commonGitDir, prompt, session = randomUUID()): Invocation {
+  initialInvocation(settings, cwd, commonGitDir, prompt): Invocation {
     const legacy = settings as Settings;
-    return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), prompt], cwd };
+    return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), "-"], cwd, stdin: prompt };
   },
   managedInvocation: (invocation, context) => process.platform === "win32" ? scopedCodexInvocation(invocation, context) : invocation,
   validateManagedInvocation: (invocation, context) => { if (process.platform === "win32") validateCodexInvocation(invocation, context); },

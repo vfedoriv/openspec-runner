@@ -27,7 +27,7 @@ const entries = log => readFileSync(log + ".activity.jsonl", "utf8").trim().spli
 function fakeCodex(t, dir, help, body = "console.log(JSON.stringify({type:'turn.completed'}));") {
   const bin = join(dir, "bin"); mkdirSync(bin);
   const executable = join(bin, "codex");
-  writeFileSync(executable, `#!/usr/bin/env node\n${codexDiagnostics}\nif(process.argv.includes('--help'))console.log(${JSON.stringify(help)});else{require('fs').writeFileSync(${JSON.stringify(join(dir, "args.json"))},JSON.stringify(process.argv.slice(2)));${body}}`);
+  writeFileSync(executable, `#!/usr/bin/env node\n${codexDiagnostics}\nif(process.argv.includes('--help'))console.log(${JSON.stringify(help)});else{let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{require('fs').writeFileSync(${JSON.stringify(join(dir, "args.json"))},JSON.stringify(process.argv.slice(2)));require('fs').writeFileSync(${JSON.stringify(join(dir, "prompt.txt"))},prompt);${body}});}`);
   chmodSync(executable, 0o755);
   const oldPath = process.env.PATH;
   process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${oldPath}`;
@@ -46,6 +46,7 @@ test("worker gates json by advertised capability and a real attempt ID", async t
     assert.equal(await superviseWorker(a, dir, "prompt", () => {}), 0);
     const args = JSON.parse(readFileSync(join(dir, "args.json"), "utf8"));
     assert.equal(args.includes("--json"), advertised);
+    assert.equal(readFileSync(join(dir, "prompt.txt"), "utf8"), "prompt");
     assert.equal(a.identityConfirmed, undefined);
     assert.equal(a.report, undefined);
     assert.equal(entries(a.worker.log)[0].identity.attemptId, "attempt-real");

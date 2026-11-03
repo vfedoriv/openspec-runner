@@ -42,7 +42,7 @@ test("Windows managed Codex invocation prepares reports and pins the runner exec
   const f = fixture(t), harness = getHarness("codex");
   assert.equal(typeof harness.managedInvocation, "function");
   const invocation = harness.managedInvocation(harness.initialInvocation({ model: "gpt-6-luna" }, f.worktree, f.common, "prompt", ""), { common: f.common, gitDir: f.gitDir, branch: f.branch });
-  assert.equal(invocation.args[0], "exec"); assert.equal(invocation.args.at(-1), "prompt");
+  assert.equal(invocation.args[0], "exec"); assert.equal(invocation.args.at(-1), "-"); assert.equal(invocation.stdin, "prompt");
   assert.equal(invocation.args.includes("--add-dir"), false);
   assert.ok(invocation.args.includes("--strict-config"));
   assert.ok(invocation.prepareDirectories.includes(join(f.root, "reports")));

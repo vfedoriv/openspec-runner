@@ -1158,8 +1158,10 @@ terminal records require manual inspection and are not migrated into desktop Orc
 commands to run once in separate terminals. Task commands start
 `openspec-runner worker`; feature jobs start `openspec-runner feature worker`.
 Each invokes one selected-harness CLI with the saved prompt and working
-directory. Claude prompts are sent through stdin in print/stream-json mode; its
-session UUID is checked against emitted stream events. Do not replace it with
+directory. Codex initial prompts use `exec ... -`; Claude uses print/stream-json
+mode. Both receive their prompts through stdin only after successful PID
+registration and repository lock release. Claude's session UUID is checked
+against emitted stream events. Do not replace it with
 an unrequested background process or invoke it twice. While the worker remains
 active, `attach` prints the saved resume command instead of focusing a pane.
 

@@ -110,10 +110,16 @@ export async function superviseWorker(
           })
         : undefined;
       child.once("spawn", () => {
-        try { createdAt = observeProcess(child.pid!)?.createdAt; started(child.pid!); } catch (error) { failure = error; stop(); }
-        if (invocation.stdin !== undefined) {
-          child.stdin!.write(invocation.stdin);
-          child.stdin!.end();
+        try {
+          createdAt = observeProcess(child.pid!)?.createdAt;
+          started(child.pid!);
+          // Registration returns only after its repository lock is released.
+          // Never deliver task instructions to an unregistered worker.
+          if (invocation.stdin !== undefined) child.stdin!.end(invocation.stdin);
+        } catch (error) {
+          failure = error;
+          child.stdin?.destroy();
+          stop();
         }
       });
       child.stdout!.on("data", chunk => {

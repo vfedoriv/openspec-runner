@@ -49,28 +49,21 @@ credential-failure cases remain open. Use the evidence matrix rather than
 assuming all combinations passed. Keep simulated, installed-tool and
 authenticated results distinct.
 
-### 3. Verify startup readiness beyond bounded lock retries
+### 3. Startup readiness: corrected and verified
 
-The old limits document called the Codex registration race unresolved, but
-[`system.ts`](../src/system.ts) now retries lock acquisition for up to three
-seconds when another live local process owns it.
-[`platform-files.test.mjs`](../test/platform-files.test.mjs) covers a 500 ms
-contended critical section. That mitigation lowers the urgency of this work.
+Deterministic fast-child tests reproduced prompt consumption before Codex PID
+registration, including when registration failed or its lock deadline expired.
+The three-second lock retry mitigated contention but did not prevent dispatch.
 
-The prompt still reaches Codex before the spawn callback saves its PID.
-[`feature-fixture.mjs`](../test/helpers/feature-fixture.mjs) waits for PID
-registration and lock release, so its success does not independently verify
-production ordering. This review did not reproduce a remaining live failure.
+Initial Codex workers now use stdin, and the shared supervisor delivers the
+prompt only after synchronous registration returns. Registration failure destroys
+stdin before stopping the worker. Feature fixtures consume the same prompt
+transport instead of polling PID/lock files. Claude shares the failure gate;
+permissions, reports, exits, and interactive resume remain intact.
 
-Evidence: [current startup limit](DOCUMENTED_LIMITS.md#4-codex-worker-startup-contention-has-bounded-retries),
-[`worker.ts`](../src/worker.ts), [`feature.ts`](../src/feature.ts), and
-[`runner.ts`](../src/runner.ts).
-
-Add a deterministic fast-child test without fixture sleeps, covering task and
-review/repair startup, registration failure, lock deadline expiry, and child
-exit during registration. Use the result to decide whether a readiness handshake
-is needed. Preserve locks, ownership, successful exits, and explicit retries;
-verify on Windows and Linux.
+See the [startup verification record](WORKER_STARTUP_VERIFICATION.md) and
+[current startup boundary](DOCUMENTED_LIMITS.md#4-initial-worker-prompts-wait-for-registration).
+No additional wrapper-process handshake or lock-policy change was needed.
 
 ### 4. Extend delegated execution only where needed
 
@@ -109,8 +102,8 @@ This review corrects skill counts and install targets, harness requirements,
 outdated live-testing status, the resolved Windows Codex blocker, and the branch
 reference to its merged correction. The limits guide now covers the CLI launch
 gap and narrower delegated support. Historical test counts remain explicitly
-historical. The old startup-risk description now reflects the implemented
-three-second live-owner lock retry and its regression coverage.
+historical. The startup description now reflects registration-gated stdin
+prompts, deterministic fast-child coverage, and the retained live-owner lock retry.
 
 The checked-in knowledge graph is indexed at `69fc453` on 2026-09-15. It locates
 the original supervisor/lock architecture but predates the current harness and

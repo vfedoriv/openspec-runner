@@ -130,3 +130,14 @@ test("a supervised Claude worker records matching stream identity and exit evide
   assert.equal(saved.terminalEvidence.subtype, "success");
   assert.equal(saved.phase, "blocked");
 });
+
+
+test("Codex initial instructions use stdin while interactive resume remains prompt-free", async () => {
+  const { getHarness } = await import("../dist/harnesses/registry.js");
+  const codex = getHarness("codex"), prompt = "Unicode \u2713\nworker task";
+  const invocation = codex.initialInvocation({ model: "model" }, "/work", "/common", prompt, "");
+  assert.equal(invocation.args.at(-1), "-"); assert.equal(invocation.stdin, prompt);
+  assert.equal(invocation.args.includes(prompt), false);
+  const resume = codex.resumeInvocation({ model: "model" }, "/work", "/common", "session-1");
+  assert.equal(resume.stdin, undefined); assert.equal(resume.args.includes("session-1"), true);
+});
