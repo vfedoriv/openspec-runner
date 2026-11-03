@@ -56,12 +56,13 @@ for (const id of supported) test(`${id} supervises implementation, review, repai
   `);
   const script = `const args=process.argv.slice(2);
     if(args.includes('--version')) console.log('1.0');
-    else if(args.includes('--help')) console.log('--mode --new-window --model --session-id --add-dir --allow-tool --cd --json -p --output-format stream-json --verbose --resume --permission-mode --allowedTools --effort');
+    else if(args.includes('--help')) console.log('--mode --new-window --model --trust-folder --prompt --session-id --add-dir --allow-tool --cd --json -p --output-format stream-json --verbose --resume --permission-mode --allowedTools --effort');
     else if(args.includes('--list-extensions')) console.log('GitHub.copilot-chat');
     else if(args[0]==='app-server') {require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id) console.log(JSON.stringify({id:m.id,result:m.method==='model/list'?{data:[{model:'model',id:'model',defaultReasoningEffort:'high'}],nextCursor:null}:{}}));});}
     else if(args[0]==='exec') {const c=require('node:child_process').spawn(process.execPath,[${JSON.stringify(helper)},args.at(-1)],{stdio:'inherit'});c.on('exit',code=>process.exit(code??1));}
     else if(${JSON.stringify(id)}==='copilot-vscode' && (args[0]!=='chat'||args.length===3)) process.exit(0);
     else if(args[0]==='chat') { const {spawn}=require('node:child_process'),{openSync}=require('node:fs');const fd=openSync(${JSON.stringify(join(bin, "editor.log"))},'a'); const c=spawn(process.execPath,[${JSON.stringify(helper)},args.at(-1)],{cwd:process.cwd(),stdio:['ignore',fd,fd],detached:true,windowsHide:true}); c.unref(); }
+    else if(${JSON.stringify(id)}==='copilot') {if(!args.includes('--trust-folder')||!args.includes('-p')||args.includes('--session-id')) throw new Error('invalid Copilot prompt launch');const c=require('node:child_process').spawn(process.execPath,[${JSON.stringify(helper)},args[args.indexOf('-p')+1]],{stdio:'inherit'});c.on('exit',code=>process.exit(code??1));}
     else { let text=''; process.stdin.on('data',c=>text+=c);process.stdin.on('end',()=>{ const {spawn}=require('node:child_process');const c=spawn(process.execPath,[${JSON.stringify(helper)},text,args[args.indexOf('--session-id')+1]],{stdio:'inherit'});c.on('exit',code=>process.exit(code??1)); }); }
   `;
   for (const name of ["copilot", "code", "codex", "claude"]) executable(name, script);
@@ -83,6 +84,7 @@ for (const id of supported) test(`${id} supervises implementation, review, repai
   assert.equal(result.exitCode, 0, readFileSync(result.log, "utf8"));
   const saved = runner.read("demo").attempts[0];
   if (id !== "codex") { assert.equal(saved.identityConfirmed, true); assert.equal(saved.report.session, saved.observedSession); }
+  if (id === "copilot") { assert.equal(attempt.expectedSession, undefined); assert.equal(saved.expectedSession, undefined); assert.ok(saved.observedSession); }
   if (id.startsWith("copilot")) assert.equal(saved.worker.completion.source, id === "copilot" ? "process-exit" : "agent-stop");
   assert.equal(saved.report.session, saved.session);
   if (id === "copilot-vscode") {

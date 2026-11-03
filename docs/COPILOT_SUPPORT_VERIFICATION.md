@@ -77,7 +77,10 @@ Later Windows live runs are recorded in
 [real Windows harness acceptance](REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
 The corrected VS Code launcher passed implementation through integration with
 GPT-6 Luna and the exact generated custom agent. Copilot CLI passed implementation
-and review with diagnostic launch adjustments that still need a production fix.
+and review with diagnostic launch adjustments. The production adapter now uses
+new prompt mode and hook-observed identity. The 2026-11-04 production retest
+passed implementation/integration and review execution; its review reported a
+fixture line-ending defect, leaving the fixture in `fixing`.
 The complete checklist below, including recovery and cancellation, remains open.
 
 Automated validation on 2026-10-29: Ubuntu/WSL, Node 22.13.0, pnpm 11.7.0;
@@ -88,9 +91,13 @@ supervisor recovery for the editor. This is the historical pre-smoke automated
 record; the later authenticated results above supersede its live-testing status.
 
 Full CLI/editor acceptance, including cancellation and recovery, remains
-**pending**. The shipped CLI launch path also needs the production correction
-described in the live acceptance record; diagnostic-driver success does not
-verify that path. Repeat smoke validation on the target machine after changes.
+**pending**. The production startup correction uses `--trust-folder -p PROMPT`
+without a reserved session ID; trust applies only to the new invocation and does
+not grant tool permissions. Existing reserved attempts require an explicit fresh
+retry after inspection. Attachment uses `--resume` with the observed session ID.
+The [production retest](REAL_WINDOWS_HARNESS_ACCEPTANCE.md#copilot-production-launcher-follow-up--2026-11-04)
+verifies startup and review execution, not the full checklist. Repeat smoke
+validation on the target machine after changes.
 Record worker and editor versions, OS/host, Copilot extension version,
 hook schema, requested model, and any independently observed model evidence.
 

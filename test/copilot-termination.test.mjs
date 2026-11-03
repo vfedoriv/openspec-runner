@@ -20,7 +20,7 @@ for (const editor of [false, true]) test(`${editor ? "editor" : "CLI"} timeout p
     assert.equal(agentMayBeActive({agent:"copilot-vscode",worker:{exitedAt:"now",launcher:{exitedAt:"now",exitCode:0}}}),true);
     return;
   }
-  const a={id:"attempt",agent:"copilot",path:dir,expectedSession:"00000000-0000-4000-8000-000000000001",settings:{model:"model",options:{startupTimeoutMs:1000,completionTimeoutMs:2000}},worker:{token:"generation",log:join(dir,"log")}};
+  const a={id:"attempt",agent:"copilot",path:dir,settings:{model:"model",options:{startupTimeoutMs:1000,completionTimeoutMs:2000}},worker:{token:"generation",log:join(dir,"log")}};
   await assert.rejects(superviseCopilot(a,common,"prompt",()=>{},fn=>fn(a)),/deadline/);
   assert.ok(a.worker.launcher.exitedAt);
   assert.throws(()=>process.kill(a.worker.launcher.pid,0),{code:"ESRCH"});

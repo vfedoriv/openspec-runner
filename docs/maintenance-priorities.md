@@ -2,15 +2,21 @@
 
 Reviewed on 2026-11-03 against source at `9b4865e`. This is a maintenance
 assessment, not an approved implementation plan. Documentation corrections are
-included in this review; the runtime changes below remain to be implemented.
+included in this review. The subsequent step-1 startup correction is implemented;
+authenticated implementation/integration and review execution passed. Other runtime work remains open.
 
 ## Recommended next work
 
-### 1. Fix Copilot CLI production startup
+### 1. Copilot CLI production startup: corrected and smoke-tested
 
-The authenticated run needed launch overrides that the shipped adapter does not
-use. This is the clearest recorded user-facing compatibility failure. Fix this
-before adding more harness features.
+The historical authenticated run needed launch overrides. The adapter now uses
+new prompt mode, per-invocation folder trust, hook-observed session identity, and
+explicit saved-session resume. Legacy reserved attempts require a fresh retry.
+After installing OpenSpec with user authorization, the 2026-11-04 production
+smoke passed implementation/integration and independent review execution. The
+reviewer reported a fixture line-ending defect and correctly moved it to `fixing`.
+See the [live record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md#copilot-production-launcher-follow-up--2026-11-04);
+full recovery/cancellation acceptance remains priority 2.
 
 Evidence: [real acceptance record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md#diagnostic-setup-and-limitations),
 [`copilot.ts`](../src/harnesses/copilot.ts),

@@ -278,19 +278,27 @@ flowchart TD
 
 See [Lifecycle, delivery, and archival](superpowers/specs/2026-10-04-store-linked-components-design.md#8-lifecycle-delivery-and-archival).
 
-## 6. Copilot CLI production launch is not live-verified
+## 6. Copilot CLI startup correction and acceptance scope
 
 **Type: Known compatibility gap.**
 
-The shipped CLI adapter reserves a session UUID and sends the prompt through
+The original CLI adapter reserved a session UUID and sent the prompt through
 stdin. The recorded authenticated Windows run instead needed
-`--trust-folder -p PROMPT` without `--session-id`. That installed CLI rejected
-combining trust with the reserved session option. The successful diagnostic run
-does not establish that the shipped launcher works.
+`--trust-folder -p PROMPT` without `--session-id`.
 
-The correction must keep nonce-bound root-session ownership, report-before-stop
-ordering, and successful process exit. See the [live acceptance
-record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md#diagnostic-setup-and-limitations).
+The production adapter now uses that new prompt-mode launch and binds the actual
+root session through the nonce lease. Capability checks require prompt-mode and
+folder-trust support. Saved-session attachment uses `--resume` with the observed
+session ID. Previously reserved attempts require inspection and an explicit
+fresh retry; their identities are not rewritten.
+
+Regression coverage preserves report-before-stop ordering, process exit, root
+ownership, and legacy-attempt diagnostics. Authenticated production implementation,
+integration, and managed review execution passed on 2026-11-04 after OpenSpec was
+installed. The reviewer found a fixture line-ending defect, so the fixture remains
+in `fixing`; clean final approval, repair, recovery, and cancellation remain
+outside that result. See the [live acceptance
+record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md#copilot-production-launcher-follow-up--2026-11-04).
 
 ## 7. Delegated execution has narrower support than local workers
 

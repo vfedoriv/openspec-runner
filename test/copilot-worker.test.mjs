@@ -12,3 +12,8 @@ test("editor launcher success cannot finish a worker before report and stop", ()
   assert.equal(worker.copilotDecision(lease, 9, false), 9);
   assert.equal(worker.copilotDecision(undefined, 0, false), 1);
 });
+
+
+test("legacy reserved CLI attempts require explicit retry before launching a new session", async () => {
+  await assert.rejects(worker.superviseCopilot({ id: "old", agent: "copilot", expectedSession: "reserved", path: process.cwd(), settings: { model: "auto" } }, process.cwd(), "prompt", () => {}, () => {}), /Legacy Copilot.*explicitly retry/);
+});

@@ -1,5 +1,7 @@
 # Real Windows harness acceptance — 2026-10-29
 
+The [2026-11-04 Copilot production-launcher follow-up](#copilot-production-launcher-follow-up--2026-11-04) supersedes the original CLI diagnostic-only launch status.
+
 These are authenticated model runs on Windows, distinct from the simulated
 worker tests and the installed resource-backend checks. The disposable fixtures
 use real OpenSpec 1.15.0, Git worktrees, and runner `840be0c` plus the
@@ -167,3 +169,40 @@ on a native WSL filesystem; installed native integrations remain skipped there.
 - [Codex permission profiles](https://learn.chatgpt.com/docs/permissions)
 - [Codex protected paths](https://learn.chatgpt.com/docs/agent-approvals-security)
 - [Codex Windows sandbox](https://learn.chatgpt.com/docs/windows/windows-sandbox)
+
+## Copilot production launcher follow-up — 2026-11-04
+
+The corrected production adapter was tested on native Windows with Copilot CLI
+1.0.105, OpenSpec 1.15.0, Git/manual resources, and model `auto`. Both native
+session logs identified GPT-6 Luna. The disposable fixture granted `shell` and
+`write` tools only for its worker invocations. No launcher overrides or global
+trust/permission changes were used.
+
+The adapter starts a new `--trust-folder -p PROMPT` session without a reserved
+UUID. The nonce hook binds the actual root session. Report acceptance, root stop,
+process exit, and observed-session completion receipts remain required. Saved
+attachment uses `--resume`; legacy reserved attempts require explicit fresh retry.
+
+| Stage | Attempt | Observed root session | Result |
+|---|---|---|---|
+| Implementation | `1523343d-7cef-4c89-a548-7c24c2a6977f` | `a48ef0f7-70c1-4ff1-acec-6bc0f485279d` | Accepted completed report, matching stop/completion receipt, exit zero, integrated. |
+| Independent review | `63086a8b-89af-43e4-9b4e-1ff21d4ec1f4` | `0d329788-e243-4b7b-9fe6-877f367e5cf2` | Accepted completed report with one spec finding, matching stop/completion receipt, exit zero. |
+
+Implementation commit `fecce5fdf90a65f2b396b74a86320ac30bac76ec` contains
+only `greeting.txt`; its committed blob contains HELLO_COPILOT and LF. The reviewer
+correctly found that `core.autocrlf=true` produces CRLF in a fresh Windows checkout
+without a path-specific attributes rule. The fixture remains in `fixing`; no
+repair, final approval, or archival is claimed. This verifies production startup,
+ownership, reporting, integration, and review execution, not a clean final feature
+review or the complete recovery/cancellation checklist.
+
+Evidence remains in `C:/Users/vital/AppData/Local/Temp/copilot-live-DEXA5v/`,
+including `.git/openspec-runner` logs, leases, reports, and feature/attempt state.
+An earlier fixture, `copilot-live-WQENrF`, stopped at missing-OpenSpec preflight
+before inference. OpenSpec 1.15.0 was then installed with user authorization.
+
+Verification: full Windows suite 274 passed, 114 skipped, zero failures. The
+subsequently expanded focused Copilot suite passed all 12 tests, including new
+capability and legacy-attempt checks. Build, package dry-run, and whitespace
+checks passed. Independent code review found no actionable issues. Linux was
+not rerun for this correction.

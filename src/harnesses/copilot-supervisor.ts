@@ -23,13 +23,15 @@ export async function superviseCopilot(
   evidence: (update: (current: SupervisedSession) => void) => void,
 ): Promise<number | null> {
   const harness = getHarness(a.agent), editor = a.agent === "copilot-vscode", stateDir = resolve(common, "openspec-runner");
+  if (!editor && a.expectedSession)
+    throw new Error("Legacy Copilot attempt reserves a session; inspect its evidence and explicitly retry with a fresh attempt");
   const hook = resolve(a.path, ".github/hooks/openspec-runner.json");
   if (!existsSync(hook)) throw new Error("Copilot hooks are missing; run init --agent copilot or copilot-vscode and commit the installed hooks");
   const hookConfig = JSON.parse(readFileSync(hook, "utf8"));
   if (!hookConfig.hooks || !(hookConfig.hooks.UserPromptSubmit || hookConfig.hooks.userPromptSubmitted) || !(hookConfig.hooks.Stop || hookConfig.hooks.agentStop))
     throw new Error("Copilot hook installation lacks required ownership/stop events");
   const mode = editor ? prepareEditorAgent({ worktree: a.path, attempt: a.id, model: a.settings.model,
-    hookFormat: a.settings.options?.hookFormat === "copilot" ? "copilot" : "vscode" }).mode : a.expectedSession!;
+    hookFormat: a.settings.options?.hookFormat === "copilot" ? "copilot" : "vscode" }).mode : "";
   if (editor) for (const command of editorPreparationCommands(a.settings, a.path, mode))
     run(command.executable, command.args, command.cwd, 10000);
   // Preparation never submits a prompt. Arm ownership only for the actual

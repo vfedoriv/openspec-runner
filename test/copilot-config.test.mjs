@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { getHarness, harnessIds } from "../dist/harnesses/registry.js";
 import { configFrom } from "../dist/plan.js";
 import { init } from "../dist/cli.js";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import { execFileSync } from "node:child_process";
 test("Copilot init requires a real model, shares skills, and preserves existing configuration", t => {
   const dir = mkdtempSync(join(tmpdir(), "copilot-init-"));
@@ -38,14 +38,18 @@ test("Copilot adapters preserve surface model selectors and reject session inher
     assert.equal(configFrom({ version: 2, defaultAgent: id, agents: { [id]: { defaultModel: "model", options: { startupTimeoutMs: 1000 } } } }).agents[id].options.startupTimeoutMs, 1000);
   }
 });
-test("CLI invocation uses exact UUID and editor never offers fictional chat resume", () => {
+test("CLI starts a trusted prompt session and resumes only its observed identity", () => {
   const uuid = "00000000-0000-4000-8000-000000000001";
   const cli = getHarness("copilot"), editor = getHarness("copilot-vscode");
   const invocation = cli.initialInvocation({ model: "model" }, "/work with spaces", "/git common", "Unicode ✓ prompt", uuid);
   assert.equal(invocation.cwd, "/work with spaces");
-  assert.equal(invocation.args[invocation.args.indexOf("--session-id") + 1], uuid);
+  assert.equal(invocation.args.includes("--session-id"), false);
+  assert.equal(cli.lifecycle.reservedSession, false);
+  assert.ok(invocation.args.includes("--trust-folder"));
+  assert.equal(invocation.args[invocation.args.indexOf("-p") + 1], "Unicode \u2713 prompt");
+  assert.deepEqual(cli.resumeInvocation({ model: "model" }, "/work", "/common", uuid).args, ["--resume", uuid, "--model", "model"]);
   assert.equal(invocation.args.includes("--allow-all"), false);
-  assert.equal(invocation.stdin, "Unicode ✓ prompt");
+  assert.equal(invocation.stdin, undefined);
   assert.ok(invocation.args.some(arg => arg.replaceAll("\\", "/").endsWith("/reports")));
   assert.throws(() => editor.resumeInvocation({ model: "model" }, "/work", "/common", uuid), /exact.*resume|resume.*unsupported/i);
 });
@@ -67,4 +71,24 @@ test("editor preparation clears inherited Ask mode before selecting the worker w
     ["chat", "--mode", "worker-agent"],
   ]);
   assert.ok(commands.every(command => command.cwd === "/assigned worktree" && command.stdin === undefined));
+});
+
+
+test("CLI capability checks require prompt trust but not a reserved session flag", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "copilot-capabilities-"));
+  const old = process.env.PATH;
+  process.env.PATH = `${dir}${delimiter}${old}`;
+  t.after(() => { process.env.PATH = old; rmSync(dir, { recursive: true, force: true }); });
+  const path = join(dir, "copilot");
+  const install = help => { writeFileSync(path, `#!/usr/bin/env node\nconsole.log(process.argv.includes('--version') ? '1.0.105' : ${JSON.stringify(help)});`); chmodSync(path, 0o755); };
+  install("--model --trust-folder --prompt --add-dir --allow-tool --resume");
+  assert.equal((await getHarness("copilot").capabilities(dir)).supported, true);
+  assert.equal((await getHarness("copilot").capabilities(dir)).features.exactResume, true);
+  install("--model --trust-folder --prompt --add-dir --allow-tool");
+  assert.equal((await getHarness("copilot").capabilities(dir)).supported, true);
+  assert.equal((await getHarness("copilot").capabilities(dir)).features.exactResume, false);
+  install("--model --session-id --add-dir --allow-tool");
+  const missing = await getHarness("copilot").capabilities(dir);
+  assert.equal(missing.supported, false);
+  assert.ok(missing.reasons.some(reason => reason.includes("--trust-folder")));
 });
