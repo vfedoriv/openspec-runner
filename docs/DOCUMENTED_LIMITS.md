@@ -213,7 +213,7 @@ flowchart TD
     G --> H[Verify final tuple and obtain completion consent]
 ```
 
-See [Lifecycle, delivery, and archival](superpowers/specs/2026-10-04-store-linked-components-design.md#8-lifecycle-delivery-and-archival).
+See [Team lifecycle and archival](team-workflow.md#complete-team-walkthrough).
 
 ## 6. Copilot CLI startup correction and acceptance scope
 

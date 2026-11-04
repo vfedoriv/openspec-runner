@@ -67,6 +67,5 @@ Native Windows retains the existing unsupported delegated-flow skips. The new
 nested archive tests run on Windows independently of delegated worker support.
 These simulated worker scenarios do not claim new authenticated model acceptance.
 
-See the [implementation plan](superpowers/plans/2026-11-04-shared-recovery.md),
-[current limits](DOCUMENTED_LIMITS.md), and
+See the [current limits](DOCUMENTED_LIMITS.md) and
 [operator recovery commands](team-workflow-reference.md#changes-failures-and-recovery).

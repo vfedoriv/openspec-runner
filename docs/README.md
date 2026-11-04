@@ -10,7 +10,6 @@ Start with the guide for the workflow you want to use.
 | [Dashboard guide](dashboard-guide.md) | People monitoring features, sessions, and shared assignments in the terminal | Current CLI |
 | [Team workflow](team-workflow.md) | Users, coordinators, and component owners | Roles, approval steps, process diagrams, and status explanations |
 | [Team operator reference](team-workflow-reference.md) | Agents and operators running the CLI directly | Command sequences, checked schemas, Git handoffs, and detailed recovery |
-| [Shared Store design](superpowers/specs/2026-10-04-store-linked-components-design.md) | People maintaining the team extension | Implemented architecture and workflow design |
 | [Linked input builder](examples/linked-feature-inputs.mjs) | Coordinators preparing full manifest/settings/map/scope files | Checked by CLI integration tests |
 | [Command reference](../README.md#cli-reference) | Users looking up current command syntax | Current CLI |
 | [Configuration reference](../README.md#configuration) | Users configuring tasks, harnesses, checks, and local tooling | Current CLI |
@@ -19,7 +18,7 @@ Start with the guide for the workflow you want to use.
 | [Expanded live acceptance](LIVE_ACCEPTANCE_2026-11-04.md) | Maintainers checking real lifecycle evidence | 2026-11-04 results and remaining scope |
 | [Startup readiness verification](WORKER_STARTUP_VERIFICATION.md) | Maintainers checking worker dispatch ordering | Fast-child tests and native CLI acceptance |
 | [Shared recovery verification](SHARED_RECOVERY_VERIFICATION.md) | Maintainers checking assignment retirement and nested Store archives | Retained evidence, interruption/race tests and exact archive scope |
-| [Maintenance priorities](maintenance-priorities.md) | Maintainers choosing the next fixes | Source-based review dated 2026-11-03 |
+| [Maintenance priorities](maintenance-priorities.md) | Maintainers choosing the next fixes | Remaining work after the 2026-11-04 recovery changes |
 
 ## Start here
 
@@ -37,10 +36,10 @@ Start with the guide for the workflow you want to use.
 |---|---|
 | Current managed feature SDLC | [User guide lifecycle](user-guide.md#managed-feature-sdlc) |
 | Current task execution and integration | [Task loop](user-guide.md#task-execution-and-integration) |
-| Where shared and local resources live | [Design repository and machine boundaries](superpowers/specs/2026-10-04-store-linked-components-design.md#repository-and-machine-boundaries) |
+| Where shared and local resources live | [Repository and machine setup](team-workflow-reference.md#prepare-the-repositories-and-machines) |
 | Shared feature SDLC | [Team walkthrough](team-workflow.md#complete-team-walkthrough) |
 | How people exchange assignments and results | [Team interaction](team-workflow.md#team-interaction) |
-| Full team workflow, decisions, and repair loops | [Design detailed workflow](superpowers/specs/2026-10-04-store-linked-components-design.md#full-workflow-with-decision-and-recovery-points) |
+| Full team workflow, decisions, and repair loops | [Team workflow and recovery](team-workflow.md#complete-team-walkthrough) |
 
 ## Terms that affect completion
 
