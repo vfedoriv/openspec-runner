@@ -85,9 +85,9 @@ The coordinator separately imports and accepts submitted results, reviews the ex
 combined tuple, records each attested PR merge on its declared branch, and obtains
 final review/user consent for the merged tuple. Shared completion can have archive
 `pending`; prepared post-merge archive branches must reach every approved canonical
-branch before archive status becomes `archived`. Standard Store archival currently
-requires repository-root `openspec/changes/CHANGE`; nested roots need component-only
-scope or reviewed migration and renewed approval. See [team recovery](team-workflow.md#changes-failures-and-recovery)
+branch before archive status becomes `archived`. Store archival supports repository-root and nested
+`openspec/changes/CHANGE` selected from the exact approved contract. Idle component
+bindings can be explicitly retired with retained evidence before replacement import. See [team recovery](team-workflow.md#changes-failures-and-recovery)
 for revocation, exact retry identities, rejected Git publication and inspected archive
 recovery. All linked previews are pure and report resolved roots, state, blockers and
 next actions.

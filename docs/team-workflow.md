@@ -343,8 +343,8 @@ flowchart LR
 A prepared archive branch still needs delivery to its target branch.
 Feature completion and archive completion are separate facts.
 
-Store archival currently requires the shared change at `openspec/changes/<shared-change>` in the Store repository root.
-For a nested planning root, ask the coordinator to explain the supported alternatives before archive approval.
+Store archival supports repository-root and nested `openspec/changes/<shared-change>` layouts.
+Ask the coordinator to show the exact approved paths and target branch before archive approval.
 
 ## Changes, failures, and recovery
 
@@ -364,9 +364,9 @@ Keep the original assignment, receipt, operation records, logs, and work directo
 | The merged results change after completion. | Request a new final review and completion approval for the changed result. |
 | Archive preparation or delivery stops. | Ask the coordinator to inspect archive progress and recover the affected target. |
 
-A replacement assignment needs a fresh independent component clone.
-A new worktree in the old clone shares its assignment state.
-Ask your agent to prepare the replacement clone and retain the old recovery evidence.
+A replacement assignment can reuse the clone after explicit retirement of its old binding.
+Ask your agent to preview retirement, confirm all owned work has stopped, and retain the recovery evidence.
+If old work cannot safely be retired, use an independent clone. A worktree shares the old binding.
 
 Shared plan approval renewal affects the whole feature.
 The coordinator must check every component's assignment and result after renewal.

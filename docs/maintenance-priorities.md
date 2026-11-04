@@ -65,7 +65,7 @@ See the [startup verification record](WORKER_STARTUP_VERIFICATION.md) and
 [current startup boundary](DOCUMENTED_LIMITS.md#4-initial-worker-prompts-wait-for-registration).
 No additional wrapper-process handshake or lock-policy change was needed.
 
-### 4. Extend delegated execution only where needed
+### 4. Extend delegated execution only where needed — deferred
 
 Two independent gaps prevent parity with local workers:
 
@@ -78,19 +78,23 @@ Two independent gaps prevent parity with local workers:
 Prioritize Windows protection if same-host team work is the next goal, or shared
 Copilot support if cross-machine Copilot delegation is needed first. Preserve
 the existing fail-closed behavior until their contract tests pass.
+The user stopped the Windows protection work before implementation; its draft
+design is deferred. No Windows delegation guard or shared harness contract changed.
 
-### 5. Reduce shared-workflow recovery friction
+### 5. Reduce shared-workflow recovery friction — implemented
 
-Replacement assignments currently require an independent clone. A supported
-binding retirement/replacement operation would avoid that cost, but must retain
-old evidence and reject replacement while any owned job or integration is active
-or uncertain ([`component.ts`](../src/component.ts)).
+`component retire` now supports explicit same-clone replacement after certain
+worker exit and idle integration. It snapshots binding/feature/runner bytes,
+retains all resources and exports, and leaves a tombstone. Confirmed retries
+resume partial retirement without deleting changed state. Import and report
+mutation gates prevent late commands from reviving retired execution.
 
-Nested Store roots also cannot be automatically archived
-([`coordination.ts`](../src/coordination.ts)). Add support only with exact-root,
-scoped-path, approval, interrupted-operation, and canonical-delivery tests.
+Nested Store archives derive their exact OpenSpec root from the approved shared
+tasks inventory. Preparation, explicit recovery, replay and canonical delivery
+retain that namespace and reject sibling-tree changes or ambiguous roots.
 Feature-wide approval renewal is a conservative authority rule; do not weaken
 it merely to reduce repeated work.
+See [shared recovery verification](SHARED_RECOVERY_VERIFICATION.md).
 
 ## Documentation disposition
 

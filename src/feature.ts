@@ -88,20 +88,25 @@ export class Feature {
       this.save(state);
       return state;
     });
-    this.runner.lock(() => {
-      if (this.runner.read(options.change)) return;
+    let r = this.runner.lock(() => {
+      const current = this.read(options.change);
+      if (current.delegated?.assignmentDigest !== options.delegated.assignmentDigest) throw new Error("Delegated binding changed during import");
+      const existing = this.runner.read(options.change);
+      if (existing) return existing;
       const p = loadPlan(this.repo.root, options.change), id = options.delegated.assignmentId;
       this.runner.save({ version: 2, change: options.change, fingerprint: saved.approval!.fingerprint, head: saved.approval!.base,
         integration: { branch: `openspec-runner/${options.change}/delegated-${id}/integration`,
           path: resolve(options.delegated.resources.worktreeRoot, `${options.change}-delegated-${id}-integration`), base: saved.approval!.base },
         baseline: p.tasks.filter(t => t.completed).map(t => t.id), planTasks: p.tasks.map(t => t.id), attempts: [], batches: [] });
+      return this.execution(current);
     });
-    let r = this.execution(saved);
     const exclude = resolve(this.repo.common, "info/exclude"), text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
     if (!text.split(/\r?\n/).includes(".openspec-runner/")) writeFileSync(exclude, `${text}\n.openspec-runner/\n`);
     const workspace = createWorktree(this.repo.root, { ...r.integration, base: r.head }, options.delegated.resources.worktrees);
     this.runner.lock(() => {
-      const state = this.execution(saved); state.integration = workspace; this.runner.save(state); r = state;
+      const current = this.read(options.change);
+      if (current.delegated?.assignmentDigest !== options.delegated.assignmentDigest) throw new Error("Delegated binding changed during import");
+      const state = this.execution(current); state.integration = workspace; this.runner.save(state); r = state;
     });
     if (git(r.integration.path, "symbolic-ref", "--short", "HEAD") !== r.integration.branch || git(r.integration.path, "rev-parse", "HEAD") !== r.head || !clean(r.integration.path))
       throw new Error("Delegated integration reservation changed; inspect before recovery");

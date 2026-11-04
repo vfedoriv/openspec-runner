@@ -6,6 +6,8 @@ were initially checked against source at `9b4865e` on 2026-11-03. Execution
 acceptance and Windows recovery notes were updated on 2026-11-04 against
 `6e52e98` plus the subsequent recovery correction. Startup notes were then
 updated against `0c8fc7f` plus the registration-gated stdin correction.
+Shared recovery notes reflect `a826c6b` plus the retirement and nested-archive
+changes recorded in [shared recovery verification](SHARED_RECOVERY_VERIFICATION.md).
 See the [maintenance priorities](maintenance-priorities.md) for recommended next work.
 
 ## Terms
@@ -25,65 +27,22 @@ See the [maintenance priorities](maintenance-priorities.md) for recommended next
 
 ## 1. Store archive location
 
-**Type: Current implementation limit.**
+**Type: Exact approved scope; nested roots supported.**
 
-### Supported location
+Store archival supports both `openspec/changes/<shared-change>` at the repository
+root and nested layouts such as `planning/team/openspec/changes/<shared-change>`.
+The runner selects one unambiguous approved `tasks.md` path from the pinned
+contract. The archive preview binds the exact OpenSpec root, post-merge base,
+canonical branch and allowed paths. There is no caller-selected root override.
 
-The runner can prepare the shared Store archive at this location:
+OpenSpec runs from the parent of that exact `openspec` directory in a disposable
+checkout. Only its active change, dated archive and canonical specs may change;
+sibling trees, redirected paths, unsafe roots and altered archived planning bytes
+are rejected. Recovery adopts explicitly inspected scoped output without rerunning
+OpenSpec. Prepared results require exact canonical delivery before archive status
+becomes `archived`; shared completion remains a separate state.
 
-```text
-store-repository/
-  openspec/
-    changes/
-      <shared-change>/
-```
-
-The `openspec` directory must be at the Store repository root.
-The runner rejects Store archive preparation for a nested planning root.
-
-This example is outside the supported Store archive layout:
-
-```text
-store-repository/
-  planning/
-    openspec/
-      changes/
-        <shared-change>/
-```
-
-### Effect
-
-You can coordinate and complete the feature with a nested Store planning root.
-The runner cannot automatically prepare the Store archive for that layout.
-Feature completion and archive delivery are separate states.
-Archive preparation alone does not set the archive state to `archived`.
-
-### Procedure
-
-Use one of these options:
-
-1. Approve a component-only archive scope with `includeStore: false`.
-   This scope excludes the Store archive.
-2. Move the Store planning files to the supported location through a reviewed change.
-   Obtain new approval before you continue.
-3. Extend the implementation to support the required Store archive location.
-   Review and test that extension before use.
-
-```mermaid
-flowchart TD
-    A[Select archive scope] --> B{Does the scope include the Store?}
-    B -->|No| C[Prepare approved component archives]
-    B -->|Yes| D{Is openspec at the Store repository root?}
-    D -->|Yes| E[Prepare approved Store and component archives]
-    D -->|No| F[Stop Store archive preparation]
-    F --> G[Exclude Store or review a plan move]
-    G --> A
-    C --> H[Deliver archive results to approved canonical branches]
-    E --> H
-    H --> I[Record exact canonical archive delivery]
-```
-
-See [Post-merge archival](team-workflow.md#post-merge-archival).
+See [Post-merge archival](team-workflow-reference.md#post-merge-archival).
 
 ## 2. Approval renewal applies to the whole feature
 
@@ -148,55 +107,35 @@ flowchart TD
 
 See [Changes, failures, and recovery](team-workflow.md#changes-failures-and-recovery).
 
-## 3. Replacement assignments need independent clones
+## 3. Replacement assignments require explicit retirement
 
-**Type: Current local binding and recovery limit.**
+**Type: Supported local recovery with retained evidence.**
 
-### Rule
+A coordinator revocation does not replace a local binding. Use `component retire`
+to preview and confirm retirement of the old assignment, identifying its exact
+change, assignment, owner and reason. This local operation requires a confirmation
+token, not a coordination expected-head SHA. It does not revoke shared authority
+or grant approval to a replacement.
 
-An implementation clone retains its imported assignment for the bound change.
-A coordinator revocation does not replace that local binding.
-The clone rejects a different assignment identity for the same bound change.
+Retirement refuses incomplete imports, active or uncertain workers/terminals,
+pending integration, cleanup, and archival. Recover these first or use a fresh
+independent clone. A worktree shares its Git common directory and binding.
 
-A new worktree does not solve this problem.
-Worktrees share the Git common directory.
-The binding and runner state are in that directory.
+Before changing active state, retirement saves the exact binding, feature and
+runner bytes under `component-retirements/<feature>/<assignment>.json` in the
+runner state directory. It removes only matching active feature/runner state and
+leaves a retired binding. Context, worktrees, branches, reports, logs and exported
+submissions remain in place. Retrying the same confirmation resumes partial
+retirement; changed bytes or identity stop recovery. Keep the journal: it is
+retained evidence and prevents importing the retired assignment again.
 
-### Effect
+Retrieve and check out the replacement's exact approved base and committed plan,
+then use normal inspect/import with a different approved assignment. Its resources
+and execution state are fresh. Late commands for old attempt IDs cannot mutate
+the replacement. Retirement does not clean up old resources or renew approval.
+Native Windows delegated execution remains unsupported.
 
-Use a fresh independent clone for a replacement assignment.
-The replacement clone can be on the same machine.
-It must have its own Git common directory and runner state.
-
-Version 1 has no supported operation to retire and replace the binding in the same clone.
-Do not delete the binding to force a replacement.
-That action can disconnect outstanding jobs from their state and evidence.
-
-### Procedure
-
-1. Keep the old clone, runtime, worktrees, and logs while jobs or evidence remain unresolved.
-2. Revoke the old assignment with an explicit reason.
-3. Create a replacement assignment under current approval.
-4. Create a fresh independent implementation clone.
-5. Retrieve the exact approved base, committed plan, and required Store history.
-6. Check out the approved base and verify the repository identity.
-7. Create fresh local resources and a repository map for the new clone.
-8. Run the normal component inspect and import procedure.
-9. Check component status with the replacement assignment and owner.
-
-```mermaid
-flowchart TD
-    A[Clone bound to assignment A] --> B[Revoke A and issue replacement B]
-    B --> C{Which checkout will import B?}
-    C -->|Original clone| D[Reject replacement binding]
-    C -->|Worktree with the same Git common directory| D
-    C -->|Independent clone| E[Retrieve approved base, plan, and Store history]
-    E --> F[Set fresh resources and repository map]
-    F --> G[Inspect and import assignment B]
-    A --> H[Keep old runtime and unresolved evidence]
-```
-
-See [Changes, failures, and recovery](team-workflow.md#changes-failures-and-recovery).
+See [Changes, failures, and recovery](team-workflow-reference.md#changes-failures-and-recovery).
 
 ## 4. Initial worker prompts wait for registration
 

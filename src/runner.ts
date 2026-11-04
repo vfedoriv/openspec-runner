@@ -13,6 +13,7 @@ import { inspectCleanup, removeInspectedWorktree, type CleanupResult, type Clean
 import { closeInspectedTerminal } from "./terminal-cleanup.js";
 import { superviseWorker } from "./worker.js";
 import { processStart } from "./processes.js";
+import { readComponentBinding } from "./component-state.js";
 import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import {
   atomic,
@@ -252,6 +253,8 @@ export class Runner {
     return s.attempts.filter((a) => a.task === id).at(-1);
   }
   requireState(change: string) {
+    const binding = readComponentBinding({ stateDir: this.repo.stateDir, change });
+    if (binding?.phase === "retiring" || binding?.phase === "retired") throw new Error("Delegated component binding is retiring or retired; old execution is closed");
     const s = this.read(change);
     if (!s) throw new Error("No execution state; launch a batch first");
     return s;

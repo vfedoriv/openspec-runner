@@ -104,6 +104,7 @@ export function validateDelegatedBinding(binding: DelegatedBinding) {
   if (process.platform === "win32") throw new Error("Windows delegated-context write protection is not verified; delegated execution is unsupported on this host");
   const stateDir = dirname(dirname(binding.bindingPath)), change = binding.bindingPath.split(/[\\/]/).at(-1)!.replace(/\.json$/, "");
   const runtime = readComponentBinding({ stateDir, change });
+  if (runtime?.phase === "retiring" || runtime?.phase === "retired") throw new Error("Delegated component binding is retiring or retired; complete retirement and import a different assignment");
   if (!runtime || stableDigest({ value: binding }) !== stableDigest({ value: delegationForBinding({ stateDir, binding: runtime }) }))
     throw new Error("Delegated assignment binding changed; inspect import reservation");
   const assignment = runtime.assignment;
@@ -153,6 +154,7 @@ export function featurePath(stateDir: string, change: string) {
 export function readFeature(stateDir: string, change: string): FeatureState | undefined {
   const path = featurePath(stateDir, change);
   const runtime = readComponentBinding({ stateDir, change });
+  if (runtime?.phase === "retiring" || runtime?.phase === "retired") throw new Error("Delegated component binding is retiring or retired; import a different approved assignment");
   if (!existsSync(path)) {
     if (runtime?.phase === "ready") throw new Error("Delegated component binding is missing its feature state");
     return undefined;

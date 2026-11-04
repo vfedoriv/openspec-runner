@@ -1,6 +1,7 @@
 import { delegatedContextTest as test } from "./helpers/native-support.mjs";
+import { test as nativeTest } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, chmodSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { coordinationFixture } from "./helpers/coordination-fixture.mjs";
 import { git, executable } from "./helpers/feature-fixture.mjs";
@@ -23,6 +24,56 @@ function delivery(t, finalMapping = false, options = {}) {
   const complete = (archive) => { const p = f.c.completionPreview({ archive }); const args = { token: p.token, approvedBy: "user", expectedHead: p.head, id: "complete", operationId: "op-complete", archive }; f.c.complete(args); return args; };
   return { ...f, a, submit, review, merge, complete };
 }
+
+function nestedDelivery(t) {
+  const prefix = "plans/team space";
+  const f = delivery(t, false, { beforeApprove(f) {
+    mkdirSync(join(f.storeRoot, prefix), { recursive: true });
+    renameSync(join(f.storeRoot, "openspec"), join(f.storeRoot, prefix, "openspec"));
+    f.contract.context.changeRoot = join(f.storeRoot, prefix, "openspec/changes/shared");
+    git(f.storeRoot, "add", "."); git(f.storeRoot, "commit", "-m", "Nested shared plan");
+  } });
+  f.submit(f.a.base); f.review("combined"); f.merge(f.a.base); f.review("final"); f.complete();
+  git(f.storeRoot, "branch", "contracts-main");
+  return { ...f, prefix, scope: { componentIds: [], includeStore: true, storeDeliveryBranch: "contracts-main" } };
+}
+
+nativeTest("nested Store archival prepares and delivers only the approved OpenSpec root", t => {
+  const f = nestedDelivery(t), { scope } = f;
+  let p = f.c.archivePreview({ scope });
+  assert.equal(p.targets._store.openspecRoot, `${f.prefix}/openspec`);
+  f.c.approveArchive({ scope, token: p.token, approvedBy: "user", expectedHead: p.head, id: "archive-approval", operationId: "op-archive-approval" });
+  p = f.c.archivePreview({ scope }); f.c.prepareArchive({ scope, token: p.token, expectedHead: p.head, id: "archive", operationId: "op-archive" });
+  const prepared = f.c.snapshot().records.find(r => r.type === "archive-prepared");
+  assert.ok(prepared.paths.every(path => path.startsWith(`${f.prefix}/openspec/`)));
+  const altered = structuredClone(f.c.snapshot());
+  altered.records.find(r => r.id === prepared.id).paths = prepared.paths.map(path => path.slice(f.prefix.length + 1));
+  assert.throws(() => replayStatus({ snapshot: altered }), /scope|path/i);
+  git(f.storeRoot, "branch", "-f", "contracts-main", prepared.commit);
+  const options = { preparedEventId: prepared.id, deliveryCommit: prepared.commit }, dp = f.c.archiveDeliveryPreview(options);
+  f.c.recordArchiveDelivery({ ...options, token: dp.token, expectedHead: dp.head, id: "delivered", operationId: "op-delivered" });
+  assert.equal(f.c.status().archive, "archived");
+  assert.equal(f.getControl().archiveCalls, 1);
+});
+
+nativeTest("nested Store archive recovery adopts inspected output without rerunning OpenSpec", t => {
+  const f = nestedDelivery(t), { scope } = f; let p = f.c.archivePreview({ scope });
+  f.c.approveArchive({ scope, token: p.token, approvedBy: "user", expectedHead: p.head, id: "archive-approval", operationId: "op-archive-approval" });
+  p = f.c.archivePreview({ scope }); const args = { scope, token: p.token, expectedHead: p.head, id: "archive", operationId: "op-archive" };
+  f.control({ archiveCrash: true }); assert.throws(() => f.c.prepareArchive(args), /archive/i);
+  f.c.recoverArchivePreparation({ operationId: "op-archive", targetId: "_store", attestedBy: "operator" });
+  f.c.prepareArchive(args);
+  assert.equal(f.getControl().archiveCalls, 1);
+  assert.equal(f.c.status().archive, "prepared");
+});
+
+nativeTest("nested Store archive rejects output outside its approved tree", t => {
+  const f = nestedDelivery(t), { scope } = f; let p = f.c.archivePreview({ scope });
+  f.c.approveArchive({ scope, token: p.token, approvedBy: "user", expectedHead: p.head, id: "archive-approval", operationId: "op-archive-approval" });
+  p = f.c.archivePreview({ scope }); f.control({ archiveExtraFile: true });
+  assert.throws(() => f.c.prepareArchive({ scope, token: p.token, expectedHead: p.head, id: "archive", operationId: "op-archive" }), /scope|unexpected/i);
+  assert.equal(f.c.snapshot().records.filter(r => r.type === "archive-prepared").length, 0);
+});
 
 test("delivery changed-path evidence preserves leading whitespace filenames", t => {
   const f = delivery(t);

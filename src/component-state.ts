@@ -11,7 +11,8 @@ export interface ComponentResources {
 }
 export interface ComponentBinding {
   version: 1;
-  phase: "reserved" | "ready";
+  phase: "reserved" | "ready" | "retiring" | "retired";
+  retirement?: { token: string; reason: string };
   repository: string;
   change: string;
   assignmentId: string;
@@ -46,11 +47,13 @@ export function readComponentBinding(options: { stateDir: string; change: string
   if (!existsSync(path)) return undefined;
   if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new Error("Unsafe component runtime binding path");
   const binding = json<ComponentBinding>(path);
-  const allowed = ["version", "phase", "repository", "change", "assignmentId", "featureId", "historyRevision", "token", "assignment", "contextPaths", "resources"];
+  const allowed = ["version", "phase", "repository", "change", "assignmentId", "featureId", "historyRevision", "token", "assignment", "contextPaths", "resources", "retirement"];
   if (!binding || typeof binding !== "object" || Object.keys(binding).some(key => !allowed.includes(key))) throw new Error("Invalid component runtime binding fields");
   const assignment = decodeRecord({ value: binding.assignment });
-  if (binding.version !== 1 || assignment.kind !== "assignment" || binding.change !== options.change || binding.assignmentId !== assignment.id || binding.featureId !== assignment.featureId || binding.repository !== assignment.repository || binding.change !== assignment.change || !["reserved", "ready"].includes(binding.phase) || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(binding.historyRevision))
+  if (binding.version !== 1 || assignment.kind !== "assignment" || binding.change !== options.change || binding.assignmentId !== assignment.id || binding.featureId !== assignment.featureId || binding.repository !== assignment.repository || binding.change !== assignment.change || !["reserved", "ready", "retiring", "retired"].includes(binding.phase) || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(binding.historyRevision))
     throw new Error("Invalid component runtime binding identity");
+  if (["retiring", "retired"].includes(binding.phase) ? !binding.retirement || !/^[a-f0-9]{64}$/.test(binding.retirement.token) || !binding.retirement.reason?.trim() || Object.keys(binding.retirement).some(key => !["token", "reason"].includes(key)) : binding.retirement !== undefined)
+    throw new Error("Invalid component retirement intent");
   const resources = decodeResources({ value: binding.resources });
   if (stableDigest({ value: binding.resources }) !== stableDigest({ value: resources }) ||
       stableDigest({ value: binding.contextPaths }) !== stableDigest({ value: expectedContextPaths({ stateDir: options.stateDir, assignment }) })) throw new Error("Component runtime binding resources/context paths changed");
