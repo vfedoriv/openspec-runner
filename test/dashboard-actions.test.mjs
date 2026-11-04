@@ -13,6 +13,22 @@ const actionsFor = (...args) => { assert.equal(typeof module.actionsFor, "functi
 const previewCommand = (...args) => module.previewCommand(...args);
 const runnerModule = await import("../dist/dashboard-action-runner.js").catch(() => ({}));
 
+test("Windows dashboard cancellation confirms its child tree is stopped", { skip: process.platform !== "win32", timeout: 30000 }, async t => {
+  const root = mkdtempSync(join(tmpdir(), "dashboard-tree-")), marker = join(root, "child.pid");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const controller = new AbortController();
+  const source = `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});c.once('spawn',()=>setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},String(c.pid)),300));setInterval(()=>{},1000);`;
+  const pending = runnerModule.dashboardChild(process.execPath, ["-e", source], root, controller.signal);
+  const deadline = Date.now() + 10000;
+  while (!existsSync(marker) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+  assert.equal(existsSync(marker), true);
+  const pid = Number(readFileSync(marker, "utf8"));
+  t.after(() => { try { process.kill(pid); } catch {} });
+  controller.abort();
+  await assert.rejects(pending, /cancel/i);
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+});
+
 test("action runner rejects forged command execution", async () => {
   assert.equal(typeof runnerModule.runDashboardAction, "function", "safe action runner is implemented");
   const s = snapshot();
@@ -113,7 +129,7 @@ test("focus preserves the exact historical attempt and never creates or resumes 
   t.after(() => { process.env.PATH = oldPath; if (oldHerdr === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = oldHerdr; });
   mkdirSync(join(root, "bin"));
   writeFileSync(join(root, "bin/herdr"), "#!/usr/bin/env node\nrequire('node:fs').writeFileSync('backend-started',String(process.pid));setInterval(()=>{},1000);\n"); chmodSync(join(root, "bin/herdr"), 0o755);
-  process.env.PATH = `${join(root, "bin")}:${oldPath}`; process.env.HERDR_ENV = "1";
+  process.env.PATH = `${join(root, "bin")}${process.platform === "win32" ? ";" : ":"}${oldPath}`; process.env.HERDR_ENV = "1";
   state.attempts[0].terminal = { backend: "herdr", pane: "saved-pane" }; writeFileSync(path, JSON.stringify(state));
   const live = collectDashboard({ cwd: root }), focus = actionsFor(live, "local:demo:attempt:old").find(a => a.kind === "focus");
   const controller = new AbortController(), started = Date.now();

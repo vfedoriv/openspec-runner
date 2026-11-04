@@ -23,7 +23,7 @@ function fixture(t) {
   git("init", "-b", "main"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.invalid");
   writeFileSync(join(root, "tracked.txt"), "base"); git("add", "."); git("commit", "-m", "base");
   const base = git("rev-parse", "HEAD");
-  process.env.PATH = `${bin}:${process.env.PATH}`;
+  process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`;
   delete process.env.ORCA_TERMINAL_HANDLE;
   const fake = installFakeOrca(dir, root, bin);
   const spec = { branch: "openspec-runner/task", path: join(dir, "planned"), base };
@@ -90,7 +90,8 @@ test("Orca creates an unfocused supervised terminal once, attaches, saves output
   assert.equal(terminal.orca.provider, "stablyai");
   const create = fake.calls().find(a => a[0] === "terminal" && a[1] === "create");
   assert.ok(!create.includes("--focus"));
-  assert.match(create[create.indexOf("--command") + 1], /^exec sh -c /);
+  assert.match(create[create.indexOf("--command") + 1], process.platform === "win32" ? /^pwsh\.exe .*EncodedCommand / : /^exec sh -c /);
+  if (process.platform === "win32") assert.equal(create[create.indexOf("--shell") + 1], "pwsh.exe");
   assert.throws(() => startTerminal(root, root, root, "test", {}, "", terminal, () => {}, "true", "codex", "orca"), /already attempted/);
   assert.equal(attachTerminal(root, terminal).pane, terminal.pane);
   const inspected = inspectTerminal(root, a);

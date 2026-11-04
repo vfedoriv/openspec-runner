@@ -1,4 +1,5 @@
 import { parse } from "yaml";
+import { readCurrentSummary } from "./summary-service.js";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { repository } from "./system.js";
@@ -7,12 +8,14 @@ import { blocking, featureActive, implementationGate, readFeature, type FeatureJ
 import { readComponentBinding } from "./component-state.js";
 import { configFrom, loadPlan, tasksFrom } from "./plan.js";
 import { processStart } from "./processes.js";
+import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import type { DashboardOptions, DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
 import { collectCoordination } from "./dashboard-coordination.js";
 
 function session(featureId: string, attempt: TaskAttempt | FeatureJob): SessionSummary {
   let observation: SessionSummary["process"] = "unknown";
-  if (attempt.worker?.exitedAt) observation = "exited";
+  if (attempt.agent === "copilot-vscode" && agentMayBeActive(attempt)) observation = "unknown";
+  else if (attempt.worker?.exitedAt) observation = "exited";
   else if (attempt.worker?.pid && attempt.worker.processStart) {
     try {
       if (processStart(attempt.worker.pid) === attempt.worker.processStart) observation = "running";
@@ -116,5 +119,19 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
       snapshot.errors.push({ source, message, stale: false }); attention("error", message, 1);
     }
   }
-  return { ...snapshot, ...collectCoordination(options, snapshot) };
+  const result = { ...snapshot, ...collectCoordination(options, snapshot) };
+  for (const feature of result.features) {
+    if (feature.origin === "local" && feature.change) {
+      feature.deliverySummary = readCurrentSummary({ cwd: options.cwd, change: feature.change });
+      feature.summaryCommand = ["summary", feature.change];
+    } else if (feature.coordination && options.store && options.map) {
+      feature.deliverySummary = readCurrentSummary({ cwd: options.cwd, featureId: feature.coordination.featureId, store: options.store, map: options.map });
+      feature.summaryCommand = ["coordination", "summary", feature.coordination.featureId, "--store", options.store, "--map", options.map];
+    }
+  }
+  for (const task of result.tasks) {
+    const feature = result.features.find(f => f.id === task.featureId);
+    if (feature?.change) task.deliverySummary = readCurrentSummary({ cwd: options.cwd, change: feature.change, task: task.task.id });
+  }
+  return result;
 }

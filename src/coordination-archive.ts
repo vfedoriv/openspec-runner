@@ -1,5 +1,7 @@
 import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { storeArchiveRoot, archivePaths } from "./archive-paths.js";
+import { unredirectedPath, containedPath } from "./platform-paths.js";
 import { stableDigest, validateId, type ArchiveScope, type CommitTuple, type CoordinationEvent, type CoordinationStore } from "./coordination-state.js";
 import { atomic, attempt, clean, git, gitRaw, json, locked, repository, run } from "./system.js";
 import { committedBlob } from "./openspec-context.js";
@@ -17,6 +19,7 @@ export interface ArchiveTarget {
   componentId?: string;
   allowedPaths: string[];
   tasksContent?: string;
+  openspecRoot?: string;
 }
 export interface ArchivePreview {
   head: string;
@@ -34,15 +37,16 @@ export function normalizeArchiveScope(options: { scope: ArchiveScope; componentI
   if (!scope.includeStore && scope.storeDeliveryBranch !== undefined) throw new Error("Store canonical branch requires Store scope");
   return { componentIds: [...scope.componentIds].sort(), includeStore: scope.includeStore, ...(scope.includeStore ? { storeDeliveryBranch: scope.storeDeliveryBranch } : {}) };
 }
-export function archiveTarget(options: { root: string; repository: string; change: string; branch: string; componentId?: string; deliveredCommit?: string; tasksContent?: string; pinnedBase?: string }): ArchiveTarget {
+export function archiveTarget(options: { root: string; repository: string; change: string; branch: string; componentId?: string; deliveredCommit?: string; tasksContent?: string; pinnedBase?: string; openspecRoot?: string }): ArchiveTarget {
   const branchHead = attempt(() => git(options.root, "rev-parse", `refs/heads/${options.branch}^{commit}`));
   if (!branchHead) throw new Error(`Retrieve explicit archive canonical branch ${options.branch} in ${options.repository}`);
   const base = options.pinnedBase ?? branchHead;
   if (attempt(() => git(options.root, "merge-base", "--is-ancestor", base, branchHead)) === undefined) throw new Error("Approved archive base no longer reachable on canonical branch");
   if (options.deliveredCommit && attempt(() => git(options.root, "merge-base", "--is-ancestor", options.deliveredCommit!, base)) === undefined) throw new Error("Archive base must follow recorded canonical delivery");
-  if (!git(options.root, "ls-tree", "-r", "--name-only", base, "--", `openspec/changes/${options.change}/`)) throw new Error("Active archive change is missing on canonical branch");
+  const paths = archivePaths(options.openspecRoot ?? "openspec", options.change);
+  if (!git(options.root, "ls-tree", "-r", "--name-only", base, "--", paths.active)) throw new Error("Active archive change is missing on canonical branch");
   return { repository: options.repository, change: options.change, branch: options.branch, base, ...(options.componentId ? { componentId: options.componentId } : {}),
-    allowedPaths: [`openspec/changes/${options.change}/`, `openspec/changes/archive/YYYY-MM-DD-${options.change}/`, "openspec/specs/"], ...(options.tasksContent === undefined ? {} : { tasksContent: options.tasksContent }) };
+    allowedPaths: [paths.active, `${paths.archived}YYYY-MM-DD-${options.change}/`, paths.specs], ...(options.tasksContent === undefined ? {} : { tasksContent: options.tasksContent }), ...(options.openspecRoot ? { openspecRoot: options.openspecRoot } : {}) };
 }
 export interface TargetReceipt {
   stage: "reserved" | "running" | "produced" | "committing" | "prepared" | "failed";
@@ -68,12 +72,13 @@ function archiveScopeEvidence(options: { target: ArchiveTarget; receipt: TargetR
     ...gitRaw(path, "diff", "--cached", "--no-renames", "--name-only", "-z").split("\0").filter(Boolean),
     ...gitRaw(path, "ls-files", "--others", "-z").split("\0").filter(Boolean),
   ])].sort();
-  const active = `openspec/changes/${target.change}/`, archiveRoot = "openspec/changes/archive/";
+  const { active, archived: archiveRoot, specs } = archivePaths(target.openspecRoot ?? "openspec", target.change);
   const archiveFolders = new Set<string>();
   for (const entry of paths) {
     const local = resolve(path, entry);
     if (existsSync(local) && !lstatSync(local).isFile()) throw new Error(`Unsafe archive scope non-file: ${entry}`);
-    if (entry.startsWith(active) || entry.startsWith("openspec/specs/")) continue;
+    if (!unredirectedPath(local)) throw new Error(`Redirected archive scope path: ${entry}`);
+    if (entry.startsWith(active) || entry.startsWith(specs)) continue;
     if (entry.startsWith(archiveRoot)) {
       const folder = entry.slice(archiveRoot.length).split("/")[0];
       if (/^\d{4}-\d{2}-\d{2}-/.test(folder) && folder.slice(11) === target.change) { archiveFolders.add(folder); continue; }
@@ -121,10 +126,13 @@ export function prepareApprovedArchive(options: { store: CoordinationStore; inpu
       if (receipt.stage === "running" || receipt.stage === "failed") throw new Error(receipt.reason ?? "Interrupted archive command has ambiguous side effects; inspect receipt and explicitly recover");
       if (receipt.stage === "reserved") {
         exactCheckout({ root, commit: target.base, path: receipt.path });
-        if (target.tasksContent !== undefined) writeFileSync(resolve(receipt.path, `openspec/changes/${target.change}/tasks.md`), target.tasksContent);
+        const paths = archivePaths(target.openspecRoot ?? "openspec", target.change);
+        const cwd = resolve(receipt.path, dirname(target.openspecRoot ?? "openspec"));
+        if (!containedPath(receipt.path, cwd) || !unredirectedPath(cwd) || !unredirectedPath(resolve(receipt.path, paths.tasks))) throw new Error("Archive planning root is redirected or outside checkout");
+        if (target.tasksContent !== undefined) writeFileSync(resolve(receipt.path, paths.tasks), target.tasksContent);
         receipt.stage = "running"; save();
         try {
-          receipt.evidence = run("openspec", ["archive", target.change, "--yes"], receipt.path).replaceAll(receipt.path, id);
+          receipt.evidence = run("openspec", ["archive", target.change, "--yes"], cwd).replaceAll(receipt.path, id);
           receipt.paths = archiveScopeEvidence({ target, receipt });
           // Scope validation includes ignored output too; preserve the complete produced tree.
           git(receipt.path, "add", "--all", "--force", "--", ".");
@@ -147,7 +155,7 @@ export function prepareApprovedArchive(options: { store: CoordinationStore; inpu
           // Every dirty/untracked path was validated immediately above in this private checkout.
           git(receipt.path, "add", "--all", "--force", "--", ".");
           if (git(receipt.path, "write-tree") !== receipt.tree) throw new Error("Produced archive blob tree changed since durable receipt");
-          git(receipt.path, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "-m", `Archive ${target.change}\n\n${marker}`);
+          git(receipt.path, "-c", "commit.gpgsign=false", "commit", "-m", `Archive ${target.change}\n\n${marker}`);
         } else if (git(receipt.path, "rev-parse", `${head}^{tree}`) !== receipt.tree || !clean(receipt.path) || git(receipt.path, "show", "-s", "--format=%P", head) !== target.base || !git(receipt.path, "show", "-s", "--format=%B", head).includes(marker) || digest(changedPaths({ root, base: target.base, commit: head })) !== digest(receipt.paths)) throw new Error("Archive commit recovery requires exact operation identity and scope");
         receipt.commit = git(receipt.path, "rev-parse", "HEAD");
         const existing = attempt(() => git(root, "rev-parse", `refs/heads/${receipt.branch}`));
@@ -189,7 +197,12 @@ export function archiveDeliveryEvidence(options: { store: CoordinationStore; roo
   if (!prepared || !prepared.base || !prepared.completionEventId || !prepared.snapshotToken) throw new Error("Approved prepared archive record required");
   const branchHead = attempt(() => git(options.root, "rev-parse", `refs/heads/${prepared.branch}^{commit}`));
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(options.deliveryCommit) || !branchHead || attempt(() => git(options.root, "merge-base", "--is-ancestor", options.deliveryCommit, branchHead)) === undefined) throw new Error("Archive delivery commit must be available and reachable on approved canonical branch");
-  const active = `openspec/changes/${prepared.componentId ? snapshot.manifest.components[prepared.componentId].change : snapshot.manifest.sharedChange}/`;
+  const change = prepared.componentId ? snapshot.manifest.components[prepared.componentId].change : snapshot.manifest.sharedChange;
+  const completion = snapshot.records.find(r => r.kind === "event" && r.type === "completed" && r.id === prepared.completionEventId);
+  const review = completion?.kind === "event" && completion.type === "completed" ? snapshot.records.find(r => r.kind === "event" && r.type === "reviewed" && r.id === completion.reviewEventId) : undefined;
+  const approval = review?.kind === "event" && review.type === "reviewed" ? snapshot.records.find(r => r.kind === "approval" && r.id === review.approvalId) : undefined;
+  const openspecRoot = prepared.componentId ? "openspec" : approval?.kind === "approval" ? storeArchiveRoot(approval.contract, change) : "openspec";
+  const { active } = archivePaths(openspecRoot, change);
   if (git(options.root, "ls-tree", "-r", "--name-only", options.deliveryCommit, "--", active)) throw new Error("Canonical archive delivery still contains an active change");
   const mismatches = prepared.paths.filter(path => pathState({ root: options.root, commit: prepared.commit, path }) !== pathState({ root: options.root, commit: options.deliveryCommit, path }));
   if (mismatches.length) throw new Error(`Canonical archive content differs from prepared result: ${mismatches.join(", ")}`);

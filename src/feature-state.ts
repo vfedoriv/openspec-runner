@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { atomic, json } from "./system.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import type { TaskAttempt } from "./runner.js";
+import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import { loadPlan, type Plan } from "./plan.js";
 import { decodeRecord, stableDigest, type AssignmentRecord } from "./coordination-state.js";
 import { componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
@@ -100,8 +101,10 @@ export function pinnedPrompt(stateDir: string, change: string): string {
   return `\nDelegated assignment: ${delegated.featureId}/${delegated.assignmentId}. Read only the pinned Store context at:\n${delegated.contextPaths.join("\n")}\nThese pinned paths are the authoritative shared contracts and linked specifications. Never re-fetch or substitute a registered Store checkout, including through openspec instructions or context commands. OpenSpec commands may inspect repository-local component artifacts only. Do not approve, archive, or complete this shared feature.`;
 }
 export function validateDelegatedBinding(binding: DelegatedBinding) {
+  if (process.platform === "win32") throw new Error("Windows delegated-context write protection is not verified; delegated execution is unsupported on this host");
   const stateDir = dirname(dirname(binding.bindingPath)), change = binding.bindingPath.split(/[\\/]/).at(-1)!.replace(/\.json$/, "");
   const runtime = readComponentBinding({ stateDir, change });
+  if (runtime?.phase === "retiring" || runtime?.phase === "retired") throw new Error("Delegated component binding is retiring or retired; complete retirement and import a different assignment");
   if (!runtime || stableDigest({ value: binding }) !== stableDigest({ value: delegationForBinding({ stateDir, binding: runtime }) }))
     throw new Error("Delegated assignment binding changed; inspect import reservation");
   const assignment = runtime.assignment;
@@ -125,7 +128,7 @@ export function validateDelegatedBinding(binding: DelegatedBinding) {
   return assignment;
 }
 export const featureActive = (a: FeatureJob) =>
-  ["preparing", "manual", "launching", "running"].includes(a.phase) || !!(a.worker && !a.worker.exitedAt);
+  ["preparing", "manual", "launching", "running"].includes(a.phase) || agentMayBeActive(a);
 export const blocking = (f: Finding) => ["correctness", "security", "spec", "verification"].includes(f.category);
 export function validateFeatureReport(report: unknown, role: "review" | "repair"): asserts report is FeatureReport {
   const r = report as FeatureReport;
@@ -151,6 +154,7 @@ export function featurePath(stateDir: string, change: string) {
 export function readFeature(stateDir: string, change: string): FeatureState | undefined {
   const path = featurePath(stateDir, change);
   const runtime = readComponentBinding({ stateDir, change });
+  if (runtime?.phase === "retiring" || runtime?.phase === "retired") throw new Error("Delegated component binding is retiring or retired; import a different approved assignment");
   if (!existsSync(path)) {
     if (runtime?.phase === "ready") throw new Error("Delegated component binding is missing its feature state");
     return undefined;

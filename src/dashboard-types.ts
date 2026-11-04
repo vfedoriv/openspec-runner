@@ -4,15 +4,18 @@ import type { Report, TaskAttempt } from "./runner.js";
 import type { FeatureJob, FeatureState } from "./feature-state.js";
 import type { ComponentBinding } from "./component-state.js";
 import type { ComponentStatus, CoordinationStatus } from "./coordination-state.js";
+import type { SummaryHandle } from "./summary-types.js";
 export type DashboardOptions = { cwd: string; change?: string; store?: string; map?: string };
 export type SourceError = { source: string; message: string; stale: boolean };
 export type AttentionItem = { id: string; source: string; targetId?: string; priority: number; message: string };
 export type FeatureSummary = {
+  deliverySummary?: SummaryHandle; summaryCommand?: string[];
   id: string; change?: string; origin: "local" | "shared"; phase?: FeatureState["phase"];
   completed: number; total: number; state?: FeatureState; taskIds: string[]; sessionIds: string[];
   coordination?: CoordinationStatus;
 };
 export type TaskSummary = {
+  deliverySummary?: SummaryHandle;
   id: string; featureId: string; harness?: string; task: Task; assignment?: Assignment;
   ready: boolean; reasons: string[]; attempts: TaskAttempt[];
 };
@@ -23,6 +26,7 @@ export type SessionSummary = {
   log?: string; activityPath?: string; worktreeAvailable?: boolean;
 };
 export type AssignmentSummary = {
+  deliverySummary?: SummaryHandle;
   id: string; featureId: string; componentId: string; repository: string; change: string; owner: string;
   importedRevision?: string; inspectedRevision?: string; binding?: ComponentBinding;
   status?: ComponentStatus; stale: boolean;

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve, sep, dirname } from "node:path";
 import type { Assignment } from "../plan.js";
+import { containedPath, unredirectedPath } from "../platform-paths.js";
 import type {
   AgentConfig,
   HarnessAdapter,
@@ -222,7 +223,7 @@ function rules(root?: string, config?: AgentConfig): PlanningRulesResult {
   }];
   if (root && config?.planningRules) {
     const supplement = resolve(root, config.planningRules);
-    if (!supplement.startsWith(resolve(root) + sep))
+    if (!containedPath(root, supplement) || !unredirectedPath(supplement))
       throw new Error("Planning rules supplement must remain inside the repository");
     if (!existsSync(supplement)) throw new Error(`Planning rules supplement does not exist: ${config.planningRules}`);
     const supplementContent = readFileSync(supplement, "utf8");

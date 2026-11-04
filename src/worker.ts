@@ -5,11 +5,14 @@ import type { TaskAttempt } from "./runner.js";
 import { getHarness } from "./harnesses/registry.js";
 import { createActivityWriter, type ActivityWriter } from "./activity-writer.js";
 import { ClaudeStreamDecoder } from "./harnesses/claude-stream.js";
+import { superviseCopilot } from "./harnesses/copilot-supervisor.js";
+import { resolveCommand } from "./platform-command.js";
+import { observeProcess, stopOwnedProcess, windowsTreeIsGone } from "./platform-process.js";
 
 // Exec exits after its turn and preserves session rollouts by default. The parent
 // observes close only after the child and its report command have returned.
 export type SupervisedSession = Pick<TaskAttempt, "agent" | "path" | "settings" | "expectedSession" |
-  "session" | "worker" | "identityConfirmed" | "observedSession" | "terminalEvidence"> & { id?: string };
+    "session" | "worker" | "identityConfirmed" | "observedSession" | "terminalEvidence"> & Partial<Pick<TaskAttempt, "gitDir" | "branch">> & { id?: string };
 
 export async function superviseWorker(
   a: SupervisedSession,
@@ -19,9 +22,13 @@ export async function superviseWorker(
   evidence?: (update: (current: SupervisedSession) => void) => void,
 ): Promise<number | null> {
   const harness = getHarness(a.agent ?? "codex");
-  const capabilities = await harness.capabilities(a.path);
+  const capabilities = await harness.capabilities(a.path, a.settings);
   if (!capabilities.supported)
     throw new Error(`${harness.displayName} is not ready: ${capabilities.reasons.join("; ")}`);
+  if (harness.lifecycle?.ownership === "hook") {
+    if (!a.id || !evidence) throw new Error("Copilot supervision requires durable attempt evidence");
+    return superviseCopilot({ ...a, id: a.id }, common, prompt, started, evidence);
+  }
   if (a.agent === "claude" && a.settings.effort && !capabilities.features.effort)
     throw new Error("Claude CLI does not advertise --effort; omit effort or install a compatible CLI");
   if (a.agent === "claude" && a.settings.effort && capabilities.supportedEfforts?.length && !capabilities.supportedEfforts.includes(a.settings.effort))
@@ -36,9 +43,14 @@ export async function superviseWorker(
     prompt,
     session,
   );
+  if (harness.managedInvocation && a.gitDir && a.branch)
+    invocation = harness.managedInvocation(invocation, { common, gitDir: a.gitDir, branch: a.branch });
   if (a.id && capabilities.features.structuredActivity && harness.activityInvocation) {
     try { invocation = harness.activityInvocation(invocation, capabilities); } catch { /* Optional capture hook. */ }
   }
+  for (const directory of invocation.prepareDirectories ?? []) mkdirSync(directory, { recursive: true });
+  if (a.gitDir && a.branch)
+    harness.validateManagedInvocation?.(invocation, { common, gitDir: a.gitDir, branch: a.branch });
   mkdirSync(dirname(a.worker!.log), { recursive: true });
   const fd = openSync(a.worker!.log, "ax", 0o600);
   let activity: ActivityWriter | undefined;
@@ -48,13 +60,25 @@ export async function superviseWorker(
   try {
     return await new Promise((resolvePromise, reject) => {
       let failure: unknown;
+      let createdAt: string | undefined;
+      let stopping: Promise<void> | undefined;
       const environment = { ...process.env, ...(invocation.env ?? {}) };
       if (a.agent === "claude") delete environment.CODEX_THREAD_ID;
-      const child = spawn(invocation.executable, invocation.args, {
+      const command = resolveCommand({ executable: invocation.executable, args: invocation.args, cwd: invocation.cwd, env: environment });
+      const child = spawn(command.executable, command.args, {
         cwd: invocation.cwd,
-        env: environment,
+        env: command.env,
+        windowsHide: true,
         stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
+      const stop = () => {
+        stopping ??= (async () => {
+          const result = child.pid && createdAt
+            ? await stopOwnedProcess({ pid: child.pid, createdAt, timeoutMs: 3000 })
+            : { stopped: false, uncertain: true };
+          if (result.uncertain) evidence?.(current => { current.worker!.terminationUncertain = true; });
+        })();
+      };
       const decoder = a.agent === "claude"
         ? new ClaudeStreamDecoder((event) => {
             if (!event.sessionId) return;
@@ -86,10 +110,16 @@ export async function superviseWorker(
           })
         : undefined;
       child.once("spawn", () => {
-        try { started(child.pid!); } catch (error) { failure = error; }
-        if (invocation.stdin !== undefined) {
-          child.stdin!.write(invocation.stdin);
-          child.stdin!.end();
+        try {
+          createdAt = observeProcess(child.pid!)?.createdAt;
+          started(child.pid!);
+          // Registration returns only after its repository lock is released.
+          // Never deliver task instructions to an unregistered worker.
+          if (invocation.stdin !== undefined) child.stdin!.end(invocation.stdin);
+        } catch (error) {
+          failure = error;
+          child.stdin?.destroy();
+          stop();
         }
       });
       child.stdout!.on("data", chunk => {
@@ -100,7 +130,7 @@ export async function superviseWorker(
           decoder?.feed(chunk);
         } catch (error) {
           failure = error;
-          child.kill();
+          stop();
         }
       });
       child.stderr!.on("data", chunk => {
@@ -108,7 +138,11 @@ export async function superviseWorker(
         writeSync(fd, chunk); process.stderr.write(chunk);
       });
       child.once("error", error => { failure = error; });
-      child.once("close", code => {
+      child.stdin?.on("error", error => { failure ??= error; stop(); });
+      child.once("close", async code => {
+        try { await stopping; } catch (error) { failure ??= error; }
+        if (process.platform === "win32" && child.pid && (!createdAt || !windowsTreeIsGone(child.pid, createdAt)))
+          evidence?.(current => { current.worker!.terminationUncertain = true; });
         try {
           decoder?.end();
         } catch (error) {

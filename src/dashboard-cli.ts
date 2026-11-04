@@ -20,7 +20,6 @@ export async function dashboardCommand(args: string[]): Promise<void> {
   if (positionals.length) throw new Error(`Unexpected dashboard argument: ${positionals[0]}`);
   if (values.help) { console.log("dashboard [--change NAME] [--store PATH --map FILE] [--once] [--json]"); return; }
   if (!!values.store !== !!values.map) throw new Error("Dashboard --store and --map must be supplied together");
-  if (process.platform === "win32") throw new Error("Native Windows is outside v1; use WSL");
   const options = { cwd: process.cwd(), change: values.change, store: values.store ? resolve(values.store) : undefined, map: values.map ? resolve(values.map) : undefined };
   if (!values.once && !values.json && process.stdin.isTTY && process.stdout.isTTY) {
     const { runDashboardUi } = await import("./dashboard-ui.js");

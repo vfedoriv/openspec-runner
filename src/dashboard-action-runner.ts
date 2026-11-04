@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { actionsFor, focusReason, previewCommand, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
 import type { DashboardSnapshot } from "./dashboard-types.js";
 import { shellCommand } from "./system.js";
+import { resolveCommand } from "./platform-command.js";
+import { observeProcess, stopOwnedProcess } from "./platform-process.js";
 
 const sanitize = (text: string) => text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 const bounded = (value: unknown) => sanitize(JSON.stringify(value, null, 2).slice(0, 1024 * 1024));
@@ -12,11 +14,25 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(new Error("Action cancelled")); return; }
     const grouped = process.platform !== "win32";
-    const child = spawn(command, argv, { cwd, shell: false, windowsHide: true, detached: grouped, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    const invocation = resolveCommand({ executable: command, args: argv, cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+    const child = spawn(invocation.executable, invocation.args, { cwd, shell: false, windowsHide: true, detached: grouped, env: invocation.env, stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
-    let bytes = 0, failure: Error | undefined;
+    let bytes = 0, failure: Error | undefined, identity: string | undefined;
+    let stopping: Promise<void> | undefined;
+    child.once("spawn", () => { if (!grouped) identity = observeProcess(child.pid!)?.createdAt; });
     const stop = (reason: string) => {
       failure ??= new Error(reason);
+      if (!grouped) {
+        stopping ??= (async () => {
+          const stopped = child.pid && identity ? await stopOwnedProcess({ pid: child.pid, createdAt: identity, timeoutMs: 3000 }) : { stopped: false, uncertain: true };
+          if (stopped.uncertain) {
+            failure = new Error(`${reason}; process termination is uncertain`);
+            child.stdout.destroy(); child.stderr.destroy();
+            cleanup(); reject(failure);
+          }
+        })();
+        return;
+      }
       try { if (grouped && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); }
       catch { child.kill("SIGKILL"); }
     };
@@ -31,7 +47,8 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
     };
     child.stdout.on("data", collect(stdout)); child.stderr.on("data", collect(stderr));
     child.once("error", error => { cleanup(); reject(error); });
-    child.once("close", code => {
+    child.once("close", async code => {
+      await stopping;
       cleanup();
       const out = sanitize(Buffer.concat(stdout).toString("utf8")), err = sanitize(Buffer.concat(stderr).toString("utf8"));
       if (failure) reject(failure);

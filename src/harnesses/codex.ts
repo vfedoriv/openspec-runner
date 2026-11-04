@@ -1,8 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve, sep } from "node:path";
 import type { Assignment } from "../plan.js";
+import { containedPath, unredirectedPath } from "../platform-paths.js";
+import { scopedCodexInvocation, validateCodexInvocation } from "./codex-permissions.js";
 import {
   codexArgs,
   models as codexModels,
@@ -33,7 +35,7 @@ function rules(root?: string, config?: AgentConfig): PlanningRulesResult {
   }];
   if (root && config?.planningRules) {
     const supplement = resolve(root, config.planningRules);
-    if (!supplement.startsWith(resolve(root) + sep))
+    if (!containedPath(root, supplement) || !unredirectedPath(supplement))
       throw new Error("Planning rules supplement must remain inside the repository");
     if (!existsSync(supplement)) throw new Error(`Planning rules supplement does not exist: ${config.planningRules}`);
     const supplementContent = readFileSync(supplement, "utf8");
@@ -109,10 +111,12 @@ export const codexHarness: HarnessAdapter = {
       exhaustive: true,
     };
   },
-  initialInvocation(settings, cwd, commonGitDir, prompt, session = randomUUID()): Invocation {
+  initialInvocation(settings, cwd, commonGitDir, prompt): Invocation {
     const legacy = settings as Settings;
-    return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), prompt], cwd };
+    return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), "-"], cwd, stdin: prompt };
   },
+  managedInvocation: (invocation, context) => process.platform === "win32" ? scopedCodexInvocation(invocation, context) : invocation,
+  validateManagedInvocation: (invocation, context) => { if (process.platform === "win32") validateCodexInvocation(invocation, context); },
   activityInvocation(invocation, capabilities): Invocation {
     if (!capabilities.supported || !capabilities.features.structuredActivity ||
         invocation.args[0] !== "exec" || invocation.args[1] === "resume" ||

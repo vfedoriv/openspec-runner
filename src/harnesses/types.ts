@@ -2,6 +2,19 @@ import type { Assignment } from "../plan.js";
 
 export type HarnessId = string;
 
+export interface WorkerReceipt {
+  token: string;
+  pid?: number;
+  processStart?: string;
+  processPlatform?: NodeJS.Platform;
+  terminationUncertain?: boolean;
+  exitedAt?: string;
+  exitCode?: number | null;
+  log: string;
+  completion?: { source: "process-exit" | "agent-stop"; at: string; session: string };
+  launcher?: { pid?: number; processStart?: string; exitedAt?: string; exitCode?: number | null };
+}
+
 export interface HarnessSettings {
   /** Stable harness identity saved with the attempt. */
   harness?: HarnessId;
@@ -53,6 +66,14 @@ export interface Invocation {
   cwd: string;
   stdin?: string;
   env?: Record<string, string>;
+  /** Runtime directories created by the coordinator before a managed launch. */
+  prepareDirectories?: string[];
+}
+
+export interface ManagedInvocationContext {
+  common: string;
+  gitDir: string;
+  branch: string;
 }
 
 export interface ModelDiscovery {
@@ -75,12 +96,18 @@ export interface HarnessAdapter {
   readonly id: HarnessId;
   readonly displayName: string;
   readonly planningRulesPath: string;
+  readonly lifecycle?: {
+    transport: "process" | "editor";
+    ownership: "environment" | "stream" | "hook";
+    reservedSession: boolean;
+    skillPrefix: string;
+  };
   resolveSettings(
     assignment: Assignment,
     inherited: HarnessSettings | undefined,
     config?: AgentConfig,
   ): HarnessSettings;
-  capabilities(cwd?: string): Promise<HarnessCapabilities>;
+  capabilities(cwd?: string, settings?: HarnessSettings): Promise<HarnessCapabilities>;
   models(): Promise<ModelDiscovery>;
   initialInvocation(
     settings: HarnessSettings,
@@ -90,6 +117,8 @@ export interface HarnessAdapter {
     session: string,
   ): Invocation;
   activityInvocation?(invocation: Invocation, capabilities: HarnessCapabilities): Invocation;
+  managedInvocation?(invocation: Invocation, context: ManagedInvocationContext): Invocation;
+  validateManagedInvocation?(invocation: Invocation, context: ManagedInvocationContext): void;
   resumeInvocation(
     settings: HarnessSettings,
     cwd: string,

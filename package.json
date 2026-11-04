@@ -1,7 +1,7 @@
 {
   "name": "openspec-runner",
   "version": "0.1.0",
-  "description": "Run reviewed OpenSpec task batches through Codex or Claude Code in isolated worktrees",
+  "description": "Run reviewed OpenSpec tasks through Codex, Claude Code, or Copilot in isolated worktrees",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -22,7 +22,7 @@
   "packageManager": "pnpm@11.7.0",
   "scripts": {
     "build": "tsc",
-    "test": "pnpm run build && node test/helpers/run-tests.mjs test/*.test.mjs",
+    "test": "pnpm run build && node test/helpers/run-tests.mjs",
     "prepack": "pnpm run build"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
-import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { delegatedContextTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -9,7 +10,7 @@ import { git, executable } from "./helpers/feature-fixture.mjs";
 
 import { linkedFeatureInputs } from "../docs/examples/linked-feature-inputs.mjs";
 
-const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
 function run(cwd, args, expected = 0) {
   const result = spawnSync(process.execPath, [cli, ...args, "--json"], { cwd, encoding: "utf8", env: process.env });
   if (process.env.TASK6_EXAMPLE_LOG) appendFileSync(process.env.TASK6_EXAMPLE_LOG, JSON.stringify({ cwd, args: [...args, "--json"], status: result.status, stdout: result.stdout, stderr: result.stderr }) + "\n");

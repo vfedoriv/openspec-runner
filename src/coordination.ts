@@ -1,4 +1,5 @@
 import { existsSync, realpathSync } from "node:fs";
+import { safeSharedSummary } from "./summary-service.js";
 import { CoordinationStore, decodeManifest, stableDigest, replayStatus, type FeatureManifest, type ApprovalRecord, type ComponentSnapshot, type CoordinationSnapshot, type AssignmentRecord, type CoordinationEvent, type SubmissionRecord, type VerificationEvidence, decodeRecord, validateId, type ArchiveScope, type ArchiveBases } from "./coordination-state.js";
 import { committedBlob, pinContext, pinReferenceContext, repinContext, contextFingerprint, type ResolvedContext } from "./openspec-context.js";
 import { loadPlan, assertCommitted, readiness, tasksFrom } from "./plan.js";
@@ -12,6 +13,7 @@ import { recordTupleReview, type ReviewStage, type TupleReviewMutation, type Tup
 import { deliveryEvidence, changedPaths, pathState, deliveredPlan, acceptDeliveredSnapshot, type MergeInput, type DeliveredReview } from "./coordination-delivery.js";
 import { coordinationOperation } from "./coordination-operation.js";
 import { normalizeArchiveScope, archiveTarget, prepareApprovedArchive, inspectArchivePreparation, recoverArchivePreparation, archiveDeliveryEvidence, type ArchivePreview } from "./coordination-archive.js";
+import { storeArchiveRoot, archivePaths } from "./archive-paths.js";
 
 export interface ContextInput {
   repository: string;
@@ -495,6 +497,10 @@ export class Coordination {
     return { ...payload, token: digest(payload), head: snapshot.head };
   }
   complete(options: MutationIdentity & { token: string; approvedBy: string; archive?: ArchiveScope }) {
+    const result = this.completeCore(options);
+    return { ...result, summary: safeSharedSummary(this.store.root, this.store.featureId, this.repositories) };
+  }
+  private completeCore(options: MutationIdentity & { token: string; approvedBy: string; archive?: ArchiveScope }) {
     label(options.approvedBy, "explicit completion consent");
     return coordinationOperation({ store: this.store, input: options, action: "completion", initialize: () => {
       const preview = this.completionPreview(options);
@@ -534,10 +540,10 @@ export class Coordination {
     }
     if (scope.includeStore) {
       const root = this.mapped(approval.contract.repository);
-      const file = approval.contract.files.find(file => file.path.endsWith(`/changes/${snapshot.manifest.sharedChange}/tasks.md`));
-      if (!file || file.path !== `openspec/changes/${snapshot.manifest.sharedChange}/tasks.md`) throw new Error("Store archival currently requires openspec/changes/<shared-change>/tasks.md at the Store repository root; use component-only archive scope (includeStore: false) or move the shared plan to the supported root and renew approval");
+      const openspecRoot = storeArchiveRoot(approval.contract, snapshot.manifest.sharedChange);
+      const file = approval.contract.files.find(file => file.path === archivePaths(openspecRoot, snapshot.manifest.sharedChange).tasks)!;
       const tasksContent = committedBlob({ root, object: git(root, "rev-parse", `${snapshot.head}:${file.path}`) }).toString("utf8");
-      const target = archiveTarget({ root, repository: approval.contract.repository, change: snapshot.manifest.sharedChange, branch: scope.storeDeliveryBranch!, tasksContent, pinnedBase: bases?.store });
+      const target = archiveTarget({ root, repository: approval.contract.repository, change: snapshot.manifest.sharedChange, branch: scope.storeDeliveryBranch!, tasksContent, pinnedBase: bases?.store, ...(openspecRoot !== "openspec" ? { openspecRoot } : {}) });
       const branchHead = git(root, "rev-parse", `refs/heads/${target.branch}^{commit}`);
       if (bases?.store && changedPaths({ root, base: target.base, commit: branchHead }).some(path => path !== file.path && !path.startsWith(`${this.store.directory}/`))) throw new Error("Store archive base may advance only across coordination records and approved task milestones");
       const canonical = repinContext({ root, context: approval.contract, revision: branchHead });

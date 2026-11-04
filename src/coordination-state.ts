@@ -11,6 +11,10 @@ import { committedBlob, contextFingerprint, safeContextPath, type PinnedContext,
 import { tasksFrom } from "./plan.js";
 import { attempt, git, gitRaw, repository } from "./system.js";
 import { affectedDependents, dependencyBlockers } from "./coordination-dependencies.js";
+import { publishExclusive } from "./platform-files.js";
+import { resolveCommand } from "./platform-command.js";
+import { archivePaths, storeArchiveRoot } from "./archive-paths.js";
+import { gitHooksPath } from "./platform-paths.js";
 
 export interface ComponentSettings {
   implementation: HarnessSettings;
@@ -560,11 +564,14 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
       const base = event.componentId ? bases?.components[event.componentId] : bases?.store;
       if (!base || event.base !== base) fail("archive prepared base differs from approved consent scope");
       const change = event.componentId ? manifest.components[event.componentId].change : manifest.sharedChange;
-      const active = `openspec/changes/${change}/`, archived = "openspec/changes/archive/", folders = new Set<string>();
+      const review = reviews.find(review => review.id === completed!.reviewEventId);
+      const contract = approvalMap.get(review?.approvalId ?? status.approvalId ?? "")?.contract;
+      const root = event.componentId ? "openspec" : contract ? storeArchiveRoot(contract, change) : "openspec";
+      const { active, archived, specs } = archivePaths(root, change), folders = new Set<string>();
       if (!event.paths.length || new Set(event.paths).size !== event.paths.length) fail("archive path scope requires unique changed paths");
       for (const path of event.paths) {
         safeContextPath(path);
-        if (path.startsWith(active) || path.startsWith("openspec/specs/")) continue;
+        if (path.startsWith(active) || path.startsWith(specs)) continue;
         const folder = path.startsWith(archived) ? path.slice(archived.length).split("/")[0] : "";
         if (/^\d{4}-\d{2}-\d{2}-/.test(folder) && folder.slice(11) === change && path.startsWith(`${archived}${folder}/`)) { folders.add(folder); continue; }
         fail("archive prepared path is outside approved target scope");
@@ -892,11 +899,7 @@ export class CoordinationStore {
     const created = !existsSync(path);
     this.safePath(options.path, true);
     if (created) {
-      const temporary = `${path}.${randomUUID()}.tmp`;
-      const fd = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-      try { writeFileSync(fd, options.bytes); fsyncSync(fd); } finally { closeSync(fd); }
-      try { linkSync(temporary, path); } finally { unlinkSync(temporary); }
-      const directory = openSync(dirname(path), "r"); try { fsyncSync(directory); } finally { closeSync(directory); }
+      publishExclusive(path, options.bytes);
     }
     for (const companion of companions) writeFileSync(this.safePath(companion.path), companion.bytes);
     // Recheck after durable intent is on disk. A failed guard leaves it recoverable.
@@ -906,10 +909,13 @@ export class CoordinationStore {
     // available for explicit reconciliation; it can never become our parent.
     const common = repository(this.root).common;
     const temporaryIndex = resolve(common, `runner-coordination-index-${randomUUID()}`);
-    const execute = (args: string[], input?: Buffer) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
-      cwd: this.root, env: { ...process.env, GIT_INDEX_FILE: temporaryIndex },
+    const execute = (args: string[], input?: Buffer) => {
+      const invocation = resolveCommand({ executable: "git", args: ["-c", `core.hooksPath=${gitHooksPath()}`, ...args], cwd: this.root, env: { ...process.env, GIT_INDEX_FILE: temporaryIndex } });
+      return execFileSync(invocation.executable, invocation.args, {
+      cwd: this.root, env: invocation.env, windowsHide: true,
       input, encoding: "utf8", stdio: [input ? "pipe" : "ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
-    }).trim();
+      }).trim();
+    };
     try {
       execute(["read-tree", options.expectedHead]);
       const blob = execute(["hash-object", "-w", "--stdin"], options.bytes);

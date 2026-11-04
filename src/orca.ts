@@ -1,5 +1,6 @@
-import { realpathSync } from "node:fs";
-import { atomic, quote, repository, run } from "./system.js";
+import { terminalCommand } from "./backend-command.js";
+import { samePath } from "./platform-paths.js";
+import { atomic, repository, run } from "./system.js";
 import type { Terminal } from "./adapters.js";
 import type { TaskAttempt } from "./runner.js";
 import type { TerminalInspection } from "./terminal-cleanup.js";
@@ -40,8 +41,8 @@ export function checkOrcaContext(root: string, saved: OrcaContext): void {
 export function orcaWorktree(root: string, path: string, context: OrcaContext): any {
   const value = orcaCall(root, ["worktree", "show", "--worktree", `path:${path}`], context).result.worktree;
   if (!value || typeof value.id !== "string" || value.hostId !== "local" || typeof value.path !== "string" ||
-      realpathSync(value.path) !== realpathSync(path) ||
-      realpathSync(repository(path).common) !== realpathSync(repository(root).common))
+      !samePath(value.path, path) ||
+      !samePath(repository(path).common, repository(root).common))
     throw new Error("Orca worktree identity or local filesystem differs from the runner repository");
   return value;
 }
@@ -66,8 +67,9 @@ export function startOrcaTerminal(root: string, path: string, label: string, ter
   terminal.workspace = workspace.id;
   terminal.phase = "creating";
   save();
+  const invocation = terminalCommand(command, "orca");
   const created = orcaCall(root, ["terminal", "create", "--worktree", `id:${workspace.id}`,
-    "--title", `osr-${label}`, "--command", `exec sh -c ${quote(command)}`], context).result.terminal;
+    "--title", `osr-${label}`, ...(invocation.shell ? ["--shell", invocation.shell] : []), "--command", invocation.command], context).result.terminal;
   if (!created || typeof created.handle !== "string" || !created.handle || created.worktreeId !== workspace.id ||
       created.executionHostId !== "local" || created.hostPlatform !== process.platform ||
       typeof created.ptyId !== "string" || typeof created.incarnationId !== "string" ||
@@ -111,7 +113,7 @@ export function inspectOrcaTerminal(root: string, a: TaskAttempt): TerminalInspe
     if (!found) return { kind: "orca", pane: a.terminal.pane, closed: true };
     if (found.handle === process.env.ORCA_TERMINAL_HANDLE) throw new Error("Invoking terminal is protected");
     if (!a.terminal.owned || !a.worker?.exitedAt) throw new Error("Orca terminal ownership or worker exit is not confirmed");
-    if (realpathSync(found.worktreePath) !== realpathSync(a.path)) throw new Error("Orca terminal worktree changed");
+    if (!samePath(found.worktreePath, a.path)) throw new Error("Orca terminal worktree changed");
     const read = orcaCall(root, ["terminal", "read", "--terminal", found.handle, "--limit", "1"], context).result.terminal;
     if (read?.handle !== found.handle || read.status !== "exited")
       throw new Error("Orca terminal is still live or its exit is unknown; inspect before cleanup");

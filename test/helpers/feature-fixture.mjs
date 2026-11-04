@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./codex-diagnostics.mjs";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +11,7 @@ export const featureSettings = { implementation: { harness: "codex", model: "tes
   repair: { harness: "codex", model: "test-model", effort: "high" }, maxFixRounds: 2 };
 export const blocker = { id: "F1", category: "correctness", location: "output.txt:1", impact: "Wrong output", correction: "Repair the output" };
 export const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-export function executable(path, source) { writeFileSync(path, `#!/usr/bin/env node\n${source}`); chmodSync(path, 0o755); }
+export function executable(path, source) { writeFileSync(path, `#!/usr/bin/env node\n${codexDiagnostics}\n${source}`); chmodSync(path, 0o755); }
 
 export function featureFixture(t, options = {}) {
   const previousPath = process.env.PATH;
@@ -19,7 +20,7 @@ export function featureFixture(t, options = {}) {
   mkdirSync(root); mkdirSync(bin); writeFileSync(controlPath, "{}");
   const savedEnv = Object.fromEntries(["HERDR_ENV", "ORCA_TERMINAL_HANDLE", "CODEX_THREAD_ID"].map(k => [k, process.env[k]]));
   for (const k of Object.keys(savedEnv)) delete process.env[k];
-  process.env.PATH = `${bin}:${previousPath}`;
+  process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${previousPath}`;
   t.after(() => {
     process.env.PATH = previousPath;
     for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -58,15 +59,10 @@ if (process.argv.includes('--version')) { console.log('test-cli'); process.exit(
 (async () => {
   const { Feature } = await import(${JSON.stringify(new URL("../../dist/feature.js", import.meta.url).href)});
   const f = new Feature();
-  // Real agents dispatch begin after startup. The synchronous fake must wait
-  // for its supervisor to finish durable PID registration before dispatching it.
-  const deadline = Date.now() + 10000;
-  while (true) {
-    const pending = f.read('demo').jobs.at(-1);
-    if (pending.worker?.pid === process.pid && !fs.existsSync(f.repo.stateDir + '/lock.json')) break;
-    if (Date.now() >= deadline) throw new Error('Timed out waiting for supervised fixture PID registration');
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
+  // Consume the native initial prompt transport before requesting state changes.
+  let prompt = '';
+  for await (const chunk of process.stdin) prompt += chunk;
+  if (!prompt) throw new Error('Missing supervised fixture prompt');
   const state = f.read('demo'), job = state.jobs.at(-1);
   const control = JSON.parse(fs.readFileSync(${JSON.stringify(controlPath)}, 'utf8'));
   const session = job.expectedSession || 'test-' + job.id;

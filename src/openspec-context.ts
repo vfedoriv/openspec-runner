@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep, dirname } from "node:path";
 import { git, gitRaw, repository, run } from "./system.js";
+import { resolveCommand } from "./platform-command.js";
+import { gitHooksPath } from "./platform-paths.js";
 
 export interface ContextFile { path: string; content: string }
 /** Portable approved input. Checkout paths belong only to ResolvedContext. */
@@ -120,7 +122,9 @@ export function committedBlob(options: { root: string; object: string }): Buffer
     blobCache.delete(key!); blobCache.set(key!, cached);
     return Buffer.from(cached);
   }
-  const bytes = execFileSync("git", ["-c", "core.hooksPath=/dev/null", "cat-file", "blob", options.object], {
+  const invocation = resolveCommand({ executable: "git", args: ["-c", `core.hooksPath=${gitHooksPath()}`, "cat-file", "blob", options.object], cwd: options.root });
+  const bytes = execFileSync(invocation.executable, invocation.args, {
+    env: invocation.env, windowsHide: true,
     cwd: options.root, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
   });
   if (key && bytes.length <= blobCacheLimit) {

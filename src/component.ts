@@ -1,12 +1,14 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { safeComponentSummary } from "./summary-service.js";
 import { CoordinationStore, stableDigest, replayStatus, decodeRecord, type AssignmentRecord, type ApprovalRecord, type SubmissionRecord, validateId } from "./coordination-state.js";
 import { assertRepositoryIdentity, coordinationRevision, currentApproval } from "./coordination.js";
 import { atomic, git, json, repository } from "./system.js";
 import { assertCommitted, loadPlan } from "./plan.js";
 import { portableVerificationEvidence, verificationCommand } from "./submission.js";
 import { Feature } from "./feature.js";
-import { readFeature, validateDelegatedBinding, delegationForBinding, type FeatureApproval } from "./feature-state.js";
+import { readFeature, featurePath, validateDelegatedBinding, delegationForBinding, type FeatureApproval } from "./feature-state.js";
+import { retirementPath, retirementPreview, retireComponent, type RetirementInput } from "./component-retirement.js";
 import { getHarness } from "./harnesses/registry.js";
 import { safeContextPath, type PinnedContext } from "./openspec-context.js";
 import { componentBindingPath, readComponentBinding, decodeResources, expectedContextPaths, type ComponentResources, type ComponentBinding } from "./component-state.js";
@@ -38,12 +40,16 @@ export class Component {
     if (binding && binding.repository !== this.repository) throw new Error("Component runtime binding repository identity mismatch");
     return binding;
   }
+  retirementPreview(input: RetirementInput) { return retirementPreview(this.repo.root, this.repository, input); }
+  retire({ token, ...input }: RetirementInput & { token: string }) { return retireComponent(this.repo.root, this.repository, input, token); }
   async inspect(options: ComponentInspection) {
+    if (process.platform === "win32") throw new Error("Windows delegated-context write protection is not verified; delegated execution is unsupported on this host");
     known(options); assertRepositoryIdentity({ root: this.repo.root, repository: this.repository });
     const store = new CoordinationStore({ root: options.storeRoot, featureId: options.featureId });
     const historyRevision = coordinationRevision({ store, revision: options.historyRevision }), snapshot = store.readSnapshot({ revision: historyRevision });
     const assignment = snapshot.records.find((record): record is AssignmentRecord => record.kind === "assignment" && record.id === options.assignmentId);
     if (!assignment) throw new Error("Assignment not present in inspected committed history");
+    if (existsSync(retirementPath(this.repo.stateDir, assignment.featureId, assignment.id))) throw new Error("Assignment is retired or retirement is pending; import a different approved assignment");
     if (assignment.repository !== this.repository) throw new Error("Assignment repository identity mismatch");
     if (!options.owner || options.owner !== assignment.owner) throw new Error("Assignment owner does not match explicit local owner");
     const approval = snapshot.records.find((record): record is ApprovalRecord => record.kind === "approval" && record.id === assignment.approvalId);
@@ -63,7 +69,7 @@ export class Component {
         digest(plan.tasks.map(task => task.id).sort()) !== digest(Object.keys(assignment.settings.tasks).sort())) throw new Error("Assignment task scope/setup/checks differ from committed component plan");
     const settings = [assignment.settings.implementation, ...Object.values(assignment.settings.tasks), assignment.settings.review, assignment.settings.repair];
     for (const harnessId of new Set(settings.map(setting => setting.harness ?? "codex"))) {
-      const capability = await getHarness(harnessId).capabilities(this.repo.root);
+      const capability = await getHarness(harnessId).capabilities(this.repo.root, settings.find(setting => (setting.harness ?? "codex") === harnessId));
       if (!capability.installed || !capability.supported || !capability.features.supervisedExecution || !capability.features.sessionOwnership || !capability.features.workerReports)
         throw new Error(`Harness ${harnessId} cannot execute assignment: ${capability.reasons.join("; ")}`);
       for (const setting of settings.filter(setting => (setting.harness ?? "codex") === harnessId)) {
@@ -73,7 +79,7 @@ export class Component {
     }
     const resources = decodeResources({ value: options.resources, defaults: { terminal: plan.config.terminal, worktrees: plan.config.worktrees, worktreeRoot: resolve(this.repo.root, ".openspec-runner/worktrees") } });
     const old = this.readBinding({ change: assignment.change });
-    if (old && digest(old.assignment) !== digest(assignment)) throw new Error("A different assignment already reserves local component execution");
+    if (old && old.phase !== "retired" && digest(old.assignment) !== digest(assignment)) throw new Error("A different assignment already reserves local component execution; explicitly retire it before replacement");
     const payload = { assignment, historyRevision, resources };
     return { ...payload, token: digest(payload), change: assignment.change, repository: this.repository,
       context: [assignment.contract, ...(assignment.contract.references ?? [])].map(context => ({ repository: context.repository, revision: context.revision, fingerprint: context.fingerprint, paths: context.files.map(file => file.path) })) };
@@ -112,12 +118,14 @@ export class Component {
     if (!token || token !== preview.token) throw new Error("Import token is stale; inspect assignment again");
     const assignment = preview.assignment, feature = new Feature(this.repo.root), path = this.bindingPath(assignment.change);
     const binding = feature.runner.lock(() => {
+      if (existsSync(retirementPath(this.repo.stateDir, assignment.featureId, assignment.id)))
+        throw new Error("Assignment retired during inspection; import a different approved assignment");
       const old = this.readBinding({ change: assignment.change });
-      if (old) {
+      if (old && old.phase !== "retired") {
         if (old.token !== token || digest(old.assignment) !== digest(assignment)) throw new Error("Import reservation differs; reconcile inspected history");
         return old;
       }
-      if (readFeature(this.repo.stateDir, assignment.change) || feature.runner.read(assignment.change)) throw new Error("Existing managed local execution cannot be replaced by assignment import");
+      if (existsSync(featurePath(this.repo.stateDir, assignment.change)) || feature.runner.read(assignment.change)) throw new Error("Existing managed local execution cannot be replaced by assignment import");
       const contextPaths = expectedContextPaths({ stateDir: this.repo.stateDir, assignment });
       const reserved: ComponentBinding = { version: 1, phase: "reserved", repository: this.repository, change: assignment.change,
         assignmentId: assignment.id, featureId: assignment.featureId, historyRevision: preview.historyRevision, token, assignment, contextPaths, resources: preview.resources };
@@ -131,7 +139,12 @@ export class Component {
     const approval: FeatureApproval = { token: digest(assignment), fingerprint: assignment.planFingerprint, base: assignment.base,
       ...structuredClone(assignment.settings), at: assignment.createdAt };
     feature.bindAssignment({ change: assignment.change, approval, delegated });
-    feature.runner.lock(() => { binding.phase = "ready"; atomic(path, binding); });
+    feature.runner.lock(() => {
+      const current = this.readBinding({ change: assignment.change });
+      if (!current || !["reserved", "ready"].includes(current.phase) || current.token !== binding.token || digest(current.assignment) !== digest(assignment))
+        throw new Error("Assignment binding changed or retired during import");
+      binding.phase = "ready"; atomic(path, binding);
+    });
     validateDelegatedBinding(delegated);
     return binding;
   }
@@ -155,6 +168,10 @@ export class Component {
     return { ...completed, token: digest(completed) };
   }
   exportSubmission(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
+    const result = this.exportSubmissionCore(options);
+    return { ...result, ...(options.outcome === "completed" ? { summary: safeComponentSummary(this.repo.root, options.change, result.record.id) } : {}) };
+  }
+  private exportSubmissionCore(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
     validateId({ value: options.id }); validateId({ value: options.operationId });
     const path = resolve(this.repo.stateDir, "submissions", `${options.id}.json`);
     return new Feature(this.repo.root).runner.lock(() => {
@@ -196,6 +213,6 @@ export class Component {
       const snapshot = store.readSnapshot({ revision: inspectedHistory });
       revoked = replayStatus({ snapshot }).components[binding.assignment.componentId]?.assignmentId !== binding.assignmentId;
     }
-    return { ...binding, imported: true as const, inspectedHistory, revoked, nextAction: revoked ? "Stop and reconcile with coordinator" : "Execute, review, then export component receipt" };
+    return { ...binding, imported: true as const, inspectedHistory, revoked, nextAction: binding.phase === "retired" ? "Import a different approved assignment; old evidence and resources are retained" : binding.phase === "retiring" ? "Resume the same retirement confirmation" : revoked ? "Stop and reconcile with coordinator" : "Execute, review, then export component receipt" };
   }
 }

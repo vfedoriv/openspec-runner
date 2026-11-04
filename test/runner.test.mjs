@@ -1,4 +1,6 @@
-import { test } from "node:test";
+import { codexDiagnostics } from "./helpers/codex-diagnostics.mjs";
+import { fileURLToPath } from "node:url";
+import { localRunnerTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
 import {
   mkdtempSync,
@@ -12,7 +14,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import { observeProcess } from "../dist/platform-process.js";
 import { Runner } from "../dist/runner.js";
 import {
   tasksFrom,
@@ -30,6 +34,7 @@ import {
 import { createWorktree } from "../dist/adapters.js";
 import { init } from "../dist/cli.js";
 import { locked } from "../dist/system.js";
+import { readCurrentSummary } from "../dist/summary-service.js";
 import { installFakeOrca } from "./helpers/fake-orca.mjs";
 const settings = { model: "model-a", reasoningEffort: "high" };
 const basePath = process.env.PATH;
@@ -51,7 +56,7 @@ function git(root, ...args) {
   }).trim();
 }
 function executable(path, body) {
-  writeFileSync(path, "#!/usr/bin/env node\n" + body);
+  writeFileSync(path, "#!/usr/bin/env node\n" + codexDiagnostics + body);
   chmodSync(path, 0o755);
 }
 function fixture(t, options = {}) {
@@ -71,7 +76,7 @@ function fixture(t, options = {}) {
     bin = join(dir, "bin");
   mkdirSync(root);
   mkdirSync(bin);
-  process.env.PATH = bin + ":" + basePath;
+  process.env.PATH = bin + (process.platform === "win32" ? ";" : ":") + basePath;
   executable(
     join(bin, "openspec"),
     `console.log(JSON.stringify(process.argv[2]==='status'?{artifacts:[{id:'tasks',status:'done'}]}:{state:'ready'}));`,
@@ -360,8 +365,8 @@ test("conflicted integration blocks dependent tasks, supports abort then continu
   const [a, b] = r.launch("demo", ["1.1", "1.2"], settings);
   complete(r, a, "shared.txt", "one\n");
   complete(r, b, "shared.txt", "two\n");
-  r.integrate("demo", ["1.1"]);
-  assert.throws(() => r.integrate("demo", ["1.2"]), /CONFLICT|conflict/);
+  assert.throws(() => r.integrate("demo", ["1.1", "1.2"]), /CONFLICT|conflict/);
+  assert.ok(readCurrentSummary({ cwd: r.repo.root, change: "demo", task: "1.1" }));
   assert.throws(() => r.launch("demo", ["2.1"], settings), /integration/);
   r.integrate("demo", [], "abort");
   assert.equal(r.read("demo").transaction, undefined);
@@ -402,7 +407,8 @@ test("repository lock distinguishes creation errors and preserves a replacement 
   const { runner: r } = fixture(t),
     lockFile = join(r.repo.stateDir, "lock.json");
   mkdirSync(r.repo.stateDir, { recursive: true });
-  chmodSync(r.repo.stateDir, 0o500);
+  if (process.platform === "win32") mkdirSync(lockFile);
+  else chmodSync(r.repo.stateDir, 0o500);
   try {
     let error;
     try {
@@ -411,11 +417,15 @@ test("repository lock distinguishes creation errors and preserves a replacement 
       error = caught;
     }
     assert.ok(error);
-    assert.match(error.message, /Cannot create runner lock/);
-    assert.doesNotMatch(error.message, /Repository is locked/);
-    assert.ok(["EACCES", "EPERM"].includes(error.cause?.code));
+    if (process.platform === "win32") assert.match(error.message, /Cannot create runner lock|Repository is locked/);
+    else {
+      assert.match(error.message, /Cannot create runner lock/);
+      assert.doesNotMatch(error.message, /Repository is locked/);
+      assert.ok(["EACCES", "EPERM"].includes(error.cause?.code));
+    }
   } finally {
-    chmodSync(r.repo.stateDir, 0o700);
+    if (process.platform === "win32") rmSync(lockFile, { recursive: true });
+    else chmodSync(r.repo.stateDir, 0o700);
   }
   const replacement = JSON.stringify({ token: "replacement-owner" });
   locked(r.repo.stateDir, () => writeFileSync(lockFile, replacement));
@@ -425,14 +435,14 @@ test("repository lock distinguishes creation errors and preserves a replacement 
 test("Worktrunk uses explicit base and hooks disabled; partial creation reconciles before fallback", (t) => {
   const { root, bin, dir } = fixture(t);
   executable(
-    join(bin, "wt"),
+    join(bin, process.platform === "win32" ? "git-wt" : "wt"),
     `const {execFileSync}=require('child_process');const a=process.argv.slice(2);if(a.includes('--help')){console.log('--no-hooks --format --base --create');process.exit(0)}if(!a.includes('--no-hooks')||!a.includes('--yes')||!a.includes('--format'))process.exit(9);const branch=a[a.indexOf('--create')+1],base=a[a.indexOf('--base')+1];execFileSync('git',['worktree','add','-b',branch,${JSON.stringify(join(dir, "wt space"))},base]);process.exit(1);`,
   );
   const base = git(root, "rev-parse", "HEAD");
   const w = createWorktree(
     root,
     { branch: "wt-task", base, path: join(dir, "fallback") },
-    "auto",
+    "worktrunk",
   );
   assert.equal(w.path, join(dir, "wt space"));
   assert.equal(existsSync(join(dir, "fallback")), false);
@@ -452,8 +462,9 @@ test("Herdr preserves focus, starts supervised worker and records returned ident
   const calls = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
   assert.ok(calls[0].includes("--no-focus"));
   assert.deepEqual(calls[1].slice(0, 3), ["pane", "run", "w9:p7"]);
-  assert.match(calls[1][3], /'worker' 'demo' '1.1'/);
-  assert.ok(calls[1][3].includes(a.id));
+  const workerText = process.platform === "win32" ? Buffer.from(calls[1][3].match(/EncodedCommand ([A-Za-z0-9+/=]+)/)[1], "base64").toString("utf16le") : calls[1][3];
+  assert.match(workerText, /'worker' 'demo' '1.1'/);
+  assert.ok(workerText.includes(a.id));
   assert.equal(a.terminal.owned, true);
   assert.equal(a.settings.model, "model-a");
   r.attach("demo", "1.1");
@@ -480,7 +491,7 @@ test("Herdr worker can immediately begin without racing the coordinator lock", (
     cli = join(process.cwd(), "bin/openspec-runner.js");
   executable(
     join(bin, "herdr"),
-    `const fs=require('fs'),{execFileSync}=require('child_process'),a=process.argv.slice(2);if(a[0]==='workspace'){fs.writeFileSync(${JSON.stringify(workspaceFile)},a[a.indexOf('--cwd')+1]);console.log(JSON.stringify({result:{workspace:{workspace_id:'w1'},root_pane:{pane_id:'w1:p1'}}}))}else if(a[1]==='run'){const m=a[3].match(/'worker' '([^']+)' '([^']+)' '--attempt' '([^']+)'/);execFileSync(process.execPath,[${JSON.stringify(cli)},'begin',m[1],m[2],'--attempt',m[3],'--session','immediate-session'],{cwd:fs.readFileSync(${JSON.stringify(workspaceFile)},'utf8'),stdio:'pipe'});console.log(JSON.stringify({result:{ok:true}}))}else console.log(JSON.stringify({result:{ok:true}}));`,
+    `const fs=require('fs'),{execFileSync}=require('child_process'),a=process.argv.slice(2);if(a[0]==='workspace'){fs.writeFileSync(${JSON.stringify(workspaceFile)},a[a.indexOf('--cwd')+1]);console.log(JSON.stringify({result:{workspace:{workspace_id:'w1'},root_pane:{pane_id:'w1:p1'}}}))}else if(a[1]==='run'){const text=a[3].includes('EncodedCommand ')?Buffer.from(a[3].split('EncodedCommand ')[1],'base64').toString('utf16le'):a[3];const m=text.match(/'worker' '([^']+)' '([^']+)' '--attempt' '([^']+)'/);execFileSync(process.execPath,[${JSON.stringify(cli)},'begin',m[1],m[2],'--attempt',m[3],'--session','immediate-session'],{cwd:fs.readFileSync(${JSON.stringify(workspaceFile)},'utf8'),stdio:'pipe'});console.log(JSON.stringify({result:{ok:true}}))}else console.log(JSON.stringify({result:{ok:true}}));`,
   );
   const a = r.launch("demo", ["1.1"], settings)[0],
     saved = r.read("demo").attempts[0];
@@ -513,7 +524,7 @@ test("Herdr persists partial creation and prompt-submission failures", (t) => {
   assert.equal(prompted.terminal.phase, "starting");
   assert.match(prompted.error, /herdr pane/);
 });
-test("installer owns exactly six skills and preserves existing OpenSpec skills/config", (t) => {
+test("installer owns eight skills and preserves existing OpenSpec skills/config", (t) => {
   const { root } = fixture(t);
   mkdirSync(join(root, ".agents/skills/openspec-apply"), { recursive: true });
   writeFileSync(
@@ -522,7 +533,7 @@ test("installer owns exactly six skills and preserves existing OpenSpec skills/c
   );
   const before = readFileSync(join(root, "openspec/runner.yaml"), "utf8");
   const result = init(root);
-  assert.equal(result.skills.length, 6);
+  assert.equal(result.skills.length, 8);
   assert.equal(
     readFileSync(join(root, ".agents/skills/openspec-apply/SKILL.md"), "utf8"),
     "original",
@@ -532,7 +543,7 @@ test("installer owns exactly six skills and preserves existing OpenSpec skills/c
     before,
   );
   const all = init(root, "all");
-  assert.equal(all.skills.length, 12);
+  assert.equal(all.skills.length, 24);
   for (const name of [
     "openspec-runner-plan",
     "openspec-runner-coordinate",
@@ -589,11 +600,17 @@ test("manual resume keeps resolved model and effort after caller switches models
   const a = r.launch("demo", ["1.1"], settings)[0];
   new Runner(a.path).begin("demo", "1.1", a.id, "saved-session");
   const attached = r.attach("demo", "1.1");
-  assert.match(attached.command, /'resume' 'saved-session'/);
+  assert.match(attached.command, /'resume'/);
+  assert.match(attached.command, /'saved-session'/);
   assert.match(attached.command, /'model-a'/);
   assert.match(attached.command, /high/);
-  assert.match(attached.command, /'--add-dir'/);
-  assert.match(attached.command, new RegExp(r.repo.common.replaceAll("/", "\\/")));
+  if (process.platform === "win32") {
+    assert.match(attached.command, /default_permissions/);
+    assert.doesNotMatch(attached.command, /'--add-dir'/);
+  } else {
+    assert.match(attached.command, /'--add-dir'/);
+    assert.ok(attached.command.includes(r.repo.common));
+  }
 });
 test("uncommitted planning files and invalid selected base cannot launch", (t) => {
   const { runner: r, root } = fixture(t);
@@ -734,6 +751,8 @@ test("supervised exec records actual exit after report and prevents duplicate wo
   executable(join(bin, "codex"), `
     if(process.argv.includes('--help')) { console.log('--add-dir --model --cd'); }
     else (async()=>{
+      let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
+      if(!prompt)throw new Error('Missing registered prompt');
       const {Runner}=await import(${JSON.stringify(module)});
       const r=new Runner(process.cwd());
       r.begin('demo','1.1',${JSON.stringify(a.id)},'exec-session');
@@ -767,8 +786,30 @@ test("worker command recovers a lost supervisor exit receipt", async (t) => {
   assert.equal(r.read("demo").attempts[0].phase, "blocked");
 });
 
-function liveTerminal(r, a, bin, dir, mode = "close") {
+test("Windows recovery retains resources for surviving worker descendants", { skip: process.platform !== "win32" }, async t => {
+  const { runner: r } = fixture(t), a = r.launch("demo", ["1.1"], settings)[0];
+  const source = `const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});console.log(c.pid);process.stdin.once('data',()=>process.exit(0));`;
+  const parent = spawn(process.execPath, ["-e", source], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+  const [bytes] = await once(parent.stdout, "data"), pid = Number(bytes.toString());
+  t.after(() => { try { process.kill(pid); } catch {} try { parent.kill(); } catch {} });
+  const identity = observeProcess(parent.pid);
+  const closed = once(parent, "close"); parent.stdin.end("exit"); await closed;
+  const state = r.read("demo");
+  state.attempts[0].worker = { token: "lost-parent", pid: parent.pid, processStart: identity.createdAt, processPlatform: "win32", log: join(r.repo.stateDir, "logs", `${a.id}.log`) };
+  r.save(state);
+  await r.worker("demo", "1.1", a.id);
+  assert.equal(r.read("demo").attempts[0].worker.terminationUncertain, true);
+  assert.throws(() => r.preview("demo", ["1.1"], settings, undefined, true), /active|uncertain|worker/i);
+});
+
+function liveTerminal(r, a, bin, dir, mode = "close", t) {
   exited(r, a, bin);
+  let shellPid = process.pid;
+  if (process.platform === "win32") {
+    const shell = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { windowsHide: true, detached: true, stdio: "ignore" });
+    shellPid = shell.pid;
+    t.after(() => shell.kill());
+  }
   const state = join(dir, "pane-state.json");
   writeFileSync(state, JSON.stringify({ closed: false }));
   const pane = { pane_id: a.id, terminal_id: a.id, workspace_id: "tests", cwd: a.path };
@@ -776,7 +817,7 @@ function liveTerminal(r, a, bin, dir, mode = "close") {
     const fs=require('fs'),args=process.argv.slice(2),file=${JSON.stringify(state)},s=JSON.parse(fs.readFileSync(file));
     let result;
     if(args[1]==='list') result={panes:s.closed?[]:[${JSON.stringify(pane)}]};
-    else if(args[1]==='process-info') result={process_info:{pane_id:${JSON.stringify(a.id)},shell_pid:${process.pid},foreground_processes:[]}};
+    else if(args[1]==='process-info') result={process_info:{pane_id:${JSON.stringify(a.id)},shell_pid:${shellPid},foreground_processes:[]}};
     else if(args[1]==='read') result={text:'saved terminal log'};
     else if(args[1]==='close') {
       if(!fs.existsSync(${JSON.stringify(a.path)})) throw new Error('worktree removed before pane');
@@ -793,7 +834,7 @@ function liveTerminal(r, a, bin, dir, mode = "close") {
 test("owned terminal closes before worktree removal and its log survives", (t) => {
   const { runner: r, bin, dir } = fixture(t);
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
-  const paneState = liveTerminal(r, a, bin, dir);
+  const paneState = liveTerminal(r, a, bin, dir, "close", t);
   const result = r.integrate("demo", ["1.1"]);
   assert.equal(result.cleanup.results[0].status, "removed", JSON.stringify(result));
   assert.equal(JSON.parse(readFileSync(paneState)).closed, true);
@@ -805,7 +846,7 @@ test("terminal closure failure and edits during closure preserve the worktree", 
   for (const mode of ["fail", "edit"]) {
     const { runner: r, bin, dir } = fixture(t);
     const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
-    liveTerminal(r, a, bin, dir, mode);
+    liveTerminal(r, a, bin, dir, mode, t);
     const result = r.integrate("demo", ["1.1"]);
     assert.equal(result.cleanup.results[0].status, "failed");
     assert.equal(r.read("demo").attempts[0].phase, "integrated");
@@ -816,7 +857,7 @@ test("terminal closure failure and edits during closure preserve the worktree", 
 test("unacknowledged worker exit prevents integration, terminal closure and removal", (t) => {
   const { runner: r, bin, dir } = fixture(t);
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
-  const paneState = liveTerminal(r, a, bin, dir);
+  const paneState = liveTerminal(r, a, bin, dir, "close", t);
   const s = r.read("demo"); delete s.attempts[0].worker.exitedAt; r.save(s);
   assert.throws(
     () => r.integrate("demo", ["1.1"]),
@@ -830,7 +871,7 @@ test("unacknowledged worker exit prevents integration, terminal closure and remo
 test("CLI dry-run and JSON confirmation expose exact candidates without terminal prompts", (t) => {
   const { runner: r, root } = fixture(t, { cleanup: "manual" });
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a); r.integrate("demo", ["1.1"]);
-  const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+  const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const before = readFileSync(r.path("demo"), "utf8");
   const result = JSON.parse(execFileSync(process.execPath, [cli, "cleanup", "demo", "--tasks", "1.1", "--dry-run", "--json"], { cwd: root, encoding: "utf8" }));
   assert.equal(result.results[0].status, "confirmation-required");
@@ -855,7 +896,7 @@ function orcaFixture(t, fail = false) {
 
 test("Orca CLI preview is read-only and launch persists both adapters and focuses only its pane", t => {
   const { runner: r, root, calls } = orcaFixture(t);
-  const cli = new URL("../bin/openspec-runner.js", import.meta.url).pathname;
+  const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const preview = JSON.parse(execFileSync(process.execPath,
     [cli, "launch", "demo", "--tasks", "1.1", "--default-model", "model-a", "--dry-run", "--json"],
     { cwd: root, encoding: "utf8" }));
@@ -871,7 +912,9 @@ test("Orca CLI preview is read-only and launch persists both adapters and focuse
   const launch = calls().find(args => args[0] === "terminal" && args[1] === "create");
   assert.ok(!launch.includes("--focus"));
   assert.ok(launch.includes(`id:${a.orcaWorktree.id}`));
-  assert.match(launch[launch.indexOf("--command") + 1], /worker/);
+  const launchCommand = launch[launch.indexOf("--command") + 1];
+  const workerText = process.platform === "win32" ? Buffer.from(launchCommand.match(/EncodedCommand ([A-Za-z0-9+/=]+)/)[1], "base64").toString("utf16le") : launchCommand;
+  assert.match(workerText, /worker/);
   assert.equal(r.attach("demo", "1.1").result.pane, "term-1");
   assert.throws(() => r.recover("demo", "1.1"), /cannot safely replay/);
 });

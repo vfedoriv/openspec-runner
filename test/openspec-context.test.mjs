@@ -1,8 +1,9 @@
 import test from "node:test";
+import { writeGitWrapper } from "./helpers/git-wrapper.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { resolveContext, pinContext, safeContextPath, contextFingerprint, committedBlob } from "../dist/openspec-context.js";
 
@@ -46,12 +47,12 @@ function adapter(root, options = {}) {
 
 test("immutable blob reads reuse Git bytes while isolating returned buffers and repositories", (t) => {
   const root = fixture(t), object = git(root, "rev-parse", "HEAD:AGENTS.md");
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
   const bin = mkdtempSync(join(tmpdir(), "runner-blob-git-")), log = join(bin, "calls");
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-  writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(log)}\nexec ${quote(realGit)} "$@"\n`); chmodSync(join(bin, "git"), 0o755);
-  const previousPath = process.env.PATH; process.env.PATH = `${bin}:${previousPath}`;
+  writeGitWrapper(join(bin, "git"), realGit, `fs.appendFileSync(${JSON.stringify(log)}, args.join(' ') + '\\n');`);
+  const previousPath = process.env.PATH; process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${previousPath}`;
   try {
     committedBlob({ root, object }).fill(0);
     assert.equal(committedBlob({ root, object }).toString(), "Store guidance\n");
@@ -70,7 +71,7 @@ test("documented root and doctor references preserve the explicit implementation
   assert.equal(context.planningRoot, root);
   assert.equal(context.storeId, "team");
   assert.equal(context.changeRoot, join(root, "planning/changes/shared"));
-  assert.deepEqual(context.references, [{ storeId: "upstream", root: "/upstream/store", status: [] }]);
+  assert.deepEqual(context.references, [{ storeId: "upstream", root: resolve("/upstream/store"), status: [] }]);
 });
 
 test("Store selection resolves planning context without routing implementation to Store", (t) => {
@@ -88,7 +89,7 @@ test("context members are the documented fallback when doctor lacks references",
     return original(request);
   } });
   assert.equal(context.references[0].storeId, "team");
-  assert.equal(context.references[0].root, "/team/store");
+  assert.equal(context.references[0].root, resolve("/team/store"));
 });
 
 test("old OpenSpec JSON fails with a capability diagnostic instead of inferring directories", (t) => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { samePath } from "./platform-paths.js";
 import { worktrees, type Workspace } from "./adapters.js";
 import { git, repository } from "./system.js";
 import { checkOrcaContext, orcaCall, orcaContext, orcaTerminals, orcaWorktree, type OrcaContext } from "./orca.js";
@@ -21,7 +21,7 @@ export function createOrcaWorktree(root: string, spec: Workspace): Workspace {
   if (!Array.isArray(repos)) throw new Error("Unsupported Orca repository list");
   const matches = repos.filter((r: any) => {
     if (r.connectionId || (r.executionHostId && r.executionHostId !== "local") || typeof r.path !== "string") return false;
-    try { return realpathSync(repository(r.path).common) === realpathSync(repository(root).common); }
+    try { return samePath(repository(r.path).common, repository(root).common); }
     catch { return false; }
   });
   if (matches.length !== 1 || typeof matches[0].id !== "string")
@@ -58,7 +58,7 @@ export function createOrcaWorktree(root: string, spec: Workspace): Workspace {
       throw new Error("Unsupported Orca worktree creation response; inspect before recovery");
     if (marker && (value.comment !== marker || value.repoId !== repo.id))
       throw new Error("Orca returned a worktree belonging to a different attempt or repository");
-    const actual = worktrees(root).find(w => w.path === value.path);
+    const actual = worktrees(root).find(w => samePath(w.path, value.path));
     const branch = value.branch.replace(/^refs\/heads\//, "");
     if (!actual || actual.head !== spec.base || actual.branch !== branch ||
         git(value.path, "rev-parse", "HEAD") !== spec.base)

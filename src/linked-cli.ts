@@ -35,6 +35,8 @@ export const linkedHelp = `coordination <action> <feature> --store CHECKOUT --ma
 component <action> <feature> --store CHECKOUT --repository ID [--json]
   inspect | import --assignment ID --owner LABEL [--file RESOURCES]
   status --change CHANGE [--revision SHA]
+  retire --change CHANGE --assignment ID --owner LABEL --reason TEXT
+    [--dry-run | --confirm TOKEN] (local retirement; retains evidence/resources)
   export --change CHANGE --outcome completed|blocked|failed [--reason TEXT]
     --id ID --operation ID --output RECEIPT
   import/export accept --dry-run; real import/export require --expected-head SHA
@@ -74,6 +76,7 @@ const actions: Record<string, Record<string, string[]>> = {
     inspect: ["assignment", "owner", "file", "revision"],
     import: ["assignment", "owner", "file", "expected-head", "confirm"],
     status: ["change", "revision"],
+    retire: ["change", "assignment", "owner", "reason", "confirm"],
     export: [...snapshotOptions, "change", "outcome", "reason", "output"],
   },
 };
@@ -139,6 +142,10 @@ export async function linkedCommand(args: string[]): Promise<unknown> {
       const change = value(v, "change"), binding = component.readBinding({ change });
       if (!binding || binding.featureId !== featureId) throw new Error("No imported assignment for this feature/change; inspect and import the explicit assignment first");
       if (action === "status") result = component.status({ change, storeRoot, historyRevision: optional(v, "revision") });
+      else if (action === "retire") {
+        const input = { change, assignmentId: value(v, "assignment"), owner: value(v, "owner"), reason: value(v, "reason") };
+        result = dryRun ? component.retirementPreview(input) : component.retire({ ...input, token: value(v, "confirm") });
+      }
       else {
         const outcome = value(v, "outcome");
         if (!["completed", "blocked", "failed"].includes(outcome)) throw new Error("--outcome must be completed, blocked, or failed");

@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./helpers/codex-diagnostics.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -117,6 +118,7 @@ test(
     t.after(() => { process.env.PATH = previousPath; rmSync(fakeBin, { recursive: true, force: true }); });
     const codex = join(fakeBin, "codex");
     writeFileSync(codex, `#!/usr/bin/env node
+${codexDiagnostics}
 if (process.argv.includes('--help')) { console.log('--add-dir --model --cd'); process.exit(0); }
 (async () => {
   const { Feature } = await import(${JSON.stringify(new URL("../dist/feature.js", import.meta.url).href)});
@@ -127,7 +129,7 @@ if (process.argv.includes('--help')) { console.log('--add-dir --model --cd'); pr
 })().catch(e => { console.error(e); process.exitCode = 1; });
 `);
     chmodSync(codex, 0o755);
-    process.env.PATH = fakeBin + ":" + previousPath;
+    process.env.PATH = fakeBin + (process.platform === "win32" ? ";" : ":") + previousPath;
     const review = feature.launch("runner-acceptance", "review");
     assert.equal((await feature.worker("runner-acceptance", review.id)).exitCode, 0);
     feature.approveFinal("runner-acceptance", feature.finalPreview("runner-acceptance").token);

@@ -1,5 +1,7 @@
 # openspec-runner
 
+Completed tasks and features receive automatic [delivery summaries](docs/delivery-summary-guide.md), with optional narrative enrichment and presentations on request.
+
 `openspec-runner` adds durable, reviewable execution to an existing
 [OpenSpec](https://github.com/Fission-AI/OpenSpec) workflow. It can run as an
 explicit batch companion, or manage an opt-in feature from exploration and plan
@@ -7,7 +9,7 @@ approval through isolated implementation, whole-feature review, bounded repairs,
 final approval, OpenSpec archival, and completion on a retained integration
 branch.
 
-The package installs six project-local agent skills:
+The package installs eight project-local agent skills:
 
 | Skill | Where it runs | Responsibility |
 |---|---|---|
@@ -17,8 +19,10 @@ The package installs six project-local agent skills:
 | `openspec-runner-implement` | One isolated worker per task | Implement exactly one checkbox, verify it, commit it, and submit a structured report |
 | `openspec-runner-review` | A fresh feature reviewer | Review the whole feature against the approved spec and report findings |
 | `openspec-runner-repair` | An isolated repair worker | Repair blocking findings without changing the approved task list |
+| `openspec-runner-summarize` | A summary session | Enrich a saved delivery summary |
+| `openspec-runner-present` | A presentation session | Prepare a presentation from delivery evidence |
 
-The skills guide both supported worker harnesses; the `openspec-runner` CLI
+The skills guide Codex, Claude Code, Copilot CLI, and VS Code Copilot workers; the `openspec-runner` CLI
 enforces durable state, dependency, worktree, report, and integration rules.
 The runner does not replace OpenSpec, modify OpenSpec core, change Codex or
 Claude Code authentication or permissions. Opt-in managed features can archive a
@@ -30,6 +34,8 @@ Explicit skill invocation differs by harness:
 |---|---|
 | Codex | `Use $openspec-runner-plan ...` |
 | Claude Code | `/openspec-runner-plan ...` |
+| GitHub Copilot CLI (`copilot`) | `/openspec-runner-plan ...` |
+| VS Code Copilot (`copilot-vscode`) | `/openspec-runner-plan ...` |
 
 Use the corresponding skill name for coordination, implementation, review, or repair. Claude
 Code can also load a matching skill automatically from its description, but
@@ -66,6 +72,8 @@ The [team workflow guide](docs/team-workflow.md) describes
 the roles, decisions, and process for work across repositories and machines.
 The [team operator reference](docs/team-workflow-reference.md) contains the direct
 CLI commands, input schemas, Git handoffs, and detailed recovery procedures.
+See [documented limits](docs/DOCUMENTED_LIMITS.md) for current execution boundaries
+and [maintenance priorities](docs/maintenance-priorities.md) for recommended next fixes.
 
 ## How it fits into OpenSpec
 
@@ -177,13 +185,21 @@ flowchart TB
 
 The target project must have:
 
-- Linux, macOS, or WSL. Native Windows is outside v1.
+- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and Orca terminals; see [Windows verification and limits](docs/WINDOWS_PORTABILITY_VERIFICATION.md).
 - Node.js 22.13 or newer.
 - Git and a Git repository.
 - OpenSpec installed and initialized in the project.
-- At least one selected worker harness—Codex or Claude Code—installed,
+- At least one selected worker harness—Codex, Claude Code, Copilot CLI, or VS Code Copilot—installed,
   authenticated, and available on `PATH`.
 - The planning artifacts committed before the first launch.
+
+Native Windows Codex workers require a CLI with named permission profiles and
+`debug prompt-input` diagnostics (verified with 0.165.0). The runner creates a
+process-local profile for its linked worktree, Git commit metadata, reports, and
+temporary files, and verifies effective permissions before starting a model.
+Unsupported or overriding permission settings fail with a diagnostic before
+inference. Initial and resumed workers use the same profile. User configuration
+and machine ACLs are unchanged. See the [real Windows acceptance record](docs/REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
 
 Optional integrations:
 
@@ -263,21 +279,33 @@ target-project/
 │   └── skills/
 │       ├── openspec-runner-plan/SKILL.md
 │       ├── openspec-runner-coordinate/SKILL.md
+│       ├── openspec-runner-component/SKILL.md
+│       ├── openspec-runner-summarize/SKILL.md
+│       ├── openspec-runner-present/SKILL.md
 │       ├── openspec-runner-implement/SKILL.md
 │       ├── openspec-runner-review/SKILL.md
 │       └── openspec-runner-repair/SKILL.md
 ├── .claude/
 │   └── skills/              # installed by init --agent claude|all
+├── .github/
+│   ├── skills/              # installed by init --agent copilot|copilot-vscode|all
+│   └── hooks/openspec-runner.json
 └── openspec/
     └── runner.yaml
 ```
 
 `init` is safe to rerun after rebuilding or upgrading the runner. `codex` remains
 the compatibility default; `claude` creates a version-2 config with an explicit
-`sonnet` default and `dontAsk` permissions; `all` installs both skill targets and
-allows `--default-agent codex|claude` for a new version-2 config:
+`sonnet` default and `dontAsk` permissions; `all` installs all four harness targets
+(across `.agents`, `.claude`, and `.github`) and allows
+`--default-agent codex|claude|copilot|copilot-vscode` for a new version-2 config.
+Copilot defaults require an explicit `--default-model` when creating a config.
+Copilot setup and the known CLI launch limitation are described in the
+[Copilot verification guide](docs/COPILOT_SUPPORT_VERIFICATION.md).
 
-- It updates only the six runner-owned `SKILL.md` files.
+- It updates the eight runner-owned `SKILL.md` files in each selected skill target.
+- Copilot targets also install runner hooks, preserving differing user hook files
+  for explicit review rather than overwriting them.
 - It does not remove or replace unrelated project skills.
 - It creates `openspec/runner.yaml` only when absent, preserving existing runner
   configuration.
@@ -287,7 +315,11 @@ Review and commit the installed files so every task worktree receives the same
 skills and configuration:
 
 ```sh
-git add .agents/skills/openspec-runner-* .claude/skills/openspec-runner-* openspec/runner.yaml
+# Stage the paths created for your selected harnesses:
+git add openspec/runner.yaml
+git add .agents/skills/openspec-runner-*  # Codex
+# git add .claude/skills/openspec-runner-*  # Claude Code
+# git add .github/skills/openspec-runner-* .github/hooks/openspec-runner.json  # Copilot
 git commit -m "Install OpenSpec runner skills"
 ```
 
@@ -1111,8 +1143,8 @@ refresh to reflect the external removal. No unrelated terminals are closed.
 are independent; Orca terminals also work with Git/Worktrunk worktrees once
 Orca can resolve their paths. This integration requires a local runtime on the
 same host and filesystem as the runner. Remote/SSH targets and WSL-to-Windows
-app bridging are unsupported. Native Windows remains outside runner support;
-use Linux, macOS, or an Orca runtime inside the same WSL environment.
+app bridging are unsupported. Native Windows supports these resource backends;
+Worktrunk uses `git-wt.exe` and owned Orca terminals explicitly use PowerShell 7.
 
 The CLI contract was checked against upstream revision
 [`fa0010e8`](https://github.com/stablyai/orca/tree/fa0010e8d6b2a7ad946fe1f1b005c6a8497c6c17).
@@ -1126,8 +1158,10 @@ terminal records require manual inspection and are not migrated into desktop Orc
 commands to run once in separate terminals. Task commands start
 `openspec-runner worker`; feature jobs start `openspec-runner feature worker`.
 Each invokes one selected-harness CLI with the saved prompt and working
-directory. Claude prompts are sent through stdin in print/stream-json mode; its
-session UUID is checked against emitted stream events. Do not replace it with
+directory. Codex initial prompts use `exec ... -`; Claude uses print/stream-json
+mode. Both receive their prompts through stdin only after successful PID
+registration and repository lock release. Claude's session UUID is checked
+against emitted stream events. Do not replace it with
 an unrequested background process or invoke it twice. While the worker remains
 active, `attach` prints the saved resume command instead of focusing a pane.
 
@@ -1576,9 +1610,10 @@ pnpm test
 pnpm pack --dry-run
 ```
 
-Run the complete suite on Linux or WSL with Node.js 22.13 or newer and pnpm on
-the Linux PATH. Native Windows does not support the integration suite's POSIX
-fake executables. To run the managed-feature checks first and then the full suite:
+Run the complete suite on Linux/WSL or native Windows with Node.js 22.13 or
+newer and pnpm on PATH. Windows runs the four-harness local worker matrix;
+tests for unsupported delegated protection and optional backends are explicitly
+skipped. To run the managed-feature checks first and then the full suite:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -1592,8 +1627,8 @@ The real OpenSpec interoperability test requires `openspec` on PATH; otherwise
 it is skipped. It creates a disposable project and exercises approval, a fake
 supervised reviewer, final approval, real OpenSpec spec synchronization, and
 archival. Real Codex/Claude authentication is not required for the test suite.
-On Windows, `pnpm run build` and
-`node --test test/feature-contract.test.mjs` check types and portable contracts.
+See the [Windows verification record](docs/WINDOWS_PORTABILITY_VERIFICATION.md)
+for native test coverage and the separate authenticated acceptance matrix.
 
 Tests use temporary repositories and fake Codex, Claude Code, Worktrunk, and
 Herdr executables.
@@ -1626,8 +1661,10 @@ Adapter references: [Codex CLI](https://learn.chatgpt.com/docs/developer-command
 See the [dashboard guide](docs/dashboard-guide.md) for a step-by-step walkthrough,
 keyboard controls, session activity, and troubleshooting.
 
-Run the dashboard from a repository on Linux/macOS or in WSL on Windows. Native
-Windows runner execution remains unsupported. Node.js 22.13 or newer is required.
+Run the dashboard from a repository on Linux/macOS, WSL, or native Windows.
+Windows uses PowerShell 7 operator commands and supports Git/manual resources
+as well as the installed Herdr, Orca, and Worktrunk integrations.
+Node.js 22.13 or newer is required.
 
 ```sh
 openspec-runner dashboard
@@ -1720,3 +1757,5 @@ Automated acceptance uses controlled fake Codex/Claude workers and terminal stre
 Testing a real saved terminal requires the corresponding installed backend and
 matching caller context; fake-backend coverage does not establish live backend
 availability or authentication.
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](docs/COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

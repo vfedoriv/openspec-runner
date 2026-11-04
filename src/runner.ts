@@ -7,11 +7,14 @@ import {
 } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { safeSummary } from "./summary-service.js";
 import { fileURLToPath } from "node:url";
 import { inspectCleanup, removeInspectedWorktree, type CleanupResult, type CleanupOptions } from "./cleanup.js";
 import { closeInspectedTerminal } from "./terminal-cleanup.js";
 import { superviseWorker } from "./worker.js";
 import { processStart } from "./processes.js";
+import { readComponentBinding } from "./component-state.js";
+import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import {
   atomic,
   json,
@@ -19,6 +22,7 @@ import {
   run,
   clean,
   shellCommand,
+  workerRunnerCommand,
   repository,
   locked,
   attempt,
@@ -30,7 +34,8 @@ import {
   tasksFrom,
   type Plan,
 } from "./plan.js";
-import type { HarnessSettings } from "./harnesses/types.js";
+import type { HarnessSettings, WorkerReceipt } from "./harnesses/types.js";
+import { completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
 import { getHarness } from "./harnesses/registry.js";
 import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt } from "./feature-state.js";
 import {
@@ -82,7 +87,7 @@ export interface TaskAttempt extends Workspace {
   cleaned?: boolean;
   setupDone?: boolean;
   gitDir?: string;
-  worker?: { token: string; pid?: number; processStart?: string; exitedAt?: string; exitCode?: number | null; log: string };
+  worker?: WorkerReceipt;
 }
 interface Transaction {
   tasks: string[];
@@ -248,6 +253,8 @@ export class Runner {
     return s.attempts.filter((a) => a.task === id).at(-1);
   }
   requireState(change: string) {
+    const binding = readComponentBinding({ stateDir: this.repo.stateDir, change });
+    if (binding?.phase === "retiring" || binding?.phase === "retired") throw new Error("Delegated component binding is retiring or retired; old execution is closed");
     const s = this.read(change);
     if (!s) throw new Error("No execution state; launch a batch first");
     return s;
@@ -363,7 +370,8 @@ export class Runner {
         );
       if (retry && !old)
         throw new Error("retry requires an existing unsuccessful attempt");
-      if (retry && old?.worker && !old.worker.exitedAt)
+      if (old) refreshCopilotEvidence(old, this.repo.common);
+      if (retry && old && agentMayBeActive(old))
         throw new Error("Retry requires the previous supervised worker to have stopped");
       if (
         !p.assignments[id].dependsOn.every((d) =>
@@ -462,7 +470,7 @@ export class Runner {
           agent: preview.agent,
           harness: preview.agent,
           batch: batchId,
-          ...(preview.agent === "claude" ? { expectedSession: randomUUID() } : {}),
+          ...((preview.agent === "claude" || getHarness(preview.agent).lifecycle?.reservedSession) ? { expectedSession: randomUUID() } : {}),
           parallel: item.parallel,
           branch,
           path: this.worktreePath(change, id),
@@ -628,20 +636,19 @@ export class Runner {
   }
   prompt(change: string, a: TaskAttempt) {
     const claude = a.agent === "claude";
-    const skillInvocation = claude
+    const copilot = getHarness(a.agent ?? "codex").lifecycle?.ownership === "hook";
+    const skillInvocation = claude || copilot
       ? "/openspec-runner-implement"
       : "Use $openspec-runner-implement.";
-    const begin = claude
-      ? `openspec-runner begin ${change} ${a.task} --attempt ${a.id} --session ${a.expectedSession}`
-      : `openspec-runner begin ${change} ${a.task} --attempt ${a.id}`;
-    const identity = claude ? "the exact Claude stream session_id" : "the actual CODEX_THREAD_ID";
+    const begin = workerRunnerCommand(["begin", change, a.task, "--attempt", a.id,
+      ...(claude ? ["--session", a.expectedSession!] : [])], a.agent ?? "codex");
+    const identity = copilot ? "the actual session returned by begin" : claude ? "the exact Claude stream session_id" : "the actual CODEX_THREAD_ID";
     const reportPath = resolve(
         dirname(a.path),
         "reports",
         `${a.id}-input.json`,
       ),
-      reportCommand = shellCommand([
-        "openspec-runner",
+      reportCommand = workerRunnerCommand([
         "report",
         change,
         a.task,
@@ -649,18 +656,25 @@ export class Runner {
         a.id,
         "--file",
         reportPath,
-      ]);
+      ], a.agent ?? "codex");
     return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.` + pinnedPrompt(this.repo.stateDir, change);
   }
   command(change: string, a: TaskAttempt) {
+    if (a.agent === "copilot-vscode" && (a.worker || a.session)) return undefined;
     if (!a.session) return this.workerCommand(change, a);
     if (a.agent === "claude" && !a.identityConfirmed) return undefined;
-    const invocation = getHarness(a.agent ?? "codex").resumeInvocation(
+    const harness = getHarness(a.agent ?? "codex");
+    let invocation = harness.resumeInvocation(
       a.settings,
       a.path,
       this.repo.common,
       a.session,
     );
+    if (harness.managedInvocation && a.gitDir) {
+      const context = { common: this.repo.common, gitDir: a.gitDir, branch: a.branch };
+      invocation = harness.managedInvocation(invocation, context);
+      harness.validateManagedInvocation?.(invocation, context);
+    }
     return shellCommand([invocation.executable, ...invocation.args]);
   }
   workerCommand(change: string, a: TaskAttempt) {
@@ -675,15 +689,30 @@ export class Runner {
       if (!a || a.id !== id || !a.setupDone)
         throw new Error("Worker attempt is not ready; inspect before retrying");
       if (a.worker) {
+        refreshCopilotEvidence(a, this.repo.common);
+        if (a.agent === "copilot" && a.worker.exitedAt && a.worker.exitCode === null && !agentMayBeActive(a)) {
+          a.phase = "failed";
+          this.save(s);
+          return { a, recovered: true };
+        }
         if (a.worker.exitedAt) throw new Error("Worker already exited; inspect its saved report and log");
-        if (a.worker.pid && (!a.worker.processStart || processStart(a.worker.pid) === a.worker.processStart))
+        if (a.worker.processPlatform && a.worker.processPlatform !== process.platform)
+          throw new Error("Worker process identity belongs to another platform; retain resources");
+        if (process.platform === "win32" && a.worker.processStart && /^\d+$/.test(a.worker.processStart))
+          throw new Error("Legacy Linux process identity cannot be recovered on Windows");
+        const observedStart = a.worker.pid ? processStart(a.worker.pid) : undefined;
+        if (a.worker.pid && (!a.worker.processStart || (!observedStart && !processIsGone(a.worker.pid)) || observedStart === a.worker.processStart))
           throw new Error("Worker is still running or its process identity is uncertain");
         a.worker.exitedAt = new Date().toISOString();
         a.worker.exitCode = null;
-        if (!a.report) {
+        if (process.platform === "win32" && a.agent !== "copilot-vscode" && a.worker.pid &&
+            (!a.worker.processStart || !windowsTreeIsGone(a.worker.pid, a.worker.processStart)))
+          a.worker.terminationUncertain = true;
+        if (!a.report || a.agent === "copilot" || a.agent === "copilot-vscode") {
           a.phase = "failed";
           a.error = "Worker supervisor disappeared without an accepted report; inspect the log and explicitly retry";
         }
+        refreshCopilotEvidence(a, this.repo.common);
         this.save(s);
         return { a, recovered: true };
       }
@@ -704,9 +733,11 @@ export class Runner {
         this.repo.common,
         this.prompt(change, a),
         (pid) => {
+          const identity = processStart(pid);
           this.updateAttempt(change, id, (current) => {
             current.worker!.pid = pid;
-            current.worker!.processStart = processStart(pid);
+            current.worker!.processStart = identity;
+            current.worker!.processPlatform = process.platform;
           });
         },
         (update) => this.updateAttempt(change, id, update),
@@ -734,7 +765,11 @@ export class Runner {
         a = this.latest(s, task);
       if (!a || a.id !== id || !active(a) || !a.setupDone)
         throw new Error("Attempt is not ready to begin");
-      const session = requestedSession ?? (a.agent === "codex" ? process.env.CODEX_THREAD_ID : undefined);
+      refreshCopilotEvidence(a, this.repo.common);
+      const copilot = a.agent === "copilot" || a.agent === "copilot-vscode";
+      const session = requestedSession ?? (copilot ? a.observedSession : a.agent === "codex" ? process.env.CODEX_THREAD_ID : undefined);
+      if (copilot && (!a.worker || a.worker.exitedAt || !a.identityConfirmed || session !== a.observedSession))
+        throw new Error("Copilot begin requires matching observed hook identity and live supervision");
       if (!session || !/^[a-zA-Z0-9_-]+$/.test(session))
         throw new Error("begin requires a session identity or --session");
       if (this.repo.root !== a.path)
@@ -830,6 +865,8 @@ export class Runner {
     const s = this.requireState(change),
       a = this.latest(s, task);
     if (!a) throw new Error("No task attempt");
+    if (a.agent === "copilot-vscode") return { attempt: a.id, session: a.observedSession ?? a.session, path: a.path,
+      command: undefined, recovery: "Open this assigned worktree in VS Code and locate the saved chat session. Exact chat resume is unavailable; do not submit another worker prompt." };
     if (a.cleaned || a.worker?.exitedAt || a.terminal.closed || a.report) {
       return { attempt: a.id, session: a.session, terminal: a.terminal, branch: a.branch,
         path: existsSync(a.path) ? a.path : undefined, log: a.worker?.log,
@@ -858,6 +895,28 @@ export class Runner {
     };
   }
   integrate(change: string, ids: string[], mode?: "continue" | "abort") {
+    let result: ReturnType<Runner["integrateCore"]> | undefined;
+    const summaries: ReturnType<typeof safeSummary>[] = [];
+    try { result = this.integrateCore(change, ids, mode); }
+    finally {
+      if (mode !== "abort") {
+        try {
+          const state = this.read(change);
+          for (const task of new Set(state?.attempts.filter(a => a.phase === "integrated").map(a => a.task)))
+            summaries.push(safeSummary({ cwd: this.repo.root, change, task }));
+        } catch { /* Summary failures never replace an integration error. */ }
+      }
+    }
+    if (mode === "abort") return result;
+    let complete = false;
+    try {
+      const feature = readFeature(this.repo.stateDir, change), state = this.read(change);
+      complete = !!(!feature && state && loadPlan(state.integration.path, change).tasks.every(t => this.satisfied(state, t.id)));
+    } catch { /* Post-transition summary assessment is observational and best-effort. */ }
+    const summary = complete ? safeSummary({ cwd: this.repo.root, change }) : undefined;
+    return { ...result, summaries, ...(summary ? { summary } : {}) };
+  }
+  private integrateCore(change: string, ids: string[], mode?: "continue" | "abort") {
     const result = this.lock(() => {
       const s = this.requireState(change),
         path = s.integration.path;
@@ -893,6 +952,8 @@ export class Runner {
         if (a?.phase === "integrated") continue;
         if (!a || a.phase !== "completed" || !a.report)
           throw new Error(`Task ${task} needs a completed report`);
+        const problem = completionProblem(a);
+        if (problem) throw new Error(`Task ${task}: ${problem}`);
         if (feature && (!a.worker?.exitedAt || a.worker.exitCode !== 0))
           throw new Error(`Managed task ${task} requires a successful supervised exit receipt`);
         if (a.worker && !a.worker.exitedAt)

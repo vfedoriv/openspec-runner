@@ -80,7 +80,7 @@ test("reader separates recorded phase report process and terminal", t => {
   a.worker.processStart = processStart(process.pid);
   writeFileSync(join(repo.stateDir, "demo.json"), JSON.stringify(state(root, [a])));
   session = collect(root).sessions[0];
-  assert.equal(session.process, process.platform === "linux" ? "running" : "unknown");
+  assert.equal(session.process, ["linux", "win32"].includes(process.platform) ? "running" : "unknown");
   a.worker.exitedAt = "now";
   writeFileSync(join(repo.stateDir, "demo.json"), JSON.stringify(state(root, [a])));
   assert.equal(collect(root).sessions[0].process, "exited");

@@ -1,7 +1,9 @@
-import { atomic, run } from "./system.js";
+import { atomic } from "./system.js";
 import type { TaskAttempt } from "./runner.js";
 import { shellProcesses } from "./processes.js";
 import { closeOrcaTerminal, inspectOrcaTerminal } from "./orca.js";
+import { samePath } from "./platform-paths.js";
+import { herdrCall as herdr, herdrProcessInfo, herdrScrollback } from "./herdr.js";
 
 export interface TerminalInspection {
   kind: "none" | "manual" | "herdr" | "orca";
@@ -11,12 +13,6 @@ export interface TerminalInspection {
   pane?: string;
   identity?: unknown;
   processInfo?: unknown;
-}
-function herdr(root: string, args: string[]): any {
-  if (process.env.HERDR_ENV !== "1") throw new Error("Reconnect to the saved Herdr session to inspect and close its terminal");
-  const value = JSON.parse(run("herdr", args, root, 10000));
-  if (value.error || !value.result) throw new Error(`Herdr inspection failed: ${JSON.stringify(value)}`);
-  return value.result;
 }
 export function inspectTerminal(root: string, a: TaskAttempt): TerminalInspection {
   if (a.terminal.backend === "orca") return inspectOrcaTerminal(root, a);
@@ -39,12 +35,12 @@ export function inspectTerminal(root: string, a: TaskAttempt): TerminalInspectio
     if (!t.terminal || pane.terminal_id !== t.terminal || pane.workspace_id !== t.workspace)
       throw new Error("Pane identity changed; resolve ownership before closing it");
     if (t.closed) throw new Error("A previously closed pane reappeared; inspect its owner");
-    const info = herdr(root, ["pane", "process-info", t.pane]).process_info;
+    const info = herdrProcessInfo(root, t.pane);
     if (!info || info.pane_id !== t.pane || !Number.isInteger(info.shell_pid) || !Array.isArray(info.foreground_processes))
       throw new Error("Unsupported Herdr process information; inspect and close the terminal manually");
     const processes = shellProcesses(info.shell_pid);
     const busy = !processes || processes.length !== 1 || info.foreground_processes.some((p: any) => p.pid !== info.shell_pid);
-    const changed = (pane.foreground_cwd ?? pane.cwd) !== a.path;
+    const changed = !samePath(pane.foreground_cwd ?? pane.cwd, a.path);
     return { kind: "herdr", pane: t.pane,
       identity: { terminal: pane.terminal_id, workspace: pane.workspace_id, cwd: pane.foreground_cwd ?? pane.cwd },
       processInfo: { ...info, descendants: processes },
@@ -60,7 +56,7 @@ export function closeInspectedTerminal(root: string, a: TaskAttempt, inspected: 
   if (inspected.kind === "orca") return closeOrcaTerminal(root, a, log);
   if (inspected.closed || inspected.kind !== "herdr") return;
   // Save scrollback before the terminal disappears. Codex rollouts remain in Codex storage.
-  atomic(log, herdr(root, ["pane", "read", inspected.pane!, "--lines", "2000"]));
+  atomic(log, herdrScrollback(root, inspected.pane!));
   herdr(root, ["pane", "close", inspected.pane!]);
   const after = inspectTerminal(root, { ...a, terminal: { ...a.terminal, closed: false } });
   if (!after.closed) throw new Error("Terminal closure was not acknowledged; worktree retained");

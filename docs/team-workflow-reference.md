@@ -1,5 +1,7 @@
 # Team workflow: operator reference
 
+See [delivery summary commands](delivery-summary-guide.md) for shared inspection, refresh, publication, export and requested presentation briefs.
+
 This reference is for agents and operators who run the CLI directly.
 It contains command sequences, input schemas, and detailed recovery procedures.
 Start with the [team workflow guide](team-workflow.md) for roles, steps, and process diagrams.
@@ -61,8 +63,12 @@ sequenceDiagram
 
 Use Linux, macOS or WSL, Node.js 22.13+, Git, the runner, and the approved authenticated
 harness. Initialize each component with `openspec-runner init --agent codex` (or
-`claude`/`all`). Init installs six skills, including `openspec-runner-component`.
+`claude`/`all`). Init installs eight skills, including `openspec-runner-component`.
 Commit the generated skills/config and all planning inputs before shared approval.
+
+Delegated execution remains unsupported on native Windows. Version-1 shared
+assignment settings accept only Codex or Claude; local Copilot worker support
+does not extend that contract. See [documented limits](DOCUMENTED_LIMITS.md#7-delegated-execution-has-narrower-support-than-local-workers).
 
 Use an installed OpenSpec build with the required Stores JSON capabilities. Configure
 its Store registration and component references according to the [OpenSpec Stores guide](https://github.com/Fission-AI/OpenSpec/blob/main/docs/stores-beta/user-guide.md).
@@ -243,7 +249,7 @@ runtime resources. Import uses the exact inspected Store revision as expected he
 and materializes immutable context. A newer registered Store checkout does not
 replace the assignment's pinned context. Importing again resumes the same binding;
 changed assignment/owner/settings identities are rejected. For a replacement
-assignment for the same bound change, use the fresh independent clone procedure
+assignment for the same bound change, use the explicit retirement or independent clone procedure
 in [Changes, failures, and recovery](#changes-failures-and-recovery).
 
 Use `$openspec-runner-component` or `/openspec-runner-component` for task execution.
@@ -441,11 +447,13 @@ history or recreate records with different payloads under old IDs.
 ## Post-merge archival
 
 Preview separate scope, show the exact post-merge bases and allowed OpenSpec paths,
-and obtain archive consent. Store archival currently supports only
-`openspec/changes/<shared-change>` at the Store repository root. Nested Store planning
-roots require a component-only scope (`includeStore: false`) or a reviewed plan move
-and renewed approval; diagnostics state this limitation. OpenSpec canonical spec
-updates are included in the approved allowed namespaces and verified after preparation.
+and obtain archive consent. Store archival supports repository-root and nested
+`openspec/changes/<shared-change>` layouts. The preview derives one exact
+`openspecRoot` from the approved contract tasks path; root-level targets omit the
+field for compatibility. Inspect its allowed namespaces. OpenSpec runs in that
+root's parent within the disposable checkout; unrelated sibling trees and unsafe
+or ambiguous roots are rejected. Canonical spec updates within that exact root
+are verified after preparation.
 
 ```sh
 coord archive-approve --file "$INPUT/scope.json" --dry-run --json > "$INPUT/archive-preview.json"
@@ -548,8 +556,8 @@ completed state while unauthorized relevant guidance/context drift requires appr
 | Trigger | Action |
 |---|---|
 | Local import interrupted/reserved | Inspect its binding and resume `component import` with the original assignment/token/history/resources. Do not delete state or use a new identity to hide uncertainty. |
-| Owner changes/assignment revoked | `coord revoke --assignment ID --reason TEXT --dry-run --json`, then real revoke with record/operation IDs and expected head. Assign a new identity under current approval; import the replacement in a fresh independent clone as described below. A locally finished old result may be rejected. |
-| Approved scope/settings/context changes | Commit revised artifacts, preview/approve exact shared snapshot, inspect feature-wide blockers and reconcile plans/assignments. Revoke/reassign stale assignments, then import replacements in fresh independent clones. Do not locally reapprove imported settings or substitute newer mutable Store context. |
+| Owner changes/assignment revoked | `coord revoke --assignment ID --reason TEXT --dry-run --json`, then real revoke with record/operation IDs and expected head. Assign a new identity under current approval; retire the idle local binding before importing the replacement, or use an independent clone as described below. A locally finished old result may be rejected. |
+| Approved scope/settings/context changes | Commit revised artifacts, preview/approve exact shared snapshot, inspect feature-wide blockers and reconcile plans/assignments. Revoke/reassign stale assignments, then explicitly retire idle old bindings or use independent clones for replacements. Do not locally reapprove imported settings or substitute newer mutable Store context. |
 | Blocked/failed owner | Export concrete blocked/failed receipt. Keep result/session recovery local; coordinator imports the claim and reports blocker/next action. |
 | Receipt publication fails | Retain exact export bytes/result branch and retry the explicit Git publication. Do not regenerate a different timestamp/payload under the same receipt ID. |
 | Coordinator publication rejected | Fetch/inspect remote authority, reconcile branch history/ownership and immutable IDs. No force push. A preview token never authorizes publication. |
@@ -570,18 +578,32 @@ coord revoke --assignment assignment-alice-v1 --reason "Owner changed" \
 # Inspect current approval and assign a new ID; never edit the old assignment.
 ```
 
-An implementation clone already bound to this change keeps its original assignment.
-For the replacement, create a fresh **independent clone** of the implementation
-repository, retrieve the replacement assignment's exact approved base and committed
-plan plus the Store's authoritative coordination history through the authorized Git
-handoff, and check out that base. Verify the repository identity. Create fresh local
-resources and a machine repository map for the new clone; update the Store/implementation
-paths used by the handoff commands. Run the normal `component inspect`, preview/import
-and `component status` sequence with the replacement ID, owner, resource file and exact
-inspected history revision. A new worktree sharing the old clone's Git common directory
-is insufficient: the binding and runtime live in that common directory. Retain the old
-clone, runtime, worktrees and logs while any jobs, verification uncertainty or evidence
-remain unresolved. Do not delete its binding to force replacement.
+An implementation clone retains its binding until explicit local retirement.
+Once all owned work has stopped with certain exit evidence, preview and confirm:
+
+```sh
+component retire --change implement-checkout-promo-api \
+  --assignment assignment-alice-v1 --owner alice --reason "Replace revoked assignment" \
+  --dry-run --json > "$INPUT/retirement-preview.json"
+component retire --change implement-checkout-promo-api \
+  --assignment assignment-alice-v1 --owner alice --reason "Replace revoked assignment" \
+  --confirm "$(field "$INPUT/retirement-preview.json" token)" --json
+```
+
+These commands use the earlier `component` wrapper and require no expected-head.
+Retirement preserves the original binding/feature/runner bytes in the returned
+`evidencePath`, removes only their exact active state, and retains all resources,
+logs, reports, context and exports. The tombstone blocks reuse of the retired ID.
+If interrupted, repeat the same confirmed command; changed bytes stop recovery.
+Incomplete imports, active/uncertain jobs or terminals, integration, cleanup and
+archival must be resolved first. Retirement never revokes or approves shared work.
+
+Retrieve the replacement's exact approved base, committed plan and authoritative
+Store history through the authorized Git handoff, then check out that base and
+run normal inspect/import with the different assignment ID and owner. An independent
+clone is still available when old work cannot safely be retired. A worktree shares
+the old Git common directory and binding. Keep the retirement journal and retained
+resources; there is no automatic removal of historical worktrees.
 
 Version 1 approval renewal starts a **feature-wide approval epoch**. Historical merges
 remain inspectable, but results under the old approval do not automatically remain live
@@ -589,8 +611,7 @@ accepted/merged dependency milestones. Inspect `coord status --json` blockers fo
 component, reconcile the approved plans and assignments, and obtain revised plans plus
 renewed approval before further implementation of a merged component. Old combined/final
 reviews and completion consent do not carry forward; review the current exact tuple and
-obtain new consent when required. There is no automatic authority inheritance or local
-reset/retirement API for a replacement binding.
+obtain new consent when required. Local retirement does not grant automatic authority inheritance or reset shared history.
 
 For a delivery mismatch, keep all merge inputs identical between preview and
 attestation/recording. Set the actual style (`squash` or `rebase`) explicitly:
@@ -670,9 +691,12 @@ component commands take feature ID, `--store PATH --repository ID` and optional
 |---|---|---|
 | inspect | assignment, owner, optional `--file RESOURCES --revision SHA` | read-only |
 | import | assignment, owner, optional resource file, expected inspected history SHA/token | yes |
+| retire | change, old assignment/owner, reason, local confirmation token | yes; no expected-head |
 | status | `--change CHANGE`, optional revision | read-only |
 | export | change, outcome, optional reason, IDs/operation/output/expected inspected history SHA/token | yes; output only written by mutation |
 
 The complete CLI lifecycle, generated input schema, independent clones, pure
 previews, immutable export retries, read-only record inspection, offline replay and
 archive inspection/recovery are exercised in `test/coordination-cli.test.mjs`.
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

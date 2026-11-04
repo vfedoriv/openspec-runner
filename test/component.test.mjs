@@ -1,12 +1,13 @@
-import test from "node:test";
+import { delegatedContextTest as test } from "./helpers/native-support.mjs";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, readdirSync, lstatSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, readdirSync, lstatSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { featureFixture, featureSettings, git, executable, blocker } from "./helpers/feature-fixture.mjs";
 import { execFileSync } from "node:child_process";
 import { Coordination } from "../dist/coordination.js";
 import { Component } from "../dist/component.js";
 import { Feature } from "../dist/feature.js";
+import { Runner } from "../dist/runner.js";
 
 function fixture(t, options = {}) {
   let dir;
@@ -35,6 +36,162 @@ function fixture(t, options = {}) {
   const imported = () => { approve(); assign(); const component = new Component({ root: f.root, repository: "api" }); const input = { storeRoot, featureId: "feature", assignmentId: "assignment", owner: "alice" }; return { component, input }; };
   return { ...f, c, storeRoot, contract, manifest, approve, assign, imported };
 }
+
+test("retirement preserves evidence and lets a different assignment reuse the clone", async t => {
+  const f = fixture(t), { component, input } = f.imported(), preview = await component.inspect(input);
+  const binding = await component.import({ ...input, token: preview.token });
+  const integration = f.f.runner.read("demo").integration;
+  const execution = f.f.runner.read("demo");
+  execution.attempts.push({ id: "old-attempt", task: "1.1", phase: "failed", agent: "codex", batch: "old-batch", terminal: {}, error: "Preparation failed before launch" });
+  execution.batches.push({ id: "old-batch", harness: "codex", attempts: ["old-attempt"] }); f.f.runner.save(execution);
+  const args = { change: "demo", assignmentId: "assignment", owner: "alice", reason: "Replace assignment" };
+  const before = readFileSync(join(f.f.repo.stateDir, "features/demo.json"), "utf8");
+  const p = component.retirementPreview(args);
+  assert.equal(component.readBinding({ change: "demo" }).phase, "ready");
+  assert.throws(() => component.retire({ ...args, token: "wrong" }), /token|stale/i);
+  const result = component.retire({ ...args, token: p.token });
+  assert.equal(result.phase, "retired");
+  assert.equal(JSON.parse(readFileSync(result.evidencePath, "utf8")).snapshot.feature, before);
+  assert.equal(existsSync(integration.path), true);
+  assert.equal(existsSync(binding.contextPaths[0]), true);
+  assert.equal(component.retire({ ...args, token: p.token }).phase, "retired");
+  assert.throws(() => f.f.runner.preview("demo", ["1.1"]), /retired|binding|import/i);
+  await assert.rejects(component.import({ ...input, token: preview.token }), /retired/i);
+  f.c.revoke({ assignmentId: "assignment", reason: "Replace", id: "revoke-old", operationId: "op-revoke-old", expectedHead: git(f.storeRoot, "rev-parse", "HEAD") });
+  const next = f.c.assignmentPreview({ componentId: "api", owner: "bob", contract: f.contract });
+  f.c.assign({ componentId: "api", owner: "bob", contract: f.contract, token: next.token, id: "replacement", operationId: "op-replacement", expectedHead: next.head });
+  const replacement = { ...input, assignmentId: "replacement", owner: "bob" }, rp = await component.inspect(replacement);
+  await component.import({ ...replacement, token: rp.token });
+  assert.equal(component.readBinding({ change: "demo" }).assignmentId, "replacement");
+  assert.notEqual(f.f.runner.read("demo").integration.path, integration.path);
+  assert.throws(() => f.f.runner.begin("demo", "1.1", "old-attempt", "old-session"), /ready|attempt/i);
+  await assert.rejects(f.f.runner.worker("demo", "1.1", "old-attempt"), /ready|attempt/i);
+  assert.throws(() => component.retire({ ...args, token: p.token }), /assignment|identity/i);
+  assert.equal(JSON.parse(readFileSync(result.evidencePath, "utf8")).snapshot.feature, before);
+});
+
+test("retirement rejects active workers, uncertain termination, and pending integration", async t => {
+  const f = fixture(t), { component, input } = f.imported(), p = await component.inspect(input);
+  await component.import({ ...input, token: p.token });
+  const args = { change: "demo", assignmentId: "assignment", owner: "alice", reason: "Stop" };
+  const r = f.f.runner.read("demo"), original = structuredClone(r);
+  r.transaction = { phase: "merging" }; f.f.runner.save(r);
+  assert.throws(() => component.retirementPreview(args), /integration|transaction/i);
+  delete r.transaction;
+  r.attempts = [{ id: "old", task: "1.1", agent: "codex", batch: "old", phase: "running", terminal: {} }];
+  r.batches = [{ id: "old", harness: "codex", attempts: ["old"] }]; f.f.runner.save(r);
+  assert.throws(() => component.retirementPreview(args), /active/i);
+  r.attempts[0].phase = "failed"; r.attempts[0].worker = { exitedAt: new Date().toISOString(), terminationUncertain: true }; f.f.runner.save(r);
+  assert.throws(() => component.retirementPreview(args), /uncertain|active/i);
+  f.f.runner.save(original);
+  const featureFile = join(f.f.repo.stateDir, "features/demo.json"), s = JSON.parse(readFileSync(featureFile));
+  s.transaction = { phase: "checking" }; writeFileSync(featureFile, JSON.stringify(s));
+  assert.throws(() => component.retirementPreview(args), /integration|transaction/i);
+  delete s.transaction; writeFileSync(featureFile, JSON.stringify(s));
+  const fresh = component.retirementPreview(args);
+  s.error = "State changed after preview"; writeFileSync(featureFile, JSON.stringify(s));
+  assert.throws(() => component.retire({ ...args, token: fresh.token }), /stale|token/i);
+});
+
+test("retirement resumes after partial state removal and rejects changed evidence", async t => {
+  const f = fixture(t), { component, input } = f.imported(), p = await component.inspect(input);
+  await component.import({ ...input, token: p.token });
+  const args = { change: "demo", assignmentId: "assignment", owner: "alice", reason: "Replace" }, rp = component.retirementPreview(args);
+  // Simulate a crash after durable intent and one exact active-file removal.
+  const bindingPath = join(f.f.repo.stateDir, "components/demo.json"), binding = component.readBinding({ change: "demo" });
+  const journal = { version: 1, input: args, token: rp.token, snapshot: rp.snapshot };
+  mkdirSync(join(f.f.repo.stateDir, "component-retirements/feature"), { recursive: true });
+  writeFileSync(rp.evidencePath, JSON.stringify(journal));
+  binding.phase = "retiring"; binding.retirement = { token: rp.token, reason: args.reason };
+  writeFileSync(bindingPath, JSON.stringify(binding)); unlinkSync(join(f.f.repo.stateDir, "features/demo.json"));
+  assert.throws(() => f.f.runner.preview("demo", ["1.1"]), /binding|import|retir/i);
+  const runnerPath = f.f.runner.path("demo"), original = readFileSync(runnerPath, "utf8");
+  writeFileSync(runnerPath, original + "\n");
+  assert.throws(() => component.retire({ ...args, token: rp.token }), /changed|differ/i);
+  writeFileSync(runnerPath, original);
+  assert.equal(component.retire({ ...args, token: rp.token }).phase, "retired");
+});
+
+test("component retirement CLI previews without writing and confirms exact local identity", async t => {
+  const f = fixture(t), { component, input } = f.imported(), p = await component.inspect(input);
+  await component.import({ ...input, token: p.token });
+  const cli = new URL("../bin/openspec-runner.js", import.meta.url);
+  const args = [cli.pathname, "component", "retire", "feature", "--store", f.storeRoot, "--root", f.root,
+    "--repository", "api", "--change", "demo", "--assignment", "assignment", "--owner", "alice", "--reason", "Reassign", "--json"];
+  const before = readFileSync(join(f.f.repo.stateDir, "components/demo.json"), "utf8");
+  const preview = JSON.parse(execFileSync(process.execPath, [...args, "--dry-run"], { encoding: "utf8" }));
+  assert.equal(preview.action, "retire"); assert.equal(preview.phase, "ready");
+  assert.equal(existsSync(preview.evidencePath), false);
+  assert.equal(readFileSync(join(f.f.repo.stateDir, "components/demo.json"), "utf8"), before);
+  const retired = JSON.parse(execFileSync(process.execPath, [...args, "--confirm", preview.token], { encoding: "utf8" }));
+  assert.equal(retired.phase, "retired"); assert.equal(existsSync(retired.evidencePath), true);
+});
+
+test("retirement blocks incomplete import and late import cannot reactivate a retired binding", async t => {
+  const f = fixture(t), { component, input } = f.imported(), p = await component.inspect(input);
+  await component.import({ ...input, token: p.token });
+  const args = { change: "demo", assignmentId: "assignment", owner: "alice", reason: "Replace" };
+  const path = join(f.f.repo.stateDir, "components/demo.json"), binding = component.readBinding({ change: "demo" });
+  writeFileSync(path, JSON.stringify({ ...binding, phase: "reserved" }));
+  assert.throws(() => component.retirementPreview(args), /import|reserved|incomplete/i);
+  writeFileSync(path, JSON.stringify(binding));
+  const bind = Feature.prototype.bindAssignment;
+  Feature.prototype.bindAssignment = function(options) {
+    const result = bind.call(this, options), preview = component.retirementPreview(args);
+    component.retire({ ...args, token: preview.token });
+    return result;
+  };
+  try { await assert.rejects(component.import({ ...input, token: p.token }), /retir|changed/i); }
+  finally { Feature.prototype.bindAssignment = bind; }
+  assert.equal(component.readBinding({ change: "demo" }).phase, "retired");
+});
+
+test("import rechecks retirement after asynchronous inspection before reserving execution", async t => {
+  const f = fixture(t), { component, input } = f.imported(), p = await component.inspect(input);
+  await component.import({ ...input, token: p.token });
+  const inspect = component.inspect.bind(component);
+  component.inspect = async options => {
+    const preview = await inspect(options);
+    const args = { change: "demo", assignmentId: "assignment", owner: "alice", reason: "Retire during inspection" };
+    component.retire({ ...args, token: component.retirementPreview(args).token });
+    return preview;
+  };
+  await assert.rejects(component.import({ ...input, token: p.token }), /retir/i);
+  assert.equal(component.readBinding({ change: "demo" }).phase, "retired");
+});
+
+test("in-flight reimport cannot recreate state after retirement between import locks", async t => {
+  const f = fixture(t), { component, input } = f.imported(), p = await component.inspect(input);
+  await component.import({ ...input, token: p.token });
+  const args = { change: "demo", assignmentId: "assignment", owner: "alice", reason: "Retire between import stages" };
+  const lock = Runner.prototype.lock; let count = 0, armed = true;
+  Runner.prototype.lock = function(fn) {
+    const result = lock.call(this, fn);
+    if (armed && ++count === 2) { armed = false; component.retire({ ...args, token: component.retirementPreview(args).token }); }
+    return result;
+  };
+  try { await assert.rejects(component.import({ ...input, token: p.token }), /retir|binding/i); }
+  finally { Runner.prototype.lock = lock; }
+  assert.equal(f.f.runner.read("demo"), undefined);
+  assert.equal(component.readBinding({ change: "demo" }).phase, "retired");
+});
+
+test("late task reports cannot change active state during interrupted retirement", async t => {
+  const f = fixture(t), { component, input } = f.imported(), p = await component.inspect(input);
+  await component.import({ ...input, token: p.token });
+  const state = f.f.runner.read("demo");
+  state.attempts = [{ id: "late-report", task: "1.1", phase: "failed", agent: "codex", batch: "old", path: state.integration.path,
+    terminal: {}, session: "old-session", worker: { exitedAt: new Date().toISOString(), exitCode: 1 } }];
+  state.batches = [{ id: "old", harness: "codex", attempts: ["late-report"] }]; f.f.runner.save(state);
+  const args = { change: "demo", assignmentId: "assignment", owner: "alice", reason: "Retire stopped worker" }, rp = component.retirementPreview(args);
+  mkdirSync(join(f.f.repo.stateDir, "component-retirements/feature"), { recursive: true });
+  writeFileSync(rp.evidencePath, JSON.stringify({ version: 1, input: args, token: rp.token, snapshot: rp.snapshot }));
+  const binding = component.readBinding({ change: "demo" }); binding.phase = "retiring"; binding.retirement = { token: rp.token, reason: args.reason };
+  writeFileSync(join(f.f.repo.stateDir, "components/demo.json"), JSON.stringify(binding));
+  const reporter = new Runner(state.integration.path);
+  assert.throws(() => reporter.report("demo", "1.1", "late-report", { attempt: "late-report", task: "1.1", session: "old-session", outcome: "failed", summary: "Late", verification: ["Stopped"] }), /retir/i);
+  assert.equal(component.retire({ ...args, token: rp.token }).phase, "retired");
+});
 
 test("approval previews bind committed context, base, full resolved settings and explicit consent", t => {
   const f = fixture(t), p = f.c.approvalPreview({ contract: f.contract });

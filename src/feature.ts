@@ -4,11 +4,14 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Runner, decodeState } from "./runner.js";
 import { loadPlan, assertCommitted, readiness, type Plan } from "./plan.js";
-import { atomic, clean, git, json, run, shellCommand, attempt } from "./system.js";
+import { atomic, clean, git, json, run, shellCommand, quote, attempt, workerRunnerCommand } from "./system.js";
 import { createWorktree, startTerminal, terminalAdapter } from "./adapters.js";
 import { superviseWorker, type SupervisedSession } from "./worker.js";
 import { processStart } from "./processes.js";
+import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import { getHarness } from "./harnesses/registry.js";
+import { completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
+import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import {
   readFeature, saveFeature, featurePath, featureActive, activeFeatureJobs, blocking, digest,
@@ -25,7 +28,7 @@ export interface FeatureSettings {
 const now = () => new Date().toISOString();
 const nonempty = (v: unknown): v is string => typeof v === "string" && !!v.trim();
 const taskActive = (s: ReturnType<Runner["read"]>) => s?.attempts.some(a =>
-  ["preparing", "manual", "launching", "running"].includes(a.phase) || !!(a.worker && !a.worker.exitedAt));
+  ["preparing", "manual", "launching", "running"].includes(a.phase) || agentMayBeActive(a));
 
 export function resolveFeatureApprovalSettings(options: { plan: Plan; input: { implementation: HarnessSettings; review: HarnessSettings; repair: HarnessSettings; tasks?: Record<string, HarnessSettings> } }) {
   const p = options.plan, input = options.input;
@@ -36,7 +39,7 @@ export function resolveFeatureApprovalSettings(options: { plan: Plan; input: { i
       throw new Error(`${role} requires an explicit harness/model and optional effort`);
     const adapter = getHarness(spec.harness);
     const settings = adapter.resolveSettings({ model: spec.model, effort: spec.effort ?? spec.reasoningEffort, reasoningEffort: spec.harness === "codex" ? spec.effort ?? spec.reasoningEffort : undefined, dependsOn: [], parallel: false },
-      undefined, p.config.agents[spec.harness]);
+      spec.harness.startsWith("copilot") ? spec : undefined, p.config.agents[spec.harness]);
     if (spec.harness === "codex" && !(settings.effort ?? settings.reasoningEffort))
       throw new Error("Resolve an explicit Codex effort before plan approval");
     return { ...settings, ...spec, harness: spec.harness,
@@ -85,20 +88,25 @@ export class Feature {
       this.save(state);
       return state;
     });
-    this.runner.lock(() => {
-      if (this.runner.read(options.change)) return;
+    let r = this.runner.lock(() => {
+      const current = this.read(options.change);
+      if (current.delegated?.assignmentDigest !== options.delegated.assignmentDigest) throw new Error("Delegated binding changed during import");
+      const existing = this.runner.read(options.change);
+      if (existing) return existing;
       const p = loadPlan(this.repo.root, options.change), id = options.delegated.assignmentId;
       this.runner.save({ version: 2, change: options.change, fingerprint: saved.approval!.fingerprint, head: saved.approval!.base,
         integration: { branch: `openspec-runner/${options.change}/delegated-${id}/integration`,
           path: resolve(options.delegated.resources.worktreeRoot, `${options.change}-delegated-${id}-integration`), base: saved.approval!.base },
         baseline: p.tasks.filter(t => t.completed).map(t => t.id), planTasks: p.tasks.map(t => t.id), attempts: [], batches: [] });
+      return this.execution(current);
     });
-    let r = this.execution(saved);
     const exclude = resolve(this.repo.common, "info/exclude"), text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
     if (!text.split(/\r?\n/).includes(".openspec-runner/")) writeFileSync(exclude, `${text}\n.openspec-runner/\n`);
     const workspace = createWorktree(this.repo.root, { ...r.integration, base: r.head }, options.delegated.resources.worktrees);
     this.runner.lock(() => {
-      const state = this.execution(saved); state.integration = workspace; this.runner.save(state); r = state;
+      const current = this.read(options.change);
+      if (current.delegated?.assignmentDigest !== options.delegated.assignmentDigest) throw new Error("Delegated binding changed during import");
+      const state = this.execution(current); state.integration = workspace; this.runner.save(state); r = state;
     });
     if (git(r.integration.path, "symbolic-ref", "--short", "HEAD") !== r.integration.branch || git(r.integration.path, "rev-parse", "HEAD") !== r.head || !clean(r.integration.path))
       throw new Error("Delegated integration reservation changed; inspect before recovery");
@@ -160,6 +168,8 @@ export class Feature {
     if (job.phase !== "completed" || job.report?.outcome !== "completed" ||
         !job.worker?.exitedAt || job.worker.exitCode !== 0)
       throw new Error("Job requires an accepted report and successful supervised exit");
+    const problem = completionProblem(job);
+    if (problem) throw new Error(problem);
     if (job.agent === "claude" && (!job.identityConfirmed || !job.terminalEvidence ||
         job.terminalEvidence.metadata?.is_error === true || job.terminalEvidence.subtype?.startsWith("error")))
       throw new Error("Job lacks successful confirmed Claude session evidence");
@@ -313,9 +323,10 @@ export class Feature {
           (previous.role !== "review" || clean(previous.path) && git(previous.path, "rev-parse", "HEAD") === previous.base))
         throw new Error("Successful job cannot be retried at the same commit");
     }
+    const worktrees = s.delegated?.resources.worktrees ?? p.config.worktrees;
     return { role, head: r.head, base: s.approval!.base, fingerprint: p.fingerprint,
       settings: s.approval![role], findings, round: role === "repair" ? s.fixRounds + 1 : s.fixRounds,
-      terminal: terminalAdapter(s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees: s.delegated?.resources.worktrees ?? p.config.worktrees };
+      terminal: terminalAdapter(s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees };
   }
   launch(change: string, role: "review" | "repair", retry = false) {
     const reserved = this.runner.lock(() => {
@@ -323,7 +334,7 @@ export class Feature {
       const job: FeatureJob = { id, role, findings: preview.findings, round: preview.round,
         approvalToken: s.approval!.token,
         fingerprint: preview.fingerprint, settings: preview.settings, agent: preview.settings.harness,
-        harness: preview.settings.harness, expectedSession: preview.settings.harness === "claude" ? randomUUID() : undefined,
+        harness: preview.settings.harness, expectedSession: (preview.settings.harness === "claude" || getHarness(preview.settings.harness).lifecycle?.reservedSession) ? randomUUID() : undefined,
         path: resolve(s.delegated?.resources.worktreeRoot ?? resolve(s.planningRoot, ".openspec-runner/worktrees"), id), branch: `openspec-runner/${change}/${role}/${id}`,
         base: preview.head, parallel: false, phase: "preparing", terminal: {} };
       s.jobs.push(job); s.phase = role === "review" ? "reviewing" : "fixing";
@@ -376,18 +387,24 @@ export class Feature {
   prompt(change: string, j: FeatureJob) {
     const s = this.read(change), skill = `openspec-runner-${j.role === "review" ? "review" : "repair"}`;
     const input = resolve(dirname(j.path), "reports", `${j.id}-input.json`);
-    return `${j.agent === "claude" ? "/" : "Use $"}${skill}\nChange: ${change}\nAttempt: ${j.id}\n` +
-      `First run: openspec-runner feature begin ${change} --attempt ${j.id}${j.expectedSession ? ` --session ${j.expectedSession}` : ""}\n` +
+    const begin = workerRunnerCommand(["feature", "begin", change, "--attempt", j.id,
+      ...(j.expectedSession ? ["--session", j.expectedSession] : [])], j.agent ?? "codex");
+    const report = workerRunnerCommand(["feature", "report", change, "--attempt", j.id, "--file", input], j.agent ?? "codex");
+    return `${j.agent === "claude" || getHarness(j.agent).lifecycle?.ownership === "hook" ? "/" : "Use $"}${skill}\nChange: ${change}\nAttempt: ${j.id}\n` +
+      `First run: ${begin}\n` +
       `Review base: ${s.approval!.base}\nHead: ${j.base}\nFingerprint: ${j.fingerprint}\n` +
       `Role: ${j.role}. ${j.role === "review" ? "Review the entire feature; do not edit tracked files." : "Repair only the supplied blockers; do not change planning artifacts or checkboxes. Commit repairs."}\n` +
       `Findings/history: ${JSON.stringify(j.role === "repair" ? j.findings : s.jobs.filter(x => x.role === "review" && x.id !== j.id).at(-1)?.report?.findings ?? [])}\n` +
-      `Report fields: attempt, session, outcome (completed/blocked/failed), head (${j.base}), fingerprint (${j.fingerprint}), summary, verification (nonempty strings), ` +
+      `Report fields: attempt, session (use the session returned by begin), outcome (completed/blocked/failed), head (${j.base}), fingerprint (${j.fingerprint}), summary, verification (nonempty strings), ` +
       `${j.role === "review" ? "findings (array of {id, category: correctness/security/spec/verification/style/improvement, location, impact, correction})" : "commit (full HEAD SHA for completed repairs)"}.\n` +
-      `Write JSON at ${input}; submit: openspec-runner feature report ${change} --attempt ${j.id} --file ${shellCommand([input])}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
+      `Write JSON at ${input}; submit: ${report}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
   }
   begin(change: string, id: string, session?: string) {
     return this.updateJob(change, id, j => {
-      const identity = session ?? (j.agent === "codex" ? process.env.CODEX_THREAD_ID : undefined);
+      refreshCopilotEvidence(j, this.repo.common);
+      const copilot = j.agent === "copilot" || j.agent === "copilot-vscode";
+      const identity = session ?? (copilot ? j.observedSession : j.agent === "codex" ? process.env.CODEX_THREAD_ID : undefined);
+      if (copilot && (!j.identityConfirmed || identity !== j.observedSession)) throw new Error("Copilot begin requires observed hook identity");
       if (!j.setupDone || !j.worker || j.worker.exitedAt || !["manual", "launching", "running"].includes(j.phase))
         throw new Error("Feature worker must be supervised and ready before begin");
       if (this.repo.root !== j.path || !identity || !/^[a-zA-Z0-9_-]+$/.test(identity) ||
@@ -428,7 +445,8 @@ export class Feature {
     let exitCode: number | null = null, failure: unknown;
     try {
       exitCode = await superviseWorker(j, this.repo.common, this.prompt(change, j), pid => {
-        this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = processStart(pid); });
+        const identity = processStart(pid);
+        this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = identity; current.worker!.processPlatform = process.platform; });
       }, (fn: (current: SupervisedSession) => void) => { this.updateJob(change, id, fn); });
     } catch (error) { failure = error; }
     this.update(change, s => {
@@ -450,14 +468,30 @@ export class Feature {
     return this.update(change, s => {
       const j = s.jobs.find(j => j.id === id);
       if (!j || j.phase === "integrated") throw new Error("No recoverable feature job");
-      if (j.worker?.exitedAt) throw new Error("Job already exited; inspect and explicitly retry");
+      refreshCopilotEvidence(j, this.repo.common);
+      if (j.agent === "copilot-vscode" && agentMayBeActive(j))
+        throw new Error("Editor agent activity is uncertain; retain its worktree and inspect the saved chat");
+      if (j.worker?.exitedAt) {
+        if (j.agent === "copilot" && j.worker.exitCode === null && !agentMayBeActive(j)) {
+          j.phase = "failed";
+          return;
+        }
+        if (j.agent !== "copilot-vscode" || !j.terminalEvidence) throw new Error("Job already exited; inspect and explicitly retry");
+        j.phase = "failed"; j.error = "Editor turn stop confirmed after supervisor exit; inspect and explicitly retry";
+        return;
+      }
       if (j.worker?.pid) {
-        if (!j.worker.processStart || process.platform !== "linux" || processStart(j.worker.pid) === j.worker.processStart)
+        const observedStart = processStart(j.worker.pid);
+        if (!j.worker.processStart || (j.worker.processPlatform && j.worker.processPlatform !== process.platform) ||
+            (process.platform === "win32" && /^\d+$/.test(j.worker.processStart)) || (!observedStart && !processIsGone(j.worker.pid)) || observedStart === j.worker.processStart)
           throw new Error("Worker is running or process identity is uncertain; retain its resources");
         j.worker.exitedAt = now(); j.worker.exitCode = null;
+        if (process.platform === "win32" && j.agent !== "copilot-vscode" && !windowsTreeIsGone(j.worker.pid, j.worker.processStart))
+          j.worker.terminationUncertain = true;
       } else if (j.worker || j.terminal.phase || j.session)
         throw new Error("Startup is ambiguous; inspect saved process/terminal evidence before recovery");
       j.phase = "failed";
+      recoverCopilotLauncher(j);
       s.error = j.error = "Interrupted job; inspect retained resources and explicitly retry";
     });
   }
@@ -552,6 +586,10 @@ export class Feature {
     return { ...preview, approved: s.finalApproval?.token === preview.token };
   }
   archive(change: string) {
+    const result = this.archiveCore(change);
+    return { ...result, summary: safeSummary({ cwd: this.repo.root, change }) };
+  }
+  private archiveCore(change: string) {
     return this.runner.lock(() => {
       const s = this.read(change), r = this.execution(s), path = r.integration.path;
       if (s.delegated) throw new Error("Delegated assignment cannot archive or complete the shared feature");

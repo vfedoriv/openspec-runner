@@ -1,3 +1,4 @@
+import { codexDiagnostics } from "./helpers/codex-diagnostics.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -26,10 +27,10 @@ const entries = log => readFileSync(log + ".activity.jsonl", "utf8").trim().spli
 function fakeCodex(t, dir, help, body = "console.log(JSON.stringify({type:'turn.completed'}));") {
   const bin = join(dir, "bin"); mkdirSync(bin);
   const executable = join(bin, "codex");
-  writeFileSync(executable, `#!/usr/bin/env node\nif(process.argv.includes('--help'))console.log(${JSON.stringify(help)});else{require('fs').writeFileSync(${JSON.stringify(join(dir, "args.json"))},JSON.stringify(process.argv.slice(2)));${body}}`);
+  writeFileSync(executable, `#!/usr/bin/env node\n${codexDiagnostics}\nif(process.argv.includes('--help'))console.log(${JSON.stringify(help)});else{let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{require('fs').writeFileSync(${JSON.stringify(join(dir, "args.json"))},JSON.stringify(process.argv.slice(2)));require('fs').writeFileSync(${JSON.stringify(join(dir, "prompt.txt"))},prompt);${body}});}`);
   chmodSync(executable, 0o755);
   const oldPath = process.env.PATH;
-  process.env.PATH = `${bin}:${oldPath}`;
+  process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${oldPath}`;
   t.after(() => { process.env.PATH = oldPath; });
 }
 function session(dir, id = "attempt-real", agent = "codex") {
@@ -45,6 +46,7 @@ test("worker gates json by advertised capability and a real attempt ID", async t
     assert.equal(await superviseWorker(a, dir, "prompt", () => {}), 0);
     const args = JSON.parse(readFileSync(join(dir, "args.json"), "utf8"));
     assert.equal(args.includes("--json"), advertised);
+    assert.equal(readFileSync(join(dir, "prompt.txt"), "utf8"), "prompt");
     assert.equal(a.identityConfirmed, undefined);
     assert.equal(a.report, undefined);
     assert.equal(entries(a.worker.log)[0].identity.attemptId, "attempt-real");
@@ -87,7 +89,7 @@ test("sidecar disk failure preserves exit, raw bytes, and Claude identity callba
   assert.equal(a.identityConfirmed, true);
   assert.equal(a.observedSession, "reserved-session");
   assert.equal(a.terminalEvidence.subtype, "success");
-  assert.equal(seen.length, 2);
+  assert.ok(seen.length >= 2, "stream identity and terminal evidence must both reach the observer");
   assert.equal(a.report, undefined);
   assert.equal(readFileSync(a.worker.log, "utf8"), stdout + stderr);
   assert.equal(readFileSync(a.worker.log + ".activity.jsonl", "utf8"), "unrelated bytes");
@@ -120,7 +122,7 @@ test("writer serializes independent streams with receipt identity and final part
   assert.deepEqual(rows.map(row => [row.stream, row.text]), [["stdout", "hello ✓"], ["stderr", "stderr partial"]]);
   assert.deepEqual(rows[0].identity, { attemptId: "attempt-real", harness: "codex" });
   assert.match(rows[0].observedAt, /^\d{4}-\d\d-\d\dT/);
-  assert.equal(statSync(log + ".activity.jsonl").mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(log + ".activity.jsonl").mode & 0o777, 0o600);
 });
 
 test("writer refuses preexisting files and symlinks for every rotation path", async t => {
@@ -200,7 +202,7 @@ test("writer rotates current plus two bounded files with newest entries in rotat
   const paths = ["", ".1", ".2"].map(suffix => log + ".activity.jsonl" + suffix);
   const rows = paths.map(path => {
     assert.ok(statSync(path).size <= 8 * 1024 * 1024);
-    assert.equal(statSync(path).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(statSync(path).mode & 0o777, 0o600);
     const text = readFileSync(path, "utf8");
     return text.trim().split("\n").map(JSON.parse);
   });

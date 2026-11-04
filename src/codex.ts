@@ -79,11 +79,17 @@ export function codexArgs(
   ];
 }
 export async function models(): Promise<unknown[]> {
+  const { resolveCommand } = await import("./platform-command.js");
+  const { observeProcess, stopOwnedProcess } = await import("./platform-process.js");
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("codex", ["app-server", "--stdio"], {
+    const command = resolveCommand({ executable: "codex", args: ["app-server", "--stdio"], cwd: process.cwd() });
+    const child = spawn(command.executable, command.args, {
+      env: command.env, windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const lines = createInterface({ input: child.stdout });
+    let identity: string | undefined;
+    child.once("spawn", () => { identity = observeProcess(child.pid!)?.createdAt; });
     const entries: unknown[] = [];
     let request = 1;
     let done = false;
@@ -92,8 +98,18 @@ export async function models(): Promise<unknown[]> {
       done = true;
       clearTimeout(timer);
       lines.close();
-      child.kill();
-      error ? reject(error) : resolvePromise(entries);
+      void (async () => {
+        if (child.pid && identity) {
+          const stopping = stopOwnedProcess({ pid: child.pid, createdAt: identity, timeoutMs: 3000 });
+          child.stdin.end();
+          const result = await stopping;
+          if (result.uncertain) error ??= new Error("Codex app-server termination is uncertain; inspect the discovery process");
+        } else if (child.pid && child.exitCode === null && child.signalCode === null) {
+          child.stdin.end();
+          error ??= new Error("Codex app-server process identity could not be confirmed");
+        }
+        error ? reject(error) : resolvePromise(entries);
+      })().catch(reject);
     };
     const timer = setTimeout(
       () =>

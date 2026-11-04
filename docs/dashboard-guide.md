@@ -1,5 +1,7 @@
 # Dashboard guide
 
+Feature/task details include saved [delivery summary status](delivery-summary-guide.md) and display-only inspection, refresh and export commands.
+
 The console dashboard shows runner progress, blockers, worker sessions, and
 shared assignments in your terminal. Use it to inspect evidence and preview
 next steps while your coordinating session operates the runner.
@@ -22,7 +24,10 @@ dry-run preview. Execution and approvals remain in the CLI or coordinating sessi
 
 ## Open the dashboard
 
-Use Linux, macOS, or WSL with Node.js 22.13 or newer. Follow the
+Use Linux, macOS, WSL, or native Windows with Node.js 22.13 or newer. Native
+Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and
+Orca terminals; run returned commands in PowerShell 7. Delegated component
+execution remains unsupported on Windows. Follow the
 [installation guide](../README.md#install-into-a-target-project) first if the
 runner is not available. From the target project's Git repository:
 
@@ -450,3 +455,5 @@ For execution problems after leaving the dashboard, use the
 [recovery reference](../README.md#recovery-and-plan-changes) and
 [CLI troubleshooting](../README.md#troubleshooting). To return to the documentation
 index, see [all guides](README.md).
+
+Copilot CLI (`copilot`) and VS Code Copilot (`copilot-vscode`) can execute runner-managed workers. See the [Copilot setup and verification guide](COPILOT_SUPPORT_VERIFICATION.md) for model selection, native hooks, completion evidence, and recovery.

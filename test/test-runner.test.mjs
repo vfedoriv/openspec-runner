@@ -8,6 +8,18 @@ import { fileURLToPath } from "node:url";
 
 const runner = fileURLToPath(new URL("./helpers/run-tests.mjs", import.meta.url));
 
+test("literal test globs and explicit duplicates execute each file once", t => {
+  const dir = mkdtempSync(join(tmpdir(), "runner-glob-")), file = join(dir, "only.test.mjs");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(file, 'import test from "node:test"; test("only", () => {});');
+  const result = spawnSync(process.execPath, [runner, join(dir, "*.test.mjs"), file], {
+    encoding: "utf8", timeout: 5000,
+    env: { ...process.env, NODE_TEST_CONTEXT: undefined },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /pass 1\b/);
+});
+
 test("test watchdog fails and returns when synchronous work blocks a file", t => {
   const dir = mkdtempSync(join(tmpdir(), "runner-watchdog-")), file = join(dir, "blocking.test.mjs");
   t.after(() => rmSync(dir, { recursive: true, force: true }));

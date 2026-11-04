@@ -7,6 +7,8 @@ import { configFrom, loadPlan } from "./plan.js";
 import { committedBlob, safeContextPath } from "./openspec-context.js";
 import { clean, git, gitRaw } from "./system.js";
 import type { VerificationEvidence } from "./coordination-state.js";
+import { resolveCommand } from "./platform-command.js";
+import { containedPath, samePath } from "./platform-paths.js";
 
 /** Read committed planning bytes without moving refs, creating Git worktrees or trusting checkout files. */
 export function committedPlan(options: { root: string; change: string; commit: string }) {
@@ -21,7 +23,7 @@ export function committedPlan(options: { root: string; change: string; commit: s
   const supplements = Object.values(config.agents).flatMap(agent => {
     if (!agent.planningRules) return [];
     const supplement = resolve(options.root, agent.planningRules);
-    if (!supplement.startsWith(resolve(options.root) + sep)) throw new Error("Planning rules supplement must remain inside the repository");
+    if (!containedPath(options.root, supplement)) throw new Error("Planning rules supplement must remain inside the repository");
     return [relative(options.root, supplement).split(sep).join("/")];
   });
   const selected = entries.filter(entry => entry.path.startsWith(`openspec/changes/${options.change}/`) ||
@@ -45,7 +47,8 @@ export function verificationCommand(options: { root: string; commit: string; com
   if (!clean(options.root) || git(options.root, "rev-parse", "HEAD") !== options.commit) throw new Error("Verification requires clean exact-commit checkout");
   let exitCode = 0, evidence: string;
   try {
-    evidence = execFileSync(options.command[0], options.command.slice(1), { cwd: options.root, env: { ...process.env, ...options.env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
+    const invocation = resolveCommand({ executable: options.command[0], args: options.command.slice(1), cwd: options.root, env: { ...process.env, ...options.env } });
+    evidence = execFileSync(invocation.executable, invocation.args, { cwd: options.root, env: invocation.env, windowsHide: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 });
   } catch (error: any) {
     exitCode = Number.isInteger(error.status) && error.status !== 0 ? error.status : 1;
     evidence = [error.stdout?.toString(), error.stderr?.toString(), error.message].filter(Boolean).join("\n");
@@ -83,7 +86,7 @@ export function exactCheckout(options: { root: string; commit: string; path: str
     mkdirSync(dirname(options.path), { recursive: true });
     git(options.root, "worktree", "add", "--detach", options.path, options.commit);
   }
-  if (git(options.path, "rev-parse", "--show-toplevel") !== options.path ||
+  if (!samePath(git(options.path, "rev-parse", "--show-toplevel"), options.path) ||
       git(options.path, "rev-parse", "HEAD") !== options.commit || !clean(options.path))
     throw new Error("Coordinator checkout reservation must be clean at the exact commit");
   return options.path;

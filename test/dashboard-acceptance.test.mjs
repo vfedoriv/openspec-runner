@@ -128,7 +128,7 @@ for (const [harness, version] of [[codexHarness, 1], [codexHarness, 2], [claudeH
 
 // A once listener disappears during OS signal dispatch, allowing Ink's signal
 // exit handler to terminate before the dashboard's asynchronous finally runs.
-test("OS SIGINT waits for dashboard cleanup before terminating", () => {
+test("OS SIGINT waits for dashboard cleanup before terminating", { skip: process.platform === "win32" ? "Windows process.kill(SIGINT) forces termination; console Ctrl-C requires native smoke verification" : false }, () => {
   const ui = new URL("../dist/dashboard-ui.js", import.meta.url).href;
   const source = `
     import { PassThrough, Writable } from 'node:stream';
