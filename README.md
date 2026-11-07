@@ -1662,7 +1662,9 @@ prevention, setup recovery, paths containing spaces, partial worktree creation,
 Herdr IDs and argument forwarding, stale reports, plan drift, integration
 conflicts, failed checks, and interrupted integration commits.
 
-Live acceptance is still recommended in a disposable repository: run the same
+The [repeatable Codex acceptance checks](docs/live-acceptance-guide.md) cover
+credential failure, exact-session resume, and final approval through archival
+in disposable repositories. For a broader comparison, run the same
 scenario once with Codex and once with Claude Code. Plan two independent tasks
 and one dependent task, launch the independent workers, detach and reattach,
 inspect reports, integrate them, then launch the dependent task. Confirm that
