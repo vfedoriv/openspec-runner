@@ -293,6 +293,23 @@ export function assignmentsFrom(
   Object.keys(result).forEach(visit);
   return result;
 }
+export function projectPlanFiles(root: string, config: Config): string[] {
+  const files = ["openspec/runner.yaml"];
+  if (existsSync(resolve(root, "openspec/config.yaml"))) files.push("openspec/config.yaml");
+  // Project planning-rule supplements are reviewed planning inputs too.
+  for (const agent of Object.values(config.agents)) {
+    if (!agent.planningRules) continue;
+    const supplement = resolve(root, agent.planningRules);
+    if (!containedPath(root, supplement) || !unredirectedPath(supplement))
+      throw new Error("Planning rules supplement must remain inside the repository");
+    if (!existsSync(supplement) || !lstatSync(supplement).isFile())
+      throw new Error(`Planning rules supplement does not exist: ${agent.planningRules}`);
+    if (lstatSync(supplement).isSymbolicLink())
+      throw new Error(`Planning rules supplement cannot be a symlink: ${supplement}`);
+    files.push(relative(root, supplement).split(sep).join("/"));
+  }
+  return files;
+}
 export function loadPlan(root: string, change: string): Plan {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(change))
     throw new Error("Expected a repository-local change name");
@@ -320,23 +337,7 @@ export function loadPlan(root: string, change: string): Plan {
     }
   }
   walk(directory);
-  files.push("openspec/runner.yaml");
-  if (existsSync(resolve(root, "openspec/config.yaml")))
-    files.push("openspec/config.yaml");
-  // Project planning-rule supplements are reviewed planning inputs too. Keep
-  // them inside the repository and require ordinary committed-file checks to
-  // cover drift just like the runner and execution artifacts.
-  for (const agent of Object.values(config.agents)) {
-    if (!agent.planningRules) continue;
-    const supplement = resolve(root, agent.planningRules);
-    if (!containedPath(root, supplement) || !unredirectedPath(supplement))
-      throw new Error("Planning rules supplement must remain inside the repository");
-    if (!existsSync(supplement) || !lstatSync(supplement).isFile())
-      throw new Error(`Planning rules supplement does not exist: ${agent.planningRules}`);
-    if (lstatSync(supplement).isSymbolicLink())
-      throw new Error(`Planning rules supplement cannot be a symlink: ${supplement}`);
-    files.push(relative(root, supplement).split(sep).join("/"));
-  }
+  files.push(...projectPlanFiles(root, config));
   const hash = createHash("sha256");
   for (const p of files.sort()) {
     let content = readFileSync(resolve(root, p), "utf8").replace(/\r\n/g, "\n");
@@ -360,7 +361,7 @@ export function loadPlan(root: string, change: string): Plan {
     files,
   };
 }
-export function assertCommitted(root: string, plan: Plan, ref = "HEAD") {
+export function assertCommitted(root: string, plan: Pick<Plan, "files">, ref = "HEAD") {
   for (const file of plan.files) {
     // Compare bytes against the selected commit, including untracked planning files.
     const committed = run("git", ["show", `${ref}:${file}`], root);

@@ -3,6 +3,14 @@ import { resolve } from "node:path";
 import { atomic, json, locked } from "../system.js";
 import { samePath } from "../platform-paths.js";
 
+export const copilotHookPath = ".github/hooks/openspec-runner.json";
+
+export function validateCopilotHooks(source: string) {
+  const config = JSON.parse(source);
+  if (!config?.hooks || !(config.hooks.UserPromptSubmit || config.hooks.userPromptSubmitted) || !(config.hooks.Stop || config.hooks.agentStop))
+    throw new Error("Copilot hook installation lacks required ownership/stop events");
+}
+
 export interface HookEvent {
   kind: "prompt" | "stop" | "end" | "error" | "tool";
   session: string;

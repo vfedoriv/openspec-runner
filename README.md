@@ -1370,6 +1370,7 @@ and passing current final review/consent; archive pending/prepared/archived is i
 |---|---|
 | `init [--agent codex\|claude\|all]` | Create `runner.yaml` when absent and install selected project skills |
 | `models [--agent HARNESS] [--json]` | Query the selected harness model capabilities; Claude discovery is explicitly non-exhaustive |
+| `doctor [--agent HARNESS] [--json]` | Diagnose project configuration and local execution tools before selecting tasks |
 | `planning-rules --agent HARNESS [--json]` | Show bundled and configured versioned planning guidance with hashes |
 | `feature start <change> [--json]` | Register an opt-in lifecycle before its OpenSpec artifacts are complete |
 | `feature adopt <change> [--json]` | Attach lifecycle tracking to an idle existing change without inferring approval |
@@ -1466,6 +1467,17 @@ gone before explicitly removing
 automatic because it could race another coordinator.
 
 ## Troubleshooting
+
+Run `openspec-runner doctor` from a target project to check its Git checkout,
+`runner.yaml`, OpenSpec CLI, default harness, and selected worktree and terminal
+backends. Use `--agent HARNESS` to inspect a different harness, or `--json` for
+structured output. The command reports independent blockers together and exits
+with code 1 when a check is blocked. For Copilot, it checks that the required
+hook events are present in the current Git commit.
+
+The checks are read-only. Authentication, model access, worker permissions, and
+project setup or verification commands are marked unchecked until a live run.
+Use `validate <change>` and `launch --dry-run` for a specific plan or task batch.
 
 ### `init` says this is not a Git repository
 
