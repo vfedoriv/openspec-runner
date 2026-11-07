@@ -6,6 +6,6 @@ function scoped(reason, unsupported) {
     ...(process.platform === "win32" && unsupported(name) ? { skip: reason } : {}),
   }, body ?? options);
 }
-export const delegatedContextTest = scoped("Windows delegated-context protection remains explicitly unsupported", () => true);
+export const delegatedContextTest = scoped("POSIX delegated fixture; native Windows uses the NTFS acceptance fixtures", () => true);
 export const optionalBackendTest = test;
 export const localRunnerTest = test;

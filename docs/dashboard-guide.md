@@ -26,8 +26,9 @@ dry-run preview. Execution and approvals remain in the CLI or coordinating sessi
 
 Use Linux, macOS, WSL, or native Windows with Node.js 22.13 or newer. Native
 Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and
-Orca terminals; run returned commands in PowerShell 7. Delegated component
-execution remains unsupported on Windows. Follow the
+Orca terminals; run returned commands in PowerShell 7. Windows Codex and Claude
+delegation requires [verified NTFS context protection](windows-delegation-guide.md).
+Follow the
 [installation guide](../README.md#install-into-a-target-project) first if the
 runner is not available. From the target project's Git repository:
 

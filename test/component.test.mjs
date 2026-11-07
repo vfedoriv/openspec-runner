@@ -1,6 +1,7 @@
 import { delegatedContextTest as test } from "./helpers/native-support.mjs";
+import { test as nativeTest } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, readdirSync, lstatSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, statSync, chmodSync, readdirSync, lstatSync, existsSync, unlinkSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { featureFixture, featureSettings, git, executable, blocker } from "./helpers/feature-fixture.mjs";
 import { execFileSync } from "node:child_process";
@@ -8,11 +9,20 @@ import { Coordination } from "../dist/coordination.js";
 import { Component } from "../dist/component.js";
 import { Feature } from "../dist/feature.js";
 import { Runner } from "../dist/runner.js";
+import { assertWindowsContextHost, restoreWindowsContext, windowsContextRequest } from "../dist/windows-context.js";
 
 function fixture(t, options = {}) {
   let dir;
   const unlock = path => { const stat = lstatSync(path); if (stat.isSymbolicLink()) return; chmodSync(path, stat.isDirectory() ? 0o755 : 0o644); if (stat.isDirectory()) for (const child of readdirSync(path)) unlock(join(path, child)); };
-  const f = featureFixture({ after(cleanup) { t.after(() => { if (dir) unlock(dir); cleanup(); }); } }, { unchecked: options.unchecked ?? true });
+  const f = featureFixture({ after(cleanup) { t.after(() => {
+    if (options.windowsProtection) {
+      const component = new Component({ root: f.root, repository: "api" });
+      const binding = component.readBinding({ change: "demo" });
+      if (binding) restoreWindowsContext(windowsContextRequest(component.repo.stateDir, binding));
+    }
+    if (dir) unlock(dir);
+    cleanup();
+  }); } }, { unchecked: options.unchecked ?? true });
   dir = f.dir;
   git(f.root, "config", "openspec-runner.repository", "api");
   const storeRoot = join(f.dir, "store"); mkdirSync(storeRoot);
@@ -26,7 +36,7 @@ function fixture(t, options = {}) {
   const c = new Coordination({ root: storeRoot, featureId: "feature", repositories });
   const context = { implementationRoot: f.root, planningRoot: storeRoot, changeRoot: join(storeRoot, "openspec/changes/shared"), change: "shared", source: "store", storeId: "team", artifactPaths: [], references: [] };
   const contract = { context, repository: "contracts" };
-  const manifest = { version: 1, featureId: "feature", storeId: "team", sharedChange: "shared", coordinationBranch: "coordination", components: { api: { repository: "api", change: "demo", deliveryBranch: "main", dependencies: [], settings: { ...featureSettings, tasks: {}, verifyIntegration: [], setup: [] } } }, taskMapping: { "1.1": [{ type: "merged", componentId: "api" }] }, verification: [], completion: { requireAllMerged: true } };
+  const manifest = { version: 1, featureId: "feature", storeId: "team", sharedChange: "shared", coordinationBranch: "coordination", components: { api: { repository: "api", change: "demo", deliveryBranch: "main", dependencies: [], settings: { ...(options.settings ?? featureSettings), tasks: {}, verifyIntegration: [], setup: [] } } }, taskMapping: { "1.1": [{ type: "merged", componentId: "api" }] }, verification: [], completion: { requireAllMerged: true } };
   c.init({ manifest, contract, expectedHead: git(storeRoot, "rev-parse", "HEAD"), operationId: "init" });
   const approve = (id = "approval", extra = {}) => {
     const p = c.approvalPreview({ contract });
@@ -36,6 +46,65 @@ function fixture(t, options = {}) {
   const imported = () => { approve(); assign(); const component = new Component({ root: f.root, repository: "api" }); const input = { storeRoot, featureId: "feature", assignmentId: "assignment", owner: "alice" }; return { component, input }; };
   return { ...f, c, storeRoot, contract, manifest, approve, assign, imported };
 }
+
+nativeTest("Windows delegated import, protected worker, Claude review and repair, and export", { skip: process.platform !== "win32" }, async t => {
+  try { assertWindowsContextHost(process.cwd()); }
+  catch (error) {
+    if (!/without backup or restore privileges/.test(error.message)) throw error;
+    t.skip("Delegated workers require a standard Windows token");
+    return;
+  }
+  const claude = { harness: "claude", model: "test-model", effort: "low" };
+  const f = fixture(t, { windowsProtection: true, settings: { ...featureSettings, review: claude, repair: claude } });
+  const { component, input } = f.imported();
+  const preview = await component.inspect(input);
+  assert.equal(existsSync(component.repo.stateDir), false);
+  const obstruction = join(f.root, ".openspec-runner", "worktrees", "demo-delegated-assignment-integration");
+  mkdirSync(obstruction, { recursive: true });
+  await assert.rejects(component.import({ ...input, token: preview.token }), /worktree path already exists/i);
+  assert.equal(component.readBinding({ change: "demo" }).phase, "reserved");
+  assert.throws(() => f.r.preview("demo", ["1.1"]), /completed import/);
+  rmdirSync(obstruction);
+  const binding = await component.import({ ...input, token: preview.token });
+  assert.equal(binding.phase, "ready");
+  assert.equal((await component.import({ ...input, token: preview.token })).phase, "ready");
+  const context = join(binding.contextPaths[0], "AGENTS.md");
+  executable(join(f.bin, "codex"), `
+const fs = require('node:fs'), cp = require('node:child_process'), assert = require('node:assert/strict');
+if (process.argv.includes('--help')) { console.log('--add-dir --model --cd'); process.exit(0); }
+(async () => {
+  for await (const chunk of process.stdin) { }
+  const { Runner } = await import(${JSON.stringify(new URL("../dist/runner.js", import.meta.url).href)});
+  const runner = new Runner(), attempt = runner.latest(runner.read('demo'), '1.1');
+  assert.equal(fs.readFileSync(${JSON.stringify(context)}, 'utf8'), 'Shared guidance\\n');
+  assert.throws(() => fs.writeFileSync(${JSON.stringify(context)}, 'tampered'), {code: /EACCES|EPERM/});
+  const session = 'windows-delegated-task';
+  runner.begin('demo', '1.1', attempt.id, session);
+  fs.writeFileSync('output.txt', 'implementation\\n');
+  cp.execFileSync('git', ['add', 'output.txt']);
+  cp.execFileSync('git', ['commit', '-m', 'Implement']);
+  const commit = cp.execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  runner.report('demo', '1.1', attempt.id, { attempt: attempt.id, task: '1.1', session,
+    outcome: 'completed', commit, summary: 'Implemented', verification: ['NTFS denied context writes'] });
+})().catch(error => { console.error(error); process.exitCode = 1; });
+`);
+  const [task] = f.r.launch("demo", ["1.1"]);
+  const result = await f.r.worker("demo", "1.1", task.id);
+  assert.equal(result.exitCode, 0, readFileSync(result.log, "utf8"));
+  f.r.integrate("demo", ["1.1"]);
+  f.control({ findings: [blocker] });
+  await f.review();
+  const repair = f.f.launch("demo", "repair");
+  assert.equal((await f.f.worker("demo", repair.id)).exitCode, 0);
+  f.f.integrate("demo", repair.id);
+  f.control({ findings: [] });
+  await f.review();
+  const request = { change: "demo", outcome: "completed" };
+  const submission = component.submissionPreview(request);
+  const exported = component.exportSubmission({ ...request, id: "result", operationId: "export", token: submission.token });
+  assert.equal(exported.record.result.commit, f.r.read("demo").head);
+  assert.equal(readFileSync(context, "utf8"), "Shared guidance\n");
+});
 
 test("retirement preserves evidence and lets a different assignment reuse the clone", async t => {
   const f = fixture(t), { component, input } = f.imported(), preview = await component.inspect(input);

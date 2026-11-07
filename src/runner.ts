@@ -316,10 +316,17 @@ export class Runner {
     };
   }
   private runningAttempts() {
+    return this.storedAttempts().filter(active);
+  }
+  private storedAttempts() {
     if (!existsSync(this.repo.stateDir)) return [];
     return readdirSync(this.repo.stateDir)
       .filter(n => n.endsWith(".json") && n !== "lock.json")
-      .flatMap(n => decodeState(json<unknown>(join(this.repo.stateDir, n))).attempts.filter(active));
+      .flatMap(n => decodeState(json<unknown>(join(this.repo.stateDir, n))).attempts);
+  }
+  assertNoActiveWorkers() {
+    if (this.storedAttempts().some(a => active(a) || agentMayBeActive(a)) || activeFeatureJobs(this.repo.stateDir).length)
+      throw new Error("Windows assignment import requires all recorded local workers to stop");
   }
   private suggestActions(p: Plan, s: State | undefined, ready: string[]): NextAction {
     const { change } = p;
@@ -930,6 +937,8 @@ export class Runner {
         path: existsSync(a.path) ? a.path : undefined, log: a.worker?.log,
         recovery: "Worker finished. Inspect the retained Codex session/log and branch; use retry for further implementation. Do not resume in a removed worktree." };
     }
+    if (process.platform === "win32" && readComponentBinding({ stateDir: this.repo.stateDir, change }))
+      implementationGate(this.repo.stateDir, loadPlan(this.repo.root, change));
     if (a.terminal.backend === "orca") {
       return { result: attachTerminal(this.repo.root, a.terminal), attempt: a.id };
     }

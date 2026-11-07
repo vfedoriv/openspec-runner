@@ -133,7 +133,7 @@ Retrieve and check out the replacement's exact approved base and committed plan,
 then use normal inspect/import with a different approved assignment. Its resources
 and execution state are fresh. Late commands for old attempt IDs cannot mutate
 the replacement. Retirement does not clean up old resources or renew approval.
-Native Windows delegated execution remains unsupported.
+On Windows, retirement also retains the protection journal and NTFS rules.
 
 See [Changes, failures, and recovery](team-workflow-reference.md#changes-failures-and-recovery).
 
@@ -246,9 +246,12 @@ every harness/backend combination, or final approval/archival.
 **Type: Current platform and shared-record contract limits.**
 
 Native Windows local tasks and managed features support all four harness
-adapters. Delegated component execution is rejected on Windows because pinned
-context write protection has not been verified. Use Linux, macOS, or WSL for
-delegated execution; do not remove the guard or rely on Unix mode bits on NTFS.
+adapters. Windows delegated import requires a local NTFS checkout, PowerShell 7.2
+or newer, a token without backup or restore privileges, and verified protection
+of the pinned context. Confirmed import needs an idle
+runner runtime. If protection cannot be proved or a sealed context changes,
+the runner blocks execution. See the [Windows delegation guide](windows-delegation-guide.md)
+for the trust boundary and recovery steps.
 
 The version-1 shared coordination record validator accepts only `codex` and
 `claude` harness settings. Copilot local worker support therefore does not imply

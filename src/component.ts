@@ -12,6 +12,7 @@ import { retirementPath, retirementPreview, retireComponent, type RetirementInpu
 import { getHarness } from "./harnesses/registry.js";
 import { safeContextPath, type PinnedContext } from "./openspec-context.js";
 import { componentBindingPath, readComponentBinding, decodeResources, expectedContextPaths, type ComponentResources, type ComponentBinding } from "./component-state.js";
+import { assertWindowsContextHost, probeWindowsContext, sealWindowsContext, validateWindowsContextInventory, verifyWindowsContext, windowsContextRequest } from "./windows-context.js";
 export type { ComponentResources, ComponentBinding } from "./component-state.js";
 
 export interface ComponentInspection {
@@ -43,7 +44,7 @@ export class Component {
   retirementPreview(input: RetirementInput) { return retirementPreview(this.repo.root, this.repository, input); }
   retire({ token, ...input }: RetirementInput & { token: string }) { return retireComponent(this.repo.root, this.repository, input, token); }
   async inspect(options: ComponentInspection) {
-    if (process.platform === "win32") throw new Error("Windows delegated-context write protection is not verified; delegated execution is unsupported on this host");
+    if (process.platform === "win32") assertWindowsContextHost(this.repo.stateDir);
     known(options); assertRepositoryIdentity({ root: this.repo.root, repository: this.repository });
     const store = new CoordinationStore({ root: options.storeRoot, featureId: options.featureId });
     const historyRevision = coordinationRevision({ store, revision: options.historyRevision }), snapshot = store.readSnapshot({ revision: historyRevision });
@@ -52,6 +53,10 @@ export class Component {
     if (existsSync(retirementPath(this.repo.stateDir, assignment.featureId, assignment.id))) throw new Error("Assignment is retired or retirement is pending; import a different approved assignment");
     if (assignment.repository !== this.repository) throw new Error("Assignment repository identity mismatch");
     if (!options.owner || options.owner !== assignment.owner) throw new Error("Assignment owner does not match explicit local owner");
+    if (process.platform === "win32") {
+      const stateDir = this.repo.stateDir, contextPaths = expectedContextPaths({ stateDir, assignment });
+      validateWindowsContextInventory(windowsContextRequest(stateDir, { assignment, contextPaths }));
+    }
     const approval = snapshot.records.find((record): record is ApprovalRecord => record.kind === "approval" && record.id === assignment.approvalId);
     if (!approval || currentApproval({ store, snapshot })?.id !== approval.id || approval.manifestFingerprint !== digest(snapshot.manifest))
       throw new Error("Assignment approval is stale or missing from committed history");
@@ -117,24 +122,40 @@ export class Component {
     const preview = await this.inspect(inspection);
     if (!token || token !== preview.token) throw new Error("Import token is stale; inspect assignment again");
     const assignment = preview.assignment, feature = new Feature(this.repo.root), path = this.bindingPath(assignment.change);
+    const windows = process.platform === "win32";
     const binding = feature.runner.lock(() => {
       if (existsSync(retirementPath(this.repo.stateDir, assignment.featureId, assignment.id)))
         throw new Error("Assignment retired during inspection; import a different approved assignment");
       const old = this.readBinding({ change: assignment.change });
       if (old && old.phase !== "retired") {
         if (old.token !== token || digest(old.assignment) !== digest(assignment)) throw new Error("Import reservation differs; reconcile inspected history");
+        if (windows) {
+          if (old.phase === "ready") validateDelegatedBinding(feature.read(assignment.change).delegated!);
+          else {
+            feature.runner.assertNoActiveWorkers();
+            sealWindowsContext(windowsContextRequest(this.repo.stateDir, old));
+          }
+        }
         return old;
       }
       if (existsSync(featurePath(this.repo.stateDir, assignment.change)) || feature.runner.read(assignment.change)) throw new Error("Existing managed local execution cannot be replaced by assignment import");
+      if (windows) {
+        feature.runner.assertNoActiveWorkers();
+        probeWindowsContext(this.repo.stateDir);
+      }
       const contextPaths = expectedContextPaths({ stateDir: this.repo.stateDir, assignment });
       const reserved: ComponentBinding = { version: 1, phase: "reserved", repository: this.repository, change: assignment.change,
         assignmentId: assignment.id, featureId: assignment.featureId, historyRevision: preview.historyRevision, token, assignment, contextPaths, resources: preview.resources };
       atomic(path, reserved);
+      if (windows) sealWindowsContext(windowsContextRequest(this.repo.stateDir, reserved));
       return reserved;
     });
-    const contextParent = dirname(binding.contextPaths[0]);
-    mkdirSync(contextParent, { recursive: true });
-    [assignment.contract, ...(assignment.contract.references ?? [])].forEach((context, index) => this.materialize(context, binding.contextPaths[index]));
+    if (windows && binding.phase === "ready") return binding;
+    if (!windows) {
+      const contextParent = dirname(binding.contextPaths[0]);
+      mkdirSync(contextParent, { recursive: true });
+      [assignment.contract, ...(assignment.contract.references ?? [])].forEach((context, index) => this.materialize(context, binding.contextPaths[index]));
+    }
     const delegated = delegationForBinding({ stateDir: this.repo.stateDir, binding });
     const approval: FeatureApproval = { token: digest(assignment), fingerprint: assignment.planFingerprint, base: assignment.base,
       ...structuredClone(assignment.settings), at: assignment.createdAt };
@@ -143,9 +164,10 @@ export class Component {
       const current = this.readBinding({ change: assignment.change });
       if (!current || !["reserved", "ready"].includes(current.phase) || current.token !== binding.token || digest(current.assignment) !== digest(assignment))
         throw new Error("Assignment binding changed or retired during import");
+      if (windows) verifyWindowsContext(windowsContextRequest(this.repo.stateDir, current));
       binding.phase = "ready"; atomic(path, binding);
     });
-    validateDelegatedBinding(delegated);
+    if (!windows) validateDelegatedBinding(delegated);
     return binding;
   }
   submissionPreview(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string }) {
@@ -178,6 +200,12 @@ export class Component {
       if (existsSync(path)) {
         const saved = json<{ input: object; token: string; record: SubmissionRecord; bytes: string }>(path);
         if (digest(saved.input) !== digest(options)) throw new Error("Immutable submission export identity differs");
+        if (process.platform === "win32") {
+          const state = readFeature(this.repo.stateDir, options.change);
+          if (!state?.delegated || this.readBinding(options)?.phase !== "ready")
+            throw new Error("Component requires completed assignment import");
+          validateDelegatedBinding(state.delegated);
+        }
         decodeRecord({ value: saved.bytes });
         return { record: saved.record, bytes: saved.bytes };
       }

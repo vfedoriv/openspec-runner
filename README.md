@@ -185,7 +185,7 @@ flowchart TB
 
 The target project must have:
 
-- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and Orca terminals; see [Windows verification and limits](docs/WINDOWS_PORTABILITY_VERIFICATION.md).
+- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and Orca terminals. See [Windows verification](docs/WINDOWS_PORTABILITY_VERIFICATION.md) and [Windows delegation](docs/windows-delegation-guide.md).
 - Node.js 22.13 or newer.
 - Git and a Git repository.
 - OpenSpec installed and initialized in the project.

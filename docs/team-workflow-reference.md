@@ -61,12 +61,12 @@ sequenceDiagram
 
 ## Prepare the repositories and machines
 
-Use Linux, macOS or WSL, Node.js 22.13+, Git, the runner, and the approved authenticated
+Use Linux, macOS, WSL, or native Windows on local NTFS, Node.js 22.13+, Git, the runner, and the approved authenticated
 harness. Initialize each component with `openspec-runner init --agent codex` (or
 `claude`/`all`). Init installs eight skills, including `openspec-runner-component`.
 Commit the generated skills/config and all planning inputs before shared approval.
 
-Delegated execution remains unsupported on native Windows. Version-1 shared
+Native Windows import uses [verified context protection](windows-delegation-guide.md) and requires an idle runner runtime. Version-1 shared
 assignment settings accept only Codex or Claude; local Copilot worker support
 does not extend that contract. See [documented limits](DOCUMENTED_LIMITS.md#7-delegated-execution-has-narrower-support-than-local-workers).
 

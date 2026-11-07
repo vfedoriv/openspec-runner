@@ -7,9 +7,8 @@ verification records.
 
 ## Delegated execution
 
-Windows delegated execution remains unsupported. Its protection work was stopped
-before implementation. Revisit the protection boundary before starting a new
-design; keep the existing guards until native contract tests pass.
+The [Windows delegation guide](windows-delegation-guide.md) records the NTFS
+protection boundary, recovery procedure, and verified configurations.
 
 Shared coordination records still accept only Codex and Claude. Adding Copilot
 requires an explicit compatibility contract and delegated lifecycle acceptance.

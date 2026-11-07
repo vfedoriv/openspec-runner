@@ -38,8 +38,3 @@ export function unredirectedPath(path: string): boolean {
     current = parent;
   }
 }
-export function protectContext(_root: string): { verified: boolean; reason?: string } {
-  return process.platform === "win32"
-    ? { verified: false, reason: "Windows delegated-context write protection is not verified; delegated execution is unsupported on this host" }
-    : { verified: true };
-}
