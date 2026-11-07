@@ -57,6 +57,11 @@ openspec-runner dashboard --json --change user-auth > dashboard.json
 a terminal on both input and output, the default is a single plain snapshot,
 so piping the command does not start the interactive display.
 
+Open a local feature's details to see suggested launch previews, integration
+candidates, and the first blocker. The same guidance appears in `--once` and
+under `nextAction` in `--json`. Run the displayed commands from your coordinating
+session after inspecting the current evidence.
+
 ## Choose a view
 
 Use the left and right arrow keys to move between five views.

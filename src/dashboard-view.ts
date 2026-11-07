@@ -1,10 +1,25 @@
 import type { ActivityEntry, ActivityPage } from "./activity-types.js";
 import type { DashboardSnapshot } from "./dashboard-types.js";
+import type { NextAction } from "./runner.js";
+import { renderArgument } from "./platform-command.js";
 export const dashboardViews = ["Overview", "Attention", "Features", "Sessions", "Assignments"] as const;
 export type DashboardView = typeof dashboardViews[number];
 export type DashboardFilters = { search: string; status?: string; harness?: string; owner?: string; includeCompleted: boolean; includeOlderAttempts: boolean; sort: "name" | "attention" };
 export type DashboardRow = { id: string; label: string; targetId: string };
 export const safeText = (value: unknown): string => String(value ?? "unknown").replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+export function nextActionLines(action: NextAction | undefined): string[] {
+  if (!action) return [];
+  const shell = process.platform === "win32" ? "powershell" : "posix";
+  const command = (argv: string[]) => `openspec-runner ${argv.map(arg => /^[\w.-]+$/.test(arg) ? arg : renderArgument(arg, shell)).join(" ")}`;
+  const lines: string[] = [];
+  if (action.integrate) lines.push(`Integrate · ${command(action.integrate)}`);
+  if (action.launch) lines.push(`Preview launch · ${command(action.launch)}`);
+  if (action.blocker) {
+    lines.push(`Blocker · ${safeText(action.blocker.message).replace(/\s+/g, " ")}`);
+    if (action.blocker.argv) lines.push(`Recovery · ${command(action.blocker.argv)}`);
+  }
+  return lines;
+}
 const completed = (s: DashboardSnapshot, id: string) => { const f = s.features.find(f => f.id === id); return !!f && (f.phase === "completed" || !f.phase && f.total > 0 && f.completed === f.total && !s.sessions.some(a => a.featureId === id && ["preparing", "running", "launching", "manual"].includes(a.phase))); };
 export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, filters: DashboardFilters): DashboardRow[] {
   const rows: Array<DashboardRow & { feature?: string; status?: string; harness?: string; owner?: string; priority?: number }> = [];
@@ -43,7 +58,11 @@ export function detailLines(s: DashboardSnapshot, targetId: string): string[] {
     if (Array.isArray(value)) { if (!value.length) lines.push(`${prefix}: none`); value.slice(0, 100).forEach((v, i) => walk(v, `${prefix} ${i + 1}`, depth + 1)); return; }
     for (const [key, v] of Object.entries(value)) walk(v, `${prefix ? prefix + " / " : ""}${key.replace(/([A-Z])/g, " $1").replace(/^./, c => c.toUpperCase())}`, depth + 1);
   };
-  walk(target, "");
+  if (target && "nextAction" in target) {
+    const { nextAction, ...evidence } = target;
+    lines.push(...nextActionLines(nextAction));
+    walk(evidence, "");
+  } else walk(target, "");
   if (s.features.some(f => f.id === targetId)) walk(s.tasks.filter(t => t.featureId === targetId), "Tasks, dependencies and settings");
   if (target && "featureId" in target) walk(s.features.find(f => f.id === target.featureId)?.state, "Feature settings and evidence");
   for (const e of s.errors) lines.push(`Source ${e.source}${e.stale ? " [STALE]" : " [ERROR]"}: ${safeText(e.message)}`);

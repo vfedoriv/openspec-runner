@@ -369,7 +369,7 @@ export function assertCommitted(root: string, plan: Plan, ref = "HEAD") {
         `Commit current planning artifact before launch: ${file}`,
       );
   }
-  if (git(root, "status", "--porcelain", "--", ...plan.files))
+  if (git(root, "--no-optional-locks", "status", "--porcelain", "--", ...plan.files))
     throw new Error("Planning artifacts must be committed");
 }
 function openspecJson<T>(root: string, args: string[]): T {

@@ -108,4 +108,4 @@ export function workerRunnerCommand(args: string[], agent: string): string {
     : ["openspec-runner"];
   return shellCommand([...command, ...args]);
 }
-export const clean = (cwd: string) => git(cwd, "status", "--porcelain") === "";
+export const clean = (cwd: string) => git(cwd, "--no-optional-locks", "status", "--porcelain") === "";

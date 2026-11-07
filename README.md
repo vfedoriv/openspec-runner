@@ -1408,6 +1408,13 @@ and passing current final review/consent; archive pending/prepared/archived is i
 
 Prefer `--json` for automation and skill workflows. `launch --dry-run` is the
 safe task inspection point before worktrees, attempts, or sessions are created.
+During local implementation, `status --json` can include a `nextAction` with
+one launch preview, one integration candidate, and a blocker. Command arrays
+contain arguments to `openspec-runner`. Launch suggestions follow plan order,
+repository capacity, and task overlap rules. The preview still checks OpenSpec
+readiness and harness settings. An integration suggestion reflects the current
+report, exit evidence, and worktrees. Running integration still checks the merge
+and runs verification.
 Managed `feature approve`, `review`, `fix`, and `archive` support resource-free
 `--dry-run` previews at their corresponding decision boundaries.
 

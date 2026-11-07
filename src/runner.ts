@@ -42,6 +42,7 @@ import {
   createWorktree,
   startTerminal,
   attachTerminal,
+  selectTerminal,
   terminalAdapter,
   type Workspace,
   type Terminal,
@@ -110,6 +111,11 @@ export interface State {
   planTasks?: string[];
   completion?: { tasks: string[]; fingerprint: string; head: string };
   cleanupResults?: CleanupResult[];
+}
+export interface NextAction {
+  launch?: string[];
+  integrate?: string[];
+  blocker?: { message: string; argv?: string[] };
 }
 const active = (a: TaskAttempt) =>
   ["preparing", "manual", "launching", "running"].includes(a.phase);
@@ -278,6 +284,20 @@ export class Runner {
         next: `openspec-runner feature status ${change} --json` };
     const p = loadPlan(this.repo.root, change),
       s = this.read(change);
+    const tasks = p.tasks.map((t) => ({
+      ...t,
+      assignment: p.assignments[t.id],
+      ready:
+        (!feature || (feature.phase === "implementing" && !feature.invalidated &&
+          feature.approval?.fingerprint === p.fingerprint)) &&
+        (!s || s.fingerprint === p.fingerprint) &&
+        !s?.transaction &&
+        !(s ? this.satisfied(s, t.id) || this.latest(s, t.id) : t.completed) &&
+        p.assignments[t.id].dependsOn.every((d) =>
+          s ? this.satisfied(s, d) : p.tasks.find((x) => x.id === d)?.completed,
+        ),
+      attempts: s?.attempts.filter((a) => a.task === t.id) ?? [],
+    }));
     return {
       change,
       feature,
@@ -289,25 +309,68 @@ export class Runner {
       head: s?.head,
       transaction: s?.transaction,
       cleanup: s?.cleanupResults,
-      tasks: p.tasks.map((t) => ({
-        ...t,
-        assignment: p.assignments[t.id],
-        ready:
-          (!feature || (feature.phase === "implementing" && !feature.invalidated &&
-            feature.approval?.fingerprint === p.fingerprint)) &&
-          (!s || s.fingerprint === p.fingerprint) &&
-          !s?.transaction &&
-          !(s
-            ? this.satisfied(s, t.id) || this.latest(s, t.id)
-            : t.completed) &&
-          p.assignments[t.id].dependsOn.every((d) =>
-            s
-              ? this.satisfied(s, d)
-              : p.tasks.find((x) => x.id === d)?.completed,
-          ),
-        attempts: s?.attempts.filter((a) => a.task === t.id) ?? [],
-      })),
+      tasks,
+      nextAction: !feature || feature.phase === "implementing"
+        ? this.suggestActions(p, s, tasks.filter(t => t.ready).map(t => t.id))
+        : undefined,
     };
+  }
+  private runningAttempts() {
+    if (!existsSync(this.repo.stateDir)) return [];
+    return readdirSync(this.repo.stateDir)
+      .filter(n => n.endsWith(".json") && n !== "lock.json")
+      .flatMap(n => decodeState(json<unknown>(join(this.repo.stateDir, n))).attempts.filter(active));
+  }
+  private suggestActions(p: Plan, s: State | undefined, ready: string[]): NextAction {
+    const { change } = p;
+    const next: NextAction = {};
+    const block = (error: unknown) => {
+      next.blocker ??= { message: error instanceof Error ? error.message : String(error) };
+    };
+    try {
+      const feature = implementationGate(this.repo.stateDir, p);
+      if (s) this.drift(p, s);
+      if (s?.transaction) return { blocker: {
+        message: "Integration is pending. Inspect the integration worktree and resolve any conflicts or failed checks before continuing.",
+        argv: ["integrate", change, "--continue"],
+      } };
+      let waiting: TaskAttempt | undefined;
+      if (s) {
+        for (const task of p.tasks) {
+          if (this.satisfied(s, task.id)) continue;
+          const a = this.latest(s, task.id);
+          if (!a) continue;
+          if (a.phase === "completed" && !next.integrate) {
+            try {
+              this.integrationReport(s, task.id, !!feature);
+              this.assertIntegrationWorktree(s);
+              next.integrate = ["integrate", change, "--tasks", task.id];
+            } catch (error) { block(error); }
+          } else if (["failed", "blocked", "stale"].includes(a.phase)) {
+            block(`Task ${task.id} is ${a.phase}. Inspect attempt ${a.id} before retrying.`);
+          } else if (active(a)) waiting ??= a;
+        }
+      }
+      if (ready.length) {
+        if (activeFeatureJobs(this.repo.stateDir).length)
+          throw new Error("Exclusive feature review/repair job must finish before launching tasks");
+        const running = this.runningAttempts();
+        const slots = p.config.maxParallel - running.length;
+        if (slots <= 0) throw new Error("Repository concurrency limit reached. Wait for a task slot.");
+        if (running.some(a => !a.parallel)) throw new Error("Wait for the exclusive task to finish.");
+        const parallel = ready.filter(id => p.assignments[id].parallel);
+        const batch = !running.length && !p.assignments[ready[0]].parallel ? ready.slice(0, 1) : parallel.slice(0, slots);
+        if (!batch.length) throw new Error("Ready tasks require exclusive execution. Wait for running tasks to finish.");
+        assertCommitted(this.repo.root, p);
+        if (!s && feature && git(this.repo.root, "rev-parse", "HEAD") !== feature.approval!.base)
+          throw new Error("Current HEAD differs from the approved feature base.");
+        selectTerminal(feature?.delegated?.resources.terminal ?? p.config.terminal);
+        next.launch = ["launch", change, "--tasks", batch.join(","), "--dry-run", "--json"];
+      }
+      if (!next.launch && !next.integrate && waiting)
+        block(`Task ${waiting.task} is ${waiting.phase}. Inspect attempt ${waiting.id} for the worker command and evidence.`);
+    } catch (error) { block(error); }
+    return next;
   }
   selection(p: Plan, ids: string[]) {
     if (
@@ -347,12 +410,7 @@ export class Runner {
     assertCommitted(this.repo.root, p);
     if (!s) assertCommitted(this.repo.root, p, head);
     readiness(this.repo.root, change);
-    const allStates = existsSync(this.repo.stateDir)
-      ? readdirSync(this.repo.stateDir)
-          .filter((n) => n.endsWith(".json") && n !== "lock.json")
-          .map((n) => decodeState(json<unknown>(join(this.repo.stateDir, n))))
-      : [];
-    const running = allStates.flatMap((s) => s.attempts.filter(active));
+    const running = this.runningAttempts();
     const featureJobs = activeFeatureJobs(this.repo.stateDir);
     if (featureJobs.length) throw new Error("Exclusive feature review/repair job must finish before launching tasks");
     for (const id of ids) {
@@ -916,6 +974,26 @@ export class Runner {
     const summary = complete ? safeSummary({ cwd: this.repo.root, change }) : undefined;
     return { ...result, summaries, ...(summary ? { summary } : {}) };
   }
+  private integrationReport(s: State, task: string, managed: boolean) {
+    const a = this.latest(s, task);
+    if (!a || a.phase !== "completed" || !a.report)
+      throw new Error(`Task ${task} needs a completed report`);
+    const problem = completionProblem(a);
+    if (problem) throw new Error(`Task ${task}: ${problem}`);
+    if (managed && (!a.worker?.exitedAt || a.worker.exitCode !== 0))
+      throw new Error(`Managed task ${task} requires a successful supervised exit receipt`);
+    if (a.fingerprint !== s.fingerprint)
+      throw new Error("Task plan is stale; reconcile and retry");
+    this.verifyResult(a, a.report, s.change);
+    return { attempt: a, report: a.report };
+  }
+  private assertIntegrationWorktree(s: State) {
+    const { path } = s.integration;
+    if (!clean(path) || git(path, "rev-parse", "HEAD") !== s.head)
+      throw new Error("Integration worktree must be clean at its recorded head");
+    if (loadPlan(path, s.change).fingerprint !== s.fingerprint)
+      throw new Error("Integration planning artifacts drifted");
+  }
   private integrateCore(change: string, ids: string[], mode?: "continue" | "abort") {
     const result = this.lock(() => {
       const s = this.requireState(change),
@@ -948,43 +1026,10 @@ export class Runner {
       s.cleanupBatch = [...new Set([...(s.cleanupBatch ?? []), ...ids])];
       this.save(s);
       for (const task of ids) {
-        const a = this.latest(s, task);
-        if (a?.phase === "integrated") continue;
-        if (!a || a.phase !== "completed" || !a.report)
-          throw new Error(`Task ${task} needs a completed report`);
-        const problem = completionProblem(a);
-        if (problem) throw new Error(`Task ${task}: ${problem}`);
-        if (feature && (!a.worker?.exitedAt || a.worker.exitCode !== 0))
-          throw new Error(`Managed task ${task} requires a successful supervised exit receipt`);
-        if (a.worker && !a.worker.exitedAt)
-          throw new Error(
-            `Task ${task} reported but its supervised worker has not exited yet`,
-          );
-        if (a.worker && a.worker.exitCode !== undefined && a.worker.exitCode !== 0)
-          throw new Error(
-            `Task ${task} worker exited with code ${a.worker.exitCode}; inspect diagnostics before integrating`,
-          );
-        if (a.agent === "claude" && (!a.identityConfirmed || !a.terminalEvidence))
-          throw new Error(`Task ${task} lacks confirmed Claude stream evidence`);
-        const evidence = a.terminalEvidence;
-        if (
-          a.agent === "claude" &&
-          evidence &&
-          (evidence.metadata?.is_error === true || evidence.subtype?.startsWith("error"))
-        )
-          throw new Error(`Task ${task} has a failed Claude terminal result; inspect diagnostics before integrating`);
-        if (a.agent === "claude" && !a.worker?.exitedAt)
-          throw new Error(`Task ${task} requires a supervised Claude exit receipt before integrating`);
-        if (a.fingerprint !== s.fingerprint)
-          throw new Error("Task plan is stale; reconcile and retry");
-        this.verifyResult(a, a.report, change);
+        if (this.latest(s, task)?.phase === "integrated") continue;
+        const { attempt: a, report } = this.integrationReport(s, task, !!feature);
         if (!s.transaction) {
-          if (!clean(path) || git(path, "rev-parse", "HEAD") !== s.head)
-            throw new Error(
-              "Integration worktree must be clean at its recorded head",
-            );
-          if (loadPlan(path, change).fingerprint !== s.fingerprint)
-            throw new Error("Integration planning artifacts drifted");
+          this.assertIntegrationWorktree(s);
           s.transaction = {
             tasks: ids,
             current: task,
@@ -1008,7 +1053,7 @@ export class Runner {
             throw new Error(
               "Unexpected integration HEAD; inspect before continuing",
             );
-          git(path, "merge-base", "--is-ancestor", a.report.commit!, head);
+          git(path, "merge-base", "--is-ancestor", report.commit!, head);
           if (
             !tasksFrom(
               readFileSync(resolve(path, p.relativeDir, "tasks.md"), "utf8"),
@@ -1022,7 +1067,7 @@ export class Runner {
           if (tx.phase === "merging" && !merging) {
             if (!clean(path))
               throw new Error("Unexpected worktree edits before merge");
-            git(path, "merge", "--no-ff", "--no-commit", a.report.commit!);
+            git(path, "merge", "--no-ff", "--no-commit", report.commit!);
           }
           if (git(path, "diff", "--name-only", "--diff-filter=U"))
             throw new Error(

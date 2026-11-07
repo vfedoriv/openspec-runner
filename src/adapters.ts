@@ -28,15 +28,17 @@ export interface Terminal {
   sessionContext?: string;
   phase?: string;
 }
-export function terminalAdapter(root: string, selected: "auto" | "manual" | "herdr" | "orca"): "manual" | "herdr" | "orca" {
+export function selectTerminal(selected: "auto" | "manual" | "herdr" | "orca"): "manual" | "herdr" | "orca" {
   if (selected === "manual") return "manual";
-  if (selected === "orca" || (selected === "auto" && !!process.env.ORCA_TERMINAL_HANDLE)) {
-    orcaContext(root);
-    return "orca";
-  }
+  if (selected === "orca" || (selected === "auto" && !!process.env.ORCA_TERMINAL_HANDLE)) return "orca";
   if (selected === "herdr" && process.env.HERDR_ENV !== "1")
     throw new Error("Herdr launching requires HERDR_ENV=1 inside a Herdr session");
   return process.env.HERDR_ENV === "1" ? "herdr" : "manual";
+}
+export function terminalAdapter(root: string, selected: Parameters<typeof selectTerminal>[0]) {
+  const backend = selectTerminal(selected);
+  if (backend === "orca") orcaContext(root);
+  return backend;
 }
 export function worktrees(
   root: string,

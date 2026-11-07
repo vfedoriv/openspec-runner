@@ -18,6 +18,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { observeProcess } from "../dist/platform-process.js";
 import { Runner } from "../dist/runner.js";
+import { collectDashboard } from "../dist/dashboard-reader.js";
 import {
   tasksFrom,
   assignmentsFrom,
@@ -250,6 +251,72 @@ test("model/list reads advertised model defaults through app-server", async (t) 
   fixture(t);
   assert.equal((await models())[0].defaultReasoningEffort, "medium");
 });
+test("status and dashboard suggest the same batch and wait for exit before suggesting integration", (t) => {
+  const { runner: r, root } = fixture(t);
+  const status = () => r.status("demo").nextAction;
+  assert.deepEqual(status().launch, ["launch", "demo", "--tasks", "1.1,1.2", "--dry-run", "--json"]);
+  const [task] = r.launch("demo", ["1.1"], settings);
+  complete(r, task);
+  const state = r.read("demo"), saved = r.latest(state, "1.1");
+  saved.worker = { token: "worker", log: join(root, "worker.log") };
+  r.save(state);
+  assert.deepEqual(status().launch, ["launch", "demo", "--tasks", "1.2", "--dry-run", "--json"]);
+  assert.match(status().blocker.message, /1\.1.*has not exited/);
+  assert.equal(status().integrate, undefined);
+  saved.worker.exitedAt = "now";
+  saved.worker.exitCode = 0;
+  r.save(state);
+  const before = readFileSync(join(r.repo.stateDir, "demo.json"), "utf8");
+  const actual = status();
+  assert.deepEqual(actual.integrate, ["integrate", "demo", "--tasks", "1.1"]);
+  assert.deepEqual(collectDashboard({ cwd: root, change: "demo" }).features[0].nextAction, actual);
+  const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+  const cliStatus = JSON.parse(execFileSync(process.execPath, [cli, "status", "demo", "--json"], { cwd: root, encoding: "utf8" }));
+  assert.deepEqual(cliStatus.nextAction, actual);
+  const dashboard = execFileSync(process.execPath, [cli, "dashboard", "--change", "demo", "--once"], { cwd: root, encoding: "utf8" });
+  assert.match(dashboard, /openspec-runner integrate demo --tasks 1\.1/);
+  assert.equal(readFileSync(join(r.repo.stateDir, "demo.json"), "utf8"), before);
+  writeFileSync(join(task.path, "untracked.txt"), "changed");
+  assert.equal(status().integrate, undefined);
+  assert.match(status().blocker.message, /clean task worktree/);
+});
+
+test("status limits launch suggestions by shared capacity and prioritizes pending integration", (t) => {
+  const { runner: r } = fixture(t, { maxParallel: 1 });
+  const status = () => r.status("demo").nextAction;
+  assert.equal(status().launch[3], "1.1");
+  r.launch("demo", ["1.1"], settings);
+  assert.equal(status().launch, undefined);
+  assert.match(status().blocker.message, /concurrency limit/);
+  const state = r.read("demo");
+  state.transaction = { tasks: ["1.1"], current: "1.1", before: state.head, phase: "merging", marker: "test" };
+  r.save(state);
+  assert.equal(status().launch, undefined);
+  assert.deepEqual(status().blocker.argv, ["integrate", "demo", "--continue"]);
+});
+
+test("status respects an exclusive task running in another change", (t) => {
+  const { runner: r, root } = fixture(t);
+  const other = join(root, "openspec/changes/other");
+  mkdirSync(other);
+  writeFileSync(join(other, "tasks.md"), "- [ ] 1.1 Exclusive\n");
+  writeFileSync(join(other, "execution.yaml"), JSON.stringify({ version: 1, tasks: { "1.1": {} } }));
+  git(root, "add", "openspec/changes/other");
+  git(root, "commit", "-m", "Plan exclusive task");
+  r.launch("other", ["1.1"], settings);
+  const { launch, blocker } = r.status("demo").nextAction;
+  assert.equal(launch, undefined);
+  assert.match(blocker.message, /exclusive task/);
+});
+
+test("status explains an unavailable Herdr launch context", (t) => {
+  const { runner: r } = fixture(t, { terminal: "herdr" });
+  delete process.env.HERDR_ENV;
+  const { launch, blocker } = r.status("demo").nextAction;
+  assert.equal(launch, undefined);
+  assert.match(blocker.message, /requires HERDR_ENV=1/);
+});
+
 test("parallel tasks integrate sequentially, update only integration checkboxes, unlock dependent and clean selected worktree", (t) => {
   const { runner: r, root } = fixture(t);
   const before = git(root, "rev-parse", "HEAD");

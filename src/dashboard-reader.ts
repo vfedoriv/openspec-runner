@@ -107,7 +107,7 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
         if (["failed", "blocked", "stale"].includes(current.phase)) attention(`attempt:${current.attempt.id}`, `Attempt ${current.attempt.id} is ${current.phase}${current.attempt.error ? `: ${current.attempt.error}` : ""}`, 1, current.id);
         if (["completed", "failed", "blocked"].includes(current.phase) && !current.attempt.report) attention(`report:${current.attempt.id}`, `Missing report for ${current.attempt.id}`, 1, current.id);
       }
-      snapshot.features.push({ id: source, change, origin: "local", phase: feature?.phase, state: feature, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
+      snapshot.features.push({ id: source, change, origin: "local", phase: feature?.phase, state: feature, nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
       snapshot.tasks.push(...summaries); snapshot.sessions.push(...sessions);
       if (binding) {
         const a = binding.assignment;
