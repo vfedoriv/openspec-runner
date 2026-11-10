@@ -1,6 +1,6 @@
 import type { ActivityPage, ActivityPageOptions } from "./activity-types.js";
 import type { Assignment, Task } from "./plan.js";
-import type { Report, TaskAttempt } from "./runner.js";
+import type { NextAction, Report, TaskAttempt } from "./runner.js";
 import type { FeatureJob, FeatureState } from "./feature-state.js";
 import type { ComponentBinding } from "./component-state.js";
 import type { ComponentStatus, CoordinationStatus } from "./coordination-state.js";
@@ -10,6 +10,7 @@ export type SourceError = { source: string; message: string; stale: boolean };
 export type AttentionItem = { id: string; source: string; targetId?: string; priority: number; message: string };
 export type FeatureSummary = {
   deliverySummary?: SummaryHandle; summaryCommand?: string[];
+  nextAction?: NextAction;
   id: string; change?: string; origin: "local" | "shared"; phase?: FeatureState["phase"];
   completed: number; total: number; state?: FeatureState; taskIds: string[]; sessionIds: string[];
   coordination?: CoordinationStatus;

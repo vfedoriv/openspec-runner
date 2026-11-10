@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync } f
 import { resolve, dirname } from "node:path";
 import type { SupervisedSession } from "../worker.js";
 import { getHarness } from "./registry.js";
-import { armHookLease, readHookLease, type HookLease } from "./copilot-hooks.js";
+import { armHookLease, copilotHookPath, readHookLease, validateCopilotHooks, type HookLease } from "./copilot-hooks.js";
 import { prepareEditorAgent, editorPreparationCommands } from "./copilot-editor.js";
 import { run } from "../system.js";
 import { resolveCommand } from "../platform-command.js";
@@ -25,11 +25,9 @@ export async function superviseCopilot(
   const harness = getHarness(a.agent), editor = a.agent === "copilot-vscode", stateDir = resolve(common, "openspec-runner");
   if (!editor && a.expectedSession)
     throw new Error("Legacy Copilot attempt reserves a session; inspect its evidence and explicitly retry with a fresh attempt");
-  const hook = resolve(a.path, ".github/hooks/openspec-runner.json");
+  const hook = resolve(a.path, copilotHookPath);
   if (!existsSync(hook)) throw new Error("Copilot hooks are missing; run init --agent copilot or copilot-vscode and commit the installed hooks");
-  const hookConfig = JSON.parse(readFileSync(hook, "utf8"));
-  if (!hookConfig.hooks || !(hookConfig.hooks.UserPromptSubmit || hookConfig.hooks.userPromptSubmitted) || !(hookConfig.hooks.Stop || hookConfig.hooks.agentStop))
-    throw new Error("Copilot hook installation lacks required ownership/stop events");
+  validateCopilotHooks(readFileSync(hook, "utf8"));
   const mode = editor ? prepareEditorAgent({ worktree: a.path, attempt: a.id, model: a.settings.model,
     hookFormat: a.settings.options?.hookFormat === "copilot" ? "copilot" : "vscode" }).mode : "";
   if (editor) for (const command of editorPreparationCommands(a.settings, a.path, mode))

@@ -215,8 +215,14 @@ export class Feature {
     const failedTask = r?.attempts.find(a => ["failed", "blocked"].includes(a.phase) && this.runner.latest(r, a.task)?.id === a.id);
     if (failedTask) blocker ??= `Task ${failedTask.task}: ${failedTask.error ?? failedTask.report?.summary ?? failedTask.phase}; inspect before retrying`;
     let tasks: ReturnType<Runner["status"]>["tasks"];
+    let nextAction: ReturnType<Runner["status"]>["nextAction"];
     if (!s.archive) {
-      try { tasks = new Runner(s.planningRoot).status(change).tasks; } catch { /* Planning may be incomplete. */ }
+      try {
+        const sameCheckout = s.planningRoot === this.repo.root;
+        const status = (sameCheckout ? this.runner : new Runner(s.planningRoot)).status(change);
+        tasks = status.tasks;
+        nextAction = sameCheckout ? status.nextAction : this.runner.status(change).nextAction;
+      } catch { /* Planning may be incomplete in either checkout. */ }
     }
     if (!s.archive && s.phase !== "completed") {
       try {
@@ -247,7 +253,10 @@ export class Feature {
       next.fixing = "Request user direction; a repair-limit increase requires new plan approval";
     if (pendingRepair?.role === "repair" && pendingRepair.phase === "completed")
       next.fixing = `feature integrate --attempt ${pendingRepair.id}`;
-    return { ...s, blocker, tasks, next: s.jobs.some(featureActive) ? "Inspect the active job and its saved worker command" : next[s.phase], integration: r?.integration, head: r?.head,
+    const implementationAction = s.phase === "implementing" ? nextAction
+      : s.phase === "awaiting-plan-approval" && nextAction?.blocker ? { blocker: nextAction.blocker } : undefined;
+    return { ...s, blocker, tasks, nextAction: implementationAction,
+      next: s.jobs.some(featureActive) ? "Inspect the active job and its saved worker command" : next[s.phase], integration: r?.integration, head: r?.head,
       findings: s.jobs.filter(j => j.role === "review").at(-1)?.report?.findings ?? [], cleanup: r?.cleanupResults };
   }
   planPreview(change: string, input: FeatureSettings) {

@@ -28,15 +28,17 @@ export interface Terminal {
   sessionContext?: string;
   phase?: string;
 }
-export function terminalAdapter(root: string, selected: "auto" | "manual" | "herdr" | "orca"): "manual" | "herdr" | "orca" {
+export function selectTerminal(selected: "auto" | "manual" | "herdr" | "orca"): "manual" | "herdr" | "orca" {
   if (selected === "manual") return "manual";
-  if (selected === "orca" || (selected === "auto" && !!process.env.ORCA_TERMINAL_HANDLE)) {
-    orcaContext(root);
-    return "orca";
-  }
+  if (selected === "orca" || (selected === "auto" && !!process.env.ORCA_TERMINAL_HANDLE)) return "orca";
   if (selected === "herdr" && process.env.HERDR_ENV !== "1")
     throw new Error("Herdr launching requires HERDR_ENV=1 inside a Herdr session");
   return process.env.HERDR_ENV === "1" ? "herdr" : "manual";
+}
+export function terminalAdapter(root: string, selected: Parameters<typeof selectTerminal>[0]) {
+  const backend = selectTerminal(selected);
+  if (backend === "orca") orcaContext(root);
+  return backend;
 }
 export function worktrees(
   root: string,
@@ -60,12 +62,23 @@ export function worktrees(
       };
     });
 }
+export function worktrunkCommand(root: string, adapter: "auto" | "git" | "worktrunk") {
+  const windows = process.platform === "win32";
+  if (adapter === "git" || (windows && adapter === "auto")) return undefined;
+  for (const executable of windows ? ["git-wt"] : ["git-wt", "wt"]) {
+    const help = attempt(() => run(executable, ["switch", "--help"], root, 10000));
+    if (help && ["--no-hooks", "--format", "--base", "--create"].every(flag => help.includes(flag)))
+      return { executable, help };
+  }
+  if (adapter === "worktrunk")
+    throw new Error(`Worktrunk lacks required automation capabilities; install ${windows ? "git-wt.exe (bare wt may be Windows Terminal)" : "git-wt or wt"}`);
+  return undefined;
+}
 export function createWorktree(
   root: string,
   spec: Workspace,
   adapter: "auto" | "git" | "worktrunk" | "orca",
 ): Workspace {
-  if (process.platform === "win32" && adapter === "auto") adapter = "git";
   if (adapter === "orca") return createOrcaWorktree(root, spec);
   const existing = worktrees(root).find((w) => w.branch === spec.branch);
   if (existing) {
@@ -80,57 +93,43 @@ export function createWorktree(
   );
   if (branchExists && git(root, "rev-parse", spec.branch) !== spec.base)
     throw new Error("Existing branch differs from planned base");
-  if (adapter !== "git") {
-    const candidates = process.platform === "win32" ? ["git-wt"] : ["git-wt", "wt"];
-    let executable: string | undefined, help: string | undefined;
-    for (const candidate of candidates) {
-      const output = attempt(() => run(candidate, ["switch", "--help"], root, 10000));
-      if (output && ["--no-hooks", "--format", "--base", "--create"].every(flag => output.includes(flag))) {
-        executable = candidate; help = output; break;
-      }
-    }
-    const capable =
-      help &&
-      ["--no-hooks", "--format", "--base", "--create"].every((f) =>
-        help.includes(f),
+  const worktrunk = worktrunkCommand(root, adapter);
+  if (worktrunk) {
+    const { executable, help } = worktrunk;
+    let error: unknown;
+    try {
+      const result = JSON.parse(
+        run(
+          executable,
+          [
+            "switch",
+            ...(branchExists ? [] : ["--create"]),
+            spec.branch,
+            "--base",
+            spec.base,
+            ...(help.includes("--path") ? ["--path", spec.path] : []),
+            "--no-hooks",
+            "--no-cd",
+            "--yes",
+            "--format",
+            "json",
+          ],
+          root,
+        ),
       );
-    if (capable) {
-      let error: unknown;
-      try {
-        const result = JSON.parse(
-          run(
-            executable!,
-            [
-              "switch",
-              ...(branchExists ? [] : ["--create"]),
-              spec.branch,
-              "--base",
-              spec.base,
-              ...(help!.includes("--path") ? ["--path", spec.path] : []),
-              "--no-hooks",
-              "--no-cd",
-              "--yes",
-              "--format",
-              "json",
-            ],
-            root,
-          ),
-        );
-        if (!result || typeof result !== "object")
-          throw new Error("Invalid Worktrunk JSON");
-      } catch (e) {
-        error = e;
-      }
-      // Git is authoritative even if wt created a worktree but failed before returning JSON.
-      const actual = worktrees(root).find((w) => w.branch === spec.branch);
-      if (actual) {
-        if (actual.head !== spec.base)
-          throw new Error("Worktrunk created an unexpected base");
-        return { ...spec, path: actual.path };
-      }
-      if (error && adapter === "worktrunk") throw error;
-    } else if (adapter === "worktrunk")
-      throw new Error(`Worktrunk lacks required automation capabilities; install ${process.platform === "win32" ? "git-wt.exe (bare wt may be Windows Terminal)" : "git-wt or wt"}`);
+      if (!result || typeof result !== "object")
+        throw new Error("Invalid Worktrunk JSON");
+    } catch (e) {
+      error = e;
+    }
+    // Git is authoritative even if wt created a worktree but failed before returning JSON.
+    const actual = worktrees(root).find((w) => w.branch === spec.branch);
+    if (actual) {
+      if (actual.head !== spec.base)
+        throw new Error("Worktrunk created an unexpected base");
+      return { ...spec, path: actual.path };
+    }
+    if (error && adapter === "worktrunk") throw error;
   }
   if (existsSync(spec.path))
     throw new Error(

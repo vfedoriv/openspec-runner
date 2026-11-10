@@ -7,9 +7,8 @@ verification records.
 
 ## Delegated execution
 
-Windows delegated execution remains unsupported. Its protection work was stopped
-before implementation. Revisit the protection boundary before starting a new
-design; keep the existing guards until native contract tests pass.
+The [Windows delegation guide](windows-delegation-guide.md) records the NTFS
+protection boundary, recovery procedure, and verified configurations.
 
 Shared coordination records still accept only Codex and Claude. Adding Copilot
 requires an explicit compatibility contract and delegated lifecycle acceptance.
@@ -17,8 +16,9 @@ Local Copilot support does not establish shared assignment support.
 
 ## Remaining acceptance coverage
 
-The full harness/backend product, interactive exact-session resume, and
-credential-failure cases remain open. Use the [live acceptance matrix](LIVE_ACCEPTANCE_2026-11-04.md)
+The full harness/backend product remains open. Use the [repeatable Codex checks](live-acceptance-guide.md)
+for credential failure, exact-session resume, and final approval through archive.
+Record interactive resume separately. Use the [historical live acceptance matrix](LIVE_ACCEPTANCE_2026-11-04.md)
 to distinguish simulated, installed-tool, and authenticated results.
 
 ## Current implementation evidence

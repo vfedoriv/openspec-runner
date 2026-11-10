@@ -6,11 +6,6 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Component } from "../dist/component.js";
 import { terminalAdapter } from "../dist/adapters.js";
-import { validateDelegatedBinding } from "../dist/feature-state.js";
-
-test("Windows cannot reopen a delegated binding with Unix mode bits", { skip: process.platform !== "win32" }, () => {
-  assert.throws(() => validateDelegatedBinding({}), /Windows delegated-context write protection/);
-});
 
 test("Windows rejects missing caller and protected-context capabilities before mutation", { skip: process.platform !== "win32" }, async t => {
   const root = mkdtempSync(join(tmpdir(), "runner-capability-"));
@@ -24,6 +19,6 @@ test("Windows rejects missing caller and protected-context capabilities before m
   try { assert.throws(() => terminalAdapter(root, "herdr"), /HERDR_ENV/); }
   finally { if (prior !== undefined) process.env.HERDR_ENV = prior; }
   assert.equal(existsSync(join(root, ".openspec-runner/worktrees")), false);
-  await assert.rejects(component.inspect({}), /Windows delegated-context write protection/);
+  await assert.rejects(component.inspect({}), /repository identity|without backup or restore privileges/i);
   assert.equal(existsSync(join(root, ".git/openspec-runner")), false);
 });

@@ -29,9 +29,14 @@ test("approval previews are read-only and bind concrete settings, fingerprint an
   assert.equal(r.read("demo"), undefined);
   assert.throws(() => f.approve("demo", featureSettings, "bad-token"), /stale/);
   f.approve("demo", featureSettings, preview.token);
+  assert.deepEqual(f.status("demo").nextAction.launch, ["launch", "demo", "--tasks", "1.1", "--dry-run", "--json"]);
   assert.equal(r.preview("demo", ["1.1"]).tasks[0].settings.reasoningEffort, "high");
   assert.throws(() => r.preview("demo", ["1.1"], { model: "different", reasoningEffort: "high" }), /settings differ/);
   writeFileSync(join(root, "openspec/changes/demo/tasks.md"), "- [ ] 1.1 Revised scope\n");
+  const drifted = f.status("demo");
+  assert.equal(drifted.phase, "awaiting-plan-approval");
+  assert.deepEqual(drifted.nextAction, r.status("demo").nextAction);
+  assert.match(drifted.nextAction.blocker.message, /requires approval/);
   assert.throws(() => r.launch("demo", ["1.1"]), /requires approval/);
   git(root, "add", "."); git(root, "commit", "-m", "Revise plan");
   r.reconcile("demo");

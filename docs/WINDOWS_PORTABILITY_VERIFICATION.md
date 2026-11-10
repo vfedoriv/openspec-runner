@@ -83,11 +83,9 @@ compatibility with every installed version or subscription.
   Windows `wt`, which can open Windows Terminal. Unix retains `wt` fallback.
   Herdr requires the caller's actual session; Orca requires a ready local
   runtime and a registered repository. WSL remains a separate environment.
-- Delegated component execution is explicitly unsupported on Windows until
-  equivalent protected-context write restrictions are verified. NTFS mode
-  bits alone do not establish that protection. Local managed features remain
-  eligible. Tests for these unsupported combinations are explicitly skipped
-  on Windows and continue running on Linux.
+- This portability run covered local execution. See the later
+  [Windows delegation guide](windows-delegation-guide.md) for native delegated
+  context protection, recovery, and acceptance results.
 - File bytes are flushed before same-directory replacement. Windows does
   not support the Unix directory-fsync operation, so power-loss durability
   of directory entries is weaker. Actual file-write/rename errors propagate;

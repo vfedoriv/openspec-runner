@@ -13,6 +13,7 @@ import type { HarnessSettings } from "./harnesses/types.js";
 import { createInterface } from "node:readline/promises";
 import { parse, stringify } from "yaml";
 import { dashboardCommand } from "./dashboard-cli.js";
+import { doctorCommand } from "./doctor.js";
 import { summaryCommand, formatSummaryResult } from "./summary-cli.js";
 import { linkedCommand, linkedHelp } from "./linked-cli.js";
 import { hookCommand } from "./harnesses/copilot-hook-cli.js";
@@ -21,6 +22,7 @@ export const help = `openspec-runner — explicit OpenSpec task batches in isola
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
 models [--agent ID] [--json]   Query the selected harness model capabilities
+doctor [--agent ID] [--json]   Check project configuration and local execution tools
 planning-rules --agent ID      Show versioned model/effort planning guidance
 feature <action> <change>      Manage an opt-in feature lifecycle
   start | adopt | status      Register or inspect a feature
@@ -145,6 +147,7 @@ export async function main(args = process.argv.slice(2)) {
   try {
     if (args[0] === "hook") { await hookCommand(args.slice(1)); return; }
     if (args[0] === "dashboard") { await dashboardCommand(args.slice(1)); return; }
+    if (args[0] === "doctor") { await doctorCommand(args.slice(1)); return; }
     if (args[0] === "summary" || (args[0] === "coordination" && args[1] === "summary")) {
       summaryCommand({ cwd: process.cwd(), args }); return;
     }

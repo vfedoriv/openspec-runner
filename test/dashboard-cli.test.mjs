@@ -69,7 +69,7 @@ test("collector delivers a real observational snapshot and closes promptly", asy
 function freshSnapshot() {
   return {
     version: 1, collectedAt: "2026-10-07T00:00:00Z", repository: { root: "/repo", common: "/repo/.git", stateDir: "/repo/.git/openspec-runner", currentWorktree: "/repo" },
-    features: [{ id: "local:a", change: "a", origin: "local", completed: 0, total: 1, taskIds: ["local:a:task:1.1"], sessionIds: ["local:a:attempt:one"] }],
+    features: [{ id: "local:a", change: "a", origin: "local", completed: 0, total: 1, taskIds: ["local:a:task:1.1"], sessionIds: ["local:a:attempt:one"], nextAction: { launch: ["launch", "a", "--tasks", "1.1,1.2", "--dry-run", "--json"] } }],
     tasks: [{ id: "local:a:task:1.1", featureId: "local:a", task: { id: "1.1", description: "Task", completed: false, line: 0 }, ready: true, reasons: [], attempts: [] }],
     sessions: [{ id: "local:a:attempt:one", featureId: "local:a", taskId: "local:a:task:1.1", role: "implementation", attempt: { id: "one", task: "1.1", description: "Task", fingerprint: "f", settings: { model: "a", reasoningEffort: "high" }, parallel: false, phase: "running", terminal: { pane: "pane" }, path: "/repo/worker", branch: "worker", base: "base", worker: { token: "token", pid: 42, processStart: "start", log: "/repo/log" } }, phase: "running", process: "running", terminal: "available" }],
     assignments: [{ id: "local:a:assignment:assigned", featureId: "local:a", componentId: "api", repository: "api", change: "a", owner: "alice", importedRevision: "a".repeat(40), stale: false }],
@@ -107,6 +107,8 @@ for (const failure of ["timeout", "exit", "transport", "error-response"]) {
     assert.equal(stale.sources["local:a"].collectedAt, "2026-10-07T00:00:00Z");
     assert.equal(stale.collectedAt, "2026-10-07T00:00:00Z");
     assert.equal(stale.tasks[0].ready, false);
+    assert.equal(stale.features[0].nextAction, undefined);
+    assert.ok(first.features[0].nextAction?.launch);
     assert.deepEqual(stale.tasks[0].reasons, ["Source data is stale"]);
     assert.equal(stale.sessions[0].phase, "running"); assert.equal(stale.sessions[0].process, "unknown"); assert.equal(stale.sessions[0].terminal, "unknown");
     assert.equal(stale.assignments[0].stale, true);
@@ -157,5 +159,6 @@ test("plain snapshot distinguishes local satisfied tasks from shared delivered c
   assert.match(formatDashboard(sharedOnly), /shared:team.*1\/2 components delivered/);
   const mixed = { ...sharedOnly, features: [{ ...freshSnapshot().features[0], completed: 1, total: 2 }, shared], tasks: freshSnapshot().tasks };
   assert.match(formatDashboard(mixed), /a:.*1\/2 tasks satisfied/);
+  assert.match(formatDashboard(mixed), /--tasks '1\.1,1\.2'/);
   assert.match(formatDashboard(mixed), /shared:team.*1\/2 components delivered/);
 });

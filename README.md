@@ -185,7 +185,7 @@ flowchart TB
 
 The target project must have:
 
-- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and Orca terminals; see [Windows verification and limits](docs/WINDOWS_PORTABILITY_VERIFICATION.md).
+- Linux, macOS, WSL, or native Windows x64 on local NTFS. Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and Orca terminals. See [Windows verification](docs/WINDOWS_PORTABILITY_VERIFICATION.md) and [Windows delegation](docs/windows-delegation-guide.md).
 - Node.js 22.13 or newer.
 - Git and a Git repository.
 - OpenSpec installed and initialized in the project.
@@ -1370,6 +1370,7 @@ and passing current final review/consent; archive pending/prepared/archived is i
 |---|---|
 | `init [--agent codex\|claude\|all]` | Create `runner.yaml` when absent and install selected project skills |
 | `models [--agent HARNESS] [--json]` | Query the selected harness model capabilities; Claude discovery is explicitly non-exhaustive |
+| `doctor [--agent HARNESS] [--json]` | Diagnose project configuration and local execution tools before selecting tasks |
 | `planning-rules --agent HARNESS [--json]` | Show bundled and configured versioned planning guidance with hashes |
 | `feature start <change> [--json]` | Register an opt-in lifecycle before its OpenSpec artifacts are complete |
 | `feature adopt <change> [--json]` | Attach lifecycle tracking to an idle existing change without inferring approval |
@@ -1408,6 +1409,13 @@ and passing current final review/consent; archive pending/prepared/archived is i
 
 Prefer `--json` for automation and skill workflows. `launch --dry-run` is the
 safe task inspection point before worktrees, attempts, or sessions are created.
+During local implementation, `status --json` can include a `nextAction` with
+one launch preview, one integration candidate, and a blocker. Command arrays
+contain arguments to `openspec-runner`. Launch suggestions follow plan order,
+repository capacity, and task overlap rules. The preview still checks OpenSpec
+readiness and harness settings. An integration suggestion reflects the current
+report, exit evidence, and worktrees. Running integration still checks the merge
+and runs verification.
 Managed `feature approve`, `review`, `fix`, and `archive` support resource-free
 `--dry-run` previews at their corresponding decision boundaries.
 
@@ -1459,6 +1467,17 @@ gone before explicitly removing
 automatic because it could race another coordinator.
 
 ## Troubleshooting
+
+Run `openspec-runner doctor` from a target project to check its Git checkout,
+`runner.yaml`, OpenSpec CLI, default harness, and selected worktree and terminal
+backends. Use `--agent HARNESS` to inspect a different harness, or `--json` for
+structured output. The command reports independent blockers together and exits
+with code 1 when a check is blocked. For Copilot, it checks that the required
+hook events are present in the current Git commit.
+
+The checks are read-only. Authentication, model access, worker permissions, and
+project setup or verification commands are marked unchecked until a live run.
+Use `validate <change>` and `launch --dry-run` for a specific plan or task batch.
 
 ### `init` says this is not a Git repository
 
@@ -1643,7 +1662,9 @@ prevention, setup recovery, paths containing spaces, partial worktree creation,
 Herdr IDs and argument forwarding, stale reports, plan drift, integration
 conflicts, failed checks, and interrupted integration commits.
 
-Live acceptance is still recommended in a disposable repository: run the same
+The [repeatable Codex acceptance checks](docs/live-acceptance-guide.md) cover
+credential failure, exact-session resume, and final approval through archival
+in disposable repositories. For a broader comparison, run the same
 scenario once with Codex and once with Claude Code. Plan two independent tasks
 and one dependent task, launch the independent workers, detach and reattach,
 inspect reports, integrate them, then launch the dependent task. Confirm that

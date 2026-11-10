@@ -26,8 +26,9 @@ dry-run preview. Execution and approvals remain in the CLI or coordinating sessi
 
 Use Linux, macOS, WSL, or native Windows with Node.js 22.13 or newer. Native
 Windows supports Git, Worktrunk, and Orca worktrees plus manual, Herdr, and
-Orca terminals; run returned commands in PowerShell 7. Delegated component
-execution remains unsupported on Windows. Follow the
+Orca terminals; run returned commands in PowerShell 7. Windows Codex and Claude
+delegation requires [verified NTFS context protection](windows-delegation-guide.md).
+Follow the
 [installation guide](../README.md#install-into-a-target-project) first if the
 runner is not available. From the target project's Git repository:
 
@@ -56,6 +57,11 @@ openspec-runner dashboard --json --change user-auth > dashboard.json
 `--once` prints plain text. `--json` emits one version-1 JSON snapshot. Without
 a terminal on both input and output, the default is a single plain snapshot,
 so piping the command does not start the interactive display.
+
+Open a local feature's details to see suggested launch previews, integration
+candidates, and the first blocker. The same guidance appears in `--once` and
+under `nextAction` in `--json`. Run the displayed commands from your coordinating
+session after inspecting the current evidence.
 
 ## Choose a view
 

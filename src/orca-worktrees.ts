@@ -9,6 +9,28 @@ export interface OrcaWorkspace {
   id: string;
 }
 
+export function orcaWorktreeRepository(root: string, context: OrcaContext): string {
+  const repos = orcaCall(root, ["repo", "list"], context).result.repos;
+  if (!Array.isArray(repos)) throw new Error("Unsupported Orca repository list");
+  const common = repository(root).common;
+  const matches = repos.filter((r: any) => {
+    if (r.connectionId || (r.executionHostId && r.executionHostId !== "local") || typeof r.path !== "string") return false;
+    try { return samePath(repository(r.path).common, common); }
+    catch { return false; }
+  });
+  if (matches.length !== 1 || typeof matches[0].id !== "string")
+    throw new Error("Open this repository once in the local Orca app before using worktrees: orca");
+  return matches[0].id;
+}
+
+export function orcaWorktreeInventory(root: string, context: OrcaContext, repoId: string) {
+  const result = orcaCall(root, ["worktree", "list", "--repo", `id:${repoId}`], context).result;
+  if (!Array.isArray(result.worktrees) || result.truncated !== false ||
+      !result.hostScope?.hostIds?.includes("local") || result.hostScope?.omittedHostIds?.includes("local"))
+    throw new Error("Orca worktree listing is incomplete; cannot safely create or recover");
+  return result.worktrees;
+}
+
 export function createOrcaWorktree(root: string, spec: Workspace): Workspace {
   const context = orcaContext(root);
   if (spec.orcaWorktree) {
@@ -17,23 +39,10 @@ export function createOrcaWorktree(root: string, spec: Workspace): Workspace {
     if (saved.id !== spec.orcaWorktree.id) throw new Error("Saved Orca worktree identity changed");
     return validate(saved);
   }
-  const repos = orcaCall(root, ["repo", "list"], context).result.repos;
-  if (!Array.isArray(repos)) throw new Error("Unsupported Orca repository list");
-  const matches = repos.filter((r: any) => {
-    if (r.connectionId || (r.executionHostId && r.executionHostId !== "local") || typeof r.path !== "string") return false;
-    try { return samePath(repository(r.path).common, repository(root).common); }
-    catch { return false; }
-  });
-  if (matches.length !== 1 || typeof matches[0].id !== "string")
-    throw new Error("Open this repository once in the local Orca app before using worktrees: orca");
-  const repo = matches[0];
+  const repoId = orcaWorktreeRepository(root, context);
   const token = `openspec-runner:${createHash("sha256").update(spec.branch).digest("hex")}`;
   const find = () => {
-    const result = orcaCall(root, ["worktree", "list", "--repo", `id:${repo.id}`], context).result;
-    if (!Array.isArray(result.worktrees) || result.truncated !== false ||
-        !result.hostScope?.hostIds?.includes("local") || result.hostScope?.omittedHostIds?.includes("local"))
-      throw new Error("Orca worktree listing is incomplete; cannot safely create or recover");
-    const found = result.worktrees.filter((w: any) => w.comment === token && w.repoId === repo.id);
+    const found = orcaWorktreeInventory(root, context, repoId).filter((w: any) => w.comment === token && w.repoId === repoId);
     if (found.length > 1) throw new Error("Multiple Orca worktrees match this attempt; inspect before recovery");
     return found[0];
   };
@@ -41,7 +50,7 @@ export function createOrcaWorktree(root: string, spec: Workspace): Workspace {
   if (previous) return validate(previous, token);
   let result;
   try {
-    result = orcaCall(root, ["worktree", "create", "--repo", `id:${repo.id}`,
+    result = orcaCall(root, ["worktree", "create", "--repo", `id:${repoId}`,
       "--name", `osr-${token.slice(-24)}`, "--base-branch", spec.base,
       "--comment", token, "--setup", "skip", "--no-parent"], context).result.worktree;
   } catch (error) {
@@ -56,7 +65,7 @@ export function createOrcaWorktree(root: string, spec: Workspace): Workspace {
     if (!value || typeof value.path !== "string" || typeof value.id !== "string" ||
         typeof value.branch !== "string" || value.hostId !== "local" || value.isMainWorktree !== false)
       throw new Error("Unsupported Orca worktree creation response; inspect before recovery");
-    if (marker && (value.comment !== marker || value.repoId !== repo.id))
+    if (marker && (value.comment !== marker || value.repoId !== repoId))
       throw new Error("Orca returned a worktree belonging to a different attempt or repository");
     const actual = worktrees(root).find(w => samePath(w.path, value.path));
     const branch = value.branch.replace(/^refs\/heads\//, "");
