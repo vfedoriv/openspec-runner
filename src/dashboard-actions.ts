@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
-import { harnessIds } from "./harnesses/registry.js";
+import { harnessIds, hasHarness } from "./harnesses/registry.js";
 import { loadPlan } from "./plan.js";
 
 export type DashboardAction = {
@@ -11,7 +11,7 @@ export type DashboardAction = {
 };
 export const taskInputLimit = 500;
 const validTaskIds = (ids: string[]) => ids.length > 0 && new Set(ids).size === ids.length && ids.every(id => /^\d+(?:\.\d+)+$/.test(id));
-export type PreviewInput = { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string; modelForSetup?: string };
+export type PreviewInput = { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string; modelForSetup?: string; launchAgent?: string; launchBase?: string };
 
 export function focusReason(session: SessionSummary): string | undefined {
   const a = session.attempt;
@@ -53,7 +53,18 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     add("focus", "Focus saved terminal", "focus", focusReason(session));
     actions.at(-1)!.sessionId = session.id;
   }
-  if (!feature?.change || feature.origin !== "local" || session) return actions;
+  if (!feature?.change || feature.origin !== "local") return actions;
+  const staleExecution = snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined;
+  if (session) {
+    if (session.role === "implementation") {
+      add("resume", "Show saved worker or resume command", "check", staleExecution);
+      if (session.taskId && !session.attempt.cleaned) {
+        add("cleanup-attempt", "Inspect and clean this attempt", "change", staleExecution);
+        add("cleanup-all-scope", "Inspect and clean this attempt (completed change)", "change", staleExecution);
+      }
+    }
+    return actions;
+  }
   const change = feature.change;
   if (!task) {
     const stale = snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined;
@@ -81,7 +92,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     actions.at(-1)!.initialTasks = task.task.id;
   }
   if (task) add("retry-command", "Display retry command", "command", undefined, ["retry", change, task.task.id]);
-  for (const command of ["integrate", "reconcile", "cleanup"]) add(`${command}-command`, `Display ${command} command`, "command", undefined, [command, change, ...(task ? ["--tasks", task.task.id] : [])]);
+  for (const command of ["integrate", "reconcile", "cleanup"]) add(`${command}-command`, `Display ${command} command`, "command", undefined, [command, change, ...(task && command !== "reconcile" ? ["--tasks", task.task.id] : [])]);
   if (feature.state) {
     const authority = snapshot.tasks.filter(t => t.featureId === feature.id).flatMap(t => t.reasons).find(r => /coordination authority|delegated|component|import|assignment/i.test(r));
     add("approve-preview", "Preview plan approval (existing settings file)", "preview", "Plan preview executes OpenSpec validation; no-write safety is unavailable");
@@ -90,6 +101,31 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     for (const suffix of ["final", "archive"]) add(`${suffix}-preview`, `Preview ${suffix}`, "preview", "Existing CLI preview executes configured verification commands that may write files");
     for (const command of ["approve", "review", "fix", "archive"]) add(`feature-${command}-command`, `Display feature ${command}`, "command", undefined, ["feature", command, change]);
     add("feature-final-command", "Display final approval command", "command", undefined, ["feature", "approve", change, "--final"]);
+  }
+  const launch = actions.find(action => action.id.endsWith(":launch-preview"))!;
+  add("launch-run", "Launch tasks after preview", "change", staleExecution ?? launch.reason);
+  actions.at(-1)!.initialTasks = launch.initialTasks;
+  if (task) {
+    add("retry-run", "Retry task after preview", "change", staleExecution ?? (retry ? undefined : "Retry requires an unsuccessful attempt"));
+    actions.at(-1)!.initialTasks = task.task.id;
+    if (last && ["preparing", "launching"].includes(last.phase) && !last.session && !last.terminal.phase)
+      add("recover-run", "Recover preparation (may rerun setup)", "change", staleExecution, ["recover", change, task.task.id]);
+  }
+  if (feature.execution?.transaction || feature.execution?.cleanupPending) {
+    if (!task) add("integrate-continue", "Continue integration", "change", staleExecution, ["integrate", change, "--continue"]);
+    if (!task && feature.execution.transaction) add("integrate-abort", "Abort integration", "change", staleExecution, ["integrate", change, "--abort"]);
+  } else if (feature.execution) {
+    const suggestedIntegration = feature.nextAction?.integrate;
+    const completed = snapshot.tasks.some(row => row.featureId === feature.id && row.attempts.at(-1)?.phase === "completed" && (!task || row.id === task.id));
+    if (completed) {
+      add("integrate-run", "Integrate selected tasks", "change", staleExecution);
+      actions.at(-1)!.initialTasks = task?.task.id ?? suggestedIntegration?.[3];
+    }
+    if (!task) {
+      add("reconcile-run", "Reconcile committed plan", "change", staleExecution, ["reconcile", change]);
+      add("cleanup-all", "Inspect all cleanup candidates", "check", staleExecution, ["cleanup", change, "--all", "--dry-run"]);
+    } else if (last?.phase === "integrated")
+      add("cleanup-inspect", "Inspect cleanup for this task", "check", staleExecution, ["cleanup", change, "--tasks", task.task.id, "--dry-run"]);
   }
   if (!task) add("validate", "Validate change (runs OpenSpec)", "check",
     snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined, ["validate", change]);
@@ -124,10 +160,19 @@ export function previewCommand(snapshot: DashboardSnapshot, action: DashboardAct
     }
     argv = retry ? ["retry", feature.change, ids[0]] : ["launch", feature.change, "--tasks", ids.join(",")];
     if (feature.state) {
-      if (!feature.state.approval || input.model || input.effort) throw new Error("Managed preview requires approved settings without overrides");
+      if (!feature.state.approval || input.model || input.effort || input.launchAgent || input.launchBase) throw new Error("Managed preview requires approved settings without overrides");
     } else {
       let agent = "codex";
       try { agent = loadPlan(snapshot.repository.root, feature.change).agent; } catch { /* Missing config cannot establish a different harness. */ }
+      if (input.launchAgent) {
+        if (!hasHarness(input.launchAgent)) throw new Error("Select a registered harness");
+        agent = input.launchAgent;
+        argv.push("--agent", agent);
+      }
+      if (input.launchBase) {
+        if (/^[\-]|[\0\r\n]/.test(input.launchBase)) throw new Error("Enter a Git ref or commit ID");
+        argv.push(`--base=${input.launchBase}`);
+      }
       const tasks = ids.map(id => snapshot.tasks.find(t => t.featureId === feature.id && t.task.id === id)!);
       const inheritedModel = tasks.some(t => !t.assignment?.model || t.assignment.model === "session");
       const inheritedEffort = agent === "codex" && tasks.some(t => !t.assignment?.reasoningEffort && !t.assignment?.effort);

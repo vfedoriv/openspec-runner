@@ -9,6 +9,7 @@ import { loadPlan } from "../dist/plan.js";
 import { processStart } from "../dist/processes.js";
 import { actionsFor, projectTarget } from "../dist/dashboard-actions.js";
 import { runDashboardAction } from "../dist/dashboard-action-runner.js";
+import { Runner } from "../dist/runner.js";
 const reader = await import("../dist/dashboard-reader.js").catch(() => ({}));
 export function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "dashboard-"));
@@ -48,6 +49,36 @@ test("dashboard discovers a task-only change and creates settings only after con
 function state(root, attempts = [], version = 1) {
   return { version, change: "demo", fingerprint: loadPlan(root, "demo").fingerprint, integration: { path: root, branch: "main", base: "base" }, head: "head", baseline: [], attempts, ...(version === 2 ? { batches: attempts.map(a => ({ id: `batch-${a.id}`, harness: "codex", attempts: [a.id] })) } : {}) };
 }
+
+test("dashboard integration confirmation rejects a changed recorded head", async t => {
+  const { root, repo } = fixture(t);
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "plan"], { cwd: root });
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const recorded = state(root);
+  recorded.head = head;
+  recorded.integration.base = head;
+  recorded.transaction = { before: head, tasks: ["1.1"], pending: [] };
+  const statePath = join(repo.stateDir, "demo.json");
+  writeFileSync(statePath, JSON.stringify(recorded));
+  const snapshot = reader.collectDashboard({ cwd: root });
+  const action = actionsFor(snapshot, "local:demo").find(entry => entry.id.endsWith(":integrate-abort"));
+  assert.ok(action);
+  const signal = new AbortController().signal;
+  const { confirmation } = await runDashboardAction({ snapshot, signal, action });
+  assert.match(confirmation, /Abort integration/);
+  const identity = new Runner(root).actionIdentity("demo");
+  recorded.head = "a".repeat(40);
+  writeFileSync(statePath, JSON.stringify(recorded));
+  await assert.rejects(runDashboardAction({ snapshot, signal, action, confirmation }), /Action changed/);
+  assert.throws(() => new Runner(root, identity).integrate("demo", [], "abort"), /Runner state changed/);
+  assert.equal(readFileSync(statePath, "utf8"), JSON.stringify(recorded));
+  recorded.head = head;
+  writeFileSync(statePath, JSON.stringify(recorded));
+  const result = await runDashboardAction({ snapshot, signal, action, confirmation });
+  assert.equal(JSON.parse(result.text).aborted, true);
+  assert.equal(new Runner(root).read("demo").transaction, undefined);
+});
 function attempt(root, id, phase = "running") {
   return { id, task: "1.1", description: "First", fingerprint: "fingerprint", settings: { model: "a", reasoningEffort: "high" }, parallel: false, phase, terminal: {}, path: root, branch: id, base: "base", worker: { token: id, log: join(root, `${id}.log`), pid: process.pid, processStart: "reused-pid" } };
 }

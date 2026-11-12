@@ -7,9 +7,9 @@ shared assignments in your terminal. Use it to inspect evidence and preview
 next steps while your coordinating session operates the runner.
 
 Browsing leaves the project unchanged. Selected actions can focus an existing
-terminal, run checks and previews, or set up project and execution settings
-after confirmation. Worker execution and approvals remain in the CLI or
-coordinating session.
+terminal, run checks and previews, and perform confirmed project setup and
+local task operations. Managed approvals remain in the CLI or coordinating
+session.
 
 ## Contents
 
@@ -390,6 +390,11 @@ The actions depend on the selected row:
 | View saved attempt diff | Shows the attempt's diff when its saved worktree and base are available. |
 | Focus saved terminal | Focuses an eligible existing terminal in the matching backend context. It does not create or resume a session. |
 | Preview launch or retry | Runs a supported CLI dry run after you enter the exact task IDs and any required settings. |
+| Launch or retry | Reviews the resolved batch and requires confirmation before starting workers. |
+| Recover preparation | Continues the selected interrupted attempt. Setup commands may run again. |
+| Integrate selected tasks | Reviews exact task and attempt IDs before integration. Continue and abort are separate actions on a pending transaction. |
+| Reconcile committed plan | Reviews the recorded integration head and the current plan before applying committed edits. |
+| Inspect and clean this attempt | Reviews one saved worktree and terminal before removal. Branches and reports are retained. |
 | Preview review or repair | Uses approved managed settings and retains coordination authority checks. |
 | Display command | Shows a CLI command for you or your coordinating session to review and run outside the dashboard. |
 
@@ -408,12 +413,21 @@ For a launch preview:
 A managed preview uses the approved settings without overrides. A retry targets
 exactly the selected task and requires a stopped unsuccessful attempt. Executable
 previews use `--dry-run --json`, have a 30-second timeout, and limit output to
-1 MiB. A successful preview does not launch or retry anything.
+1 MiB. For unmanaged changes, leave the harness and base fields blank to use
+the defaults, or enter explicit overrides. After a successful launch or retry
+preview, press `l` to review the operation. Confirm with Enter or cancel with
+Escape. The runner checks the reviewed state and resolved settings again
+before reserving attempts. For manual sessions, use the returned worker command
+or open the saved session's actions to inspect its worker or resume command.
 
 Plan approval, final approval, and archive previews are unavailable in the
 dashboard because their CLI validation or configured checks may write files.
-Their entries explain the limitation and offer display-only commands. Integration,
-reconciliation, and cleanup are also commands to execute outside the dashboard.
+Their entries explain the limitation and offer display-only commands. If
+integration stops on a conflict, use the reported worktree to resolve it,
+then select **Continue integration** or **Abort integration** on the feature
+row. Automatic cleanup can run during integration when configured. To review
+cleanup separately, inspect candidates from Features, then confirm the exact
+attempt from Sessions. Cleanup inspection can acquire a runner lock.
 Review displayed commands and replace placeholders or supply required arguments
 using the [CLI reference](../README.md#cli-reference).
 

@@ -6,7 +6,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { resolve, join, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { safeSummary } from "./summary-service.js";
 import { fileURLToPath } from "node:url";
 import { inspectCleanup, removeInspectedWorktree, type CleanupResult, type CleanupOptions } from "./cleanup.js";
@@ -191,10 +191,33 @@ export function decodeState(raw: unknown): State {
     if (!attemptIds.has(id)) throw new Error(`Batch references unknown attempt: ${id}`);
   return { ...raw, version: 2, attempts, batches: [...byId.values()] } as State;
 }
+export function launchIdentity(preview: ReturnType<Runner["preview"]>, defaults: ReadonlyMap<string, string>): string {
+  return createHash("sha256").update(JSON.stringify({
+    ...preview,
+    tasks: preview.tasks.map(task => ({
+      ...task,
+      settings: { ...task.settings, reasoningEffort: task.settings.reasoningEffort ?? defaults.get(task.settings.model) },
+    })),
+  })).digest("hex");
+}
+
 export class Runner {
   repo: ReturnType<typeof repository>;
-  constructor(cwd = process.cwd()) {
+  constructor(cwd = process.cwd(), private readonly expectedState?: string) {
     this.repo = repository(cwd);
+  }
+  actionIdentity(change: string): string {
+    const plan = loadPlan(this.repo.root, change);
+    const state = this.read(change);
+    const integrationHead = state && attempt(() => git(state.integration.path, "rev-parse", "HEAD"));
+    return createHash("sha256").update(JSON.stringify([
+      this.repo.root, git(this.repo.root, "rev-parse", "HEAD"), plan.fingerprint,
+      state, integrationHead, readFeature(this.repo.stateDir, change),
+    ])).digest("hex");
+  }
+  private assertActionIdentity(change: string) {
+    if (this.expectedState && this.actionIdentity(change) !== this.expectedState)
+      throw new Error("Runner state changed; refresh and review the action again");
   }
   private ensureRuntimeExcluded() {
     const exclude = resolve(this.repo.common, "info", "exclude"),
@@ -487,10 +510,14 @@ export class Runner {
     retry = false,
     defaults = new Map<string, string>(),
     agent?: string,
+    expectedLaunch?: string,
   ) {
     const prepared = this.lock(() => {
+      this.assertActionIdentity(change);
       const preview = this.preview(change, ids, settings, base, retry, agent),
         p = loadPlan(this.repo.root, change);
+      if (expectedLaunch && launchIdentity(preview, defaults) !== expectedLaunch)
+        throw new Error("Launch settings changed; preview and review again");
       this.ensureRuntimeExcluded();
       let s = this.read(change);
       if (!s) {
@@ -635,6 +662,7 @@ export class Runner {
   }
   recover(change: string, task: string) {
     const prepared = this.lock(() => {
+      this.assertActionIdentity(change);
       const s = this.requireState(change),
         a = this.latest(s, task),
         p = loadPlan(this.repo.root, change);
@@ -1005,6 +1033,7 @@ export class Runner {
   }
   private integrateCore(change: string, ids: string[], mode?: "continue" | "abort") {
     const result = this.lock(() => {
+      this.assertActionIdentity(change);
       const s = this.requireState(change),
         path = s.integration.path;
       if (mode === "abort") {
@@ -1206,6 +1235,7 @@ export class Runner {
   }
   reconcile(change: string) {
     return this.lock(() => {
+      this.assertActionIdentity(change);
       const s = this.requireState(change),
         p = loadPlan(this.repo.root, change);
       if (s.transaction || s.attempts.some(active))

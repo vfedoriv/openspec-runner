@@ -12,6 +12,7 @@ export type FeatureSummary = {
   deliverySummary?: SummaryHandle; summaryCommand?: string[];
   nextAction?: NextAction;
   missingExecution?: boolean;
+  execution?: { head: string; path: string; fingerprint: string; planFingerprint?: string; transaction?: boolean; cleanupPending?: boolean; automaticCleanup?: boolean };
   id: string; change?: string; origin: "local" | "shared"; phase?: FeatureState["phase"];
   completed: number; total: number; state?: FeatureState; taskIds: string[]; sessionIds: string[];
   coordination?: CoordinationStatus;

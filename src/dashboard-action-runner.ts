@@ -74,6 +74,82 @@ export async function runDashboardAction(options: {
   if (!target) throw new Error("Unknown action target");
   const trusted = actionsFor(snapshot, target.id).find(a => a.id === action.id)!;
   if (trusted.kind !== action.kind) throw new Error("Action kind differs from allowlist");
+  const suffix = trusted.id.slice(target.id.length + 1);
+  const localOperations = ["launch-run", "retry-run", "recover-run", "integrate-run", "integrate-continue",
+    "integrate-abort", "reconcile-run", "cleanup-attempt", "cleanup-all-scope", "resume"];
+  if (localOperations.includes(suffix)) {
+    if (!trusted.available) throw new Error(trusted.reason ?? "Action unavailable");
+    const root = snapshot.repository.root;
+    const current = await currentSnapshot(snapshot, signal);
+    const selected = actionsFor(current, target.id).find(candidate => candidate.id === trusted.id);
+    if (!selected?.available) throw new Error(selected?.reason ?? "Action is no longer eligible");
+    const session = current.sessions.find(row => row.id === target.id);
+    const task = current.tasks.find(row => row.id === target.id);
+    const feature = current.features.find(row => row.id === (session?.featureId ?? task?.featureId ?? target.id));
+    if (!feature?.change || feature.origin !== "local") throw new Error("A local change is required");
+    const change = feature.change;
+    const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+    const cli = (args: string[], mutation = false) => dashboardChild(process.execPath, [entry, ...args, "--json"], root, signal, mutation);
+    const runnerModule = JSON.stringify(new URL("./runner.js", import.meta.url).href);
+    const runner = (source: string, args: string[]) => dashboardChild(process.execPath,
+      ["--input-type=module", "-e", `import { Runner } from ${runnerModule}; const runner = new Runner(); ${source}`, ...args], root, signal);
+    if (suffix === "resume") {
+      const attempt = session!.attempt;
+      if (attempt.cleaned || attempt.worker?.exitedAt || attempt.terminal.closed || attempt.report || session!.worktreeAvailable !== true)
+        return { text: "Use the retained session evidence. The saved worker cannot be resumed." };
+      if (!attempt.session && attempt.phase !== "manual")
+        return { text: "Startup is ambiguous. Inspect the saved terminal or recover preparation from the task row." };
+      if (attempt.agent === "copilot-vscode")
+        return { text: `Open ${attempt.path} in VS Code and locate the saved chat. Exact chat resume is unavailable.` };
+      const output = await runner("console.log(runner.command(process.argv[1], JSON.parse(process.argv[2])) ?? 'No saved resume command is available');", [change, JSON.stringify(attempt)]);
+      return { text: output.stdout };
+    }
+    let command = selected.argv;
+    let details: unknown = {
+      integration: feature.execution,
+      attempt: task?.attempts.at(-1)?.id,
+      ...(suffix === "integrate-abort" ? { effect: "Discards pending merge and conflict edits in the integration worktree." } : {}),
+      ...(suffix === "reconcile-run" ? { effect: "Adopts committed planning edits and may invalidate previous attempts or approval." } : {}),
+    };
+    const cleanup = suffix.startsWith("cleanup-");
+    const identity = cleanup ? undefined : (await runner("console.log(runner.actionIdentity(process.argv[1]));", [change])).stdout.trim();
+    if (suffix === "launch-run" || suffix === "retry-run") {
+      const preview = actionsFor(current, target.id).find(a => a.id === trusted.id.replace(/-run$/, "-preview"))!;
+      const args = previewCommand(current, preview, input);
+      command = args.slice(0, -2);
+      const previewResult = JSON.parse((await cli([...command, "--dry-run"])).stdout);
+      command.push("--expected-launch", previewResult.executionIdentity);
+      details = previewResult;
+    } else if (suffix === "integrate-run") {
+      const ids = input?.taskIds ?? [];
+      const rows = ids.map(id => current.tasks.find(row => row.featureId === feature.id && row.task.id === id));
+      if (!ids.length || new Set(ids).size !== ids.length || rows.some(row => !row || row.attempts.at(-1)?.phase !== "completed" || task && row.id !== task.id))
+        throw new Error("Select exact tasks with completed attempts");
+      command = ["integrate", change, "--tasks", ids.join(",")];
+      details = { integration: feature.execution, attempts: rows.map(row => row!.attempts.at(-1)!.id) };
+    } else if (cleanup) {
+      if (!session || !("task" in session.attempt)) throw new Error("Select an implementation attempt");
+      const scope = suffix === "cleanup-all-scope" ? ["--all"] : ["--tasks", session.attempt.task];
+      const args = ["cleanup", change, ...scope, "--attempt", session.attempt.id];
+      const inspected = JSON.parse((await cli([...args, "--dry-run"])).stdout).results[0];
+      if (!inspected?.token || !["eligible", "confirmation-required"].includes(inspected.status))
+        return { text: bounded(inspected ?? { status: "No eligible attempt" }) };
+      command = [...args, "--confirm", inspected.token];
+      details = { ...inspected, effect: "Removes this worktree, including ignored files, and closes its terminal. The branch and reports are retained." };
+    }
+    if (!command) throw new Error("No executable operation");
+    const review = [selected.label, root, shellCommand(["openspec-runner", ...command]), bounded(details), ...(identity ? [`Reviewed state: ${identity}`] : [])].join("\n");
+    if (options.confirmation === undefined) return { text: review, confirmation: review };
+    if (options.confirmation !== review) throw new Error("Action changed; refresh and review it again");
+    try {
+      const output = await cli(identity ? [...command, "--expected-state", identity] : command, true);
+      return { text: output.stdout + (output.stderr ? `\nDiagnostics:\n${output.stderr}` : ""), command };
+    } catch (error) {
+      if (command[0] === "integrate" && feature.execution)
+        throw new Error(`${error instanceof Error ? error.message : String(error)}\nIntegration worktree: ${feature.execution.path}`);
+      throw error;
+    }
+  }
   if (trusted.kind === "check" || trusted.kind === "change") {
     if (!trusted.available) throw new Error(trusted.reason ?? "Action unavailable");
     const command = trusted.argv![0] === "summary" ? [...trusted.argv!] : [...trusted.argv!, "--json"];

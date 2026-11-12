@@ -13,7 +13,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   useFocus({ autoFocus: true });
   const [tab, setTab] = useState(0), [selected, setSelected] = useState<string>(), [pane, setPane] = useState<"list" | "details" | "activity">("list");
   const [filters, setFilters] = useState<DashboardFilters>({ search: "", includeCompleted: false, includeOlderAttempts: false, sort: "name" });
-  const [edit, setEdit] = useState<"search" | "status" | "harness" | "owner" | "activity" | "tasks" | "model" | "effort" | "modelForSetup">(), [text, setText] = useState("");
+  const [edit, setEdit] = useState<"search" | "status" | "harness" | "owner" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase">(), [text, setText] = useState("");
   const [help, setHelp] = useState(false), [offset, setOffset] = useState(0), [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<ActivityEntry[]>([]), [activityError, setActivityError] = useState(""), [activitySearch, setActivitySearch] = useState("");
   const [following, setFollowing] = useState(true), [mode, setMode] = useState<"raw" | "normalized">("normalized"), [activityOffset, setActivityOffset] = useState(0);
@@ -61,10 +61,12 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   useEffect(() => { if (!following || !session) return; const timer = setInterval(() => { void loadRef.current("newer"); }, 2000); return () => clearInterval(timer); }, [following, session?.id, session?.log, session?.activityPath, session?.attempt.id, session?.attempt.agent, mode]);
   useEffect(() => { const stop = () => { actionController.current?.abort(); activityController.current?.abort(); }; lifetime.addEventListener("abort", stop); return () => { stop(); lifetime.removeEventListener("abort", stop); }; }, [lifetime]);
   const [confirmation, setConfirmation] = useState<{ action: DashboardAction; input?: PreviewInput; text: string }>();
+  const [launchFollowup, setLaunchFollowup] = useState<{ action: DashboardAction; input?: PreviewInput }>();
   const applying = useRef(false);
   const execute = async (action: DashboardAction, input?: PreviewInput, approved?: string) => {
     if (!snapshot || busy || actionController.current) return;
     if (!action.available) { setOutput(action.reason ?? "Unavailable"); return; }
+    setLaunchFollowup(undefined);
     setPane("details"); setOffset(0);
     const controller = new AbortController(); actionController.current = controller; setBusy(true); setMenu(undefined); setOutput(approved ? "Applying change…" : "Working… Escape cancels");
     applying.current = !!approved;
@@ -72,6 +74,10 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       if (!controller.signal.aborted && !lifetime.aborted) {
         setOutput(result.text);
         if (result.confirmation) setConfirmation({ action, input, text: result.confirmation });
+        if (target && /:(launch|retry)-preview$/.test(action.id)) {
+          const next = actionsFor(snapshot, target).find(candidate => candidate.id === action.id.replace(/-preview$/, "-run"));
+          if (next?.available) setLaunchFollowup({ action: next, input });
+        }
       } }
     catch (error) { if (!lifetime.aborted && !controller.signal.aborted && actionController.current === controller) setOutput(safeText(error instanceof Error ? error.message : error)); }
     finally {
@@ -101,8 +107,10 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
           const updated = { ...preview, input: { ...preview.input, ...(edit === "tasks" ? { taskIds: value.split(",").map(t => t.trim()).filter(Boolean) } : { [edit]: value || undefined }) } };
           setPreview(updated);
           const feature = snapshot?.features.find(f => f.id === target || f.id === snapshot.tasks.find(t => t.id === target)?.featureId);
-          if (edit === "tasks" && !feature?.state) { beginEdit("model"); return; }
+          if (edit === "tasks" && !updated.action.id.endsWith(":integrate-run") && !feature?.state) { beginEdit("model"); return; }
           if (edit === "model") { beginEdit("effort"); return; }
+          if (edit === "effort") { beginEdit("launchAgent"); return; }
+          if (edit === "launchAgent") { beginEdit("launchBase"); return; }
           void execute(updated.action, updated.input); setPreview(undefined);
         }
         setEdit(undefined); return;
@@ -110,6 +118,10 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       if (edit === "tasks" && key.ctrl && input === "u") setText("");
       else if (key.backspace || key.delete) setText(t => t.slice(0, -1));
       else if (!key.ctrl && !key.meta) setText(t => (t + safeText(input)).slice(0, taskInputLimit));
+      return;
+    }
+    if (input === "l" && pane === "details" && output && launchFollowup) {
+      void execute(launchFollowup.action, launchFollowup.input);
       return;
     }
     if (input === "q" || key.ctrl && input === "c") { quit(); return; }
@@ -140,7 +152,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         if (!menuTarget) return;
         const action = actionsFor(snapshot, menuTarget).find(candidate => candidate.id === menu[actionIndex]?.id);
         if (!action) return;
-        if (action.kind === "preview" && action.available && /:(launch|retry)-preview$/.test(action.id)) {
+        if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run)$/.test(action.id)) {
           setPreview({ action, input: {} });
           beginEdit("tasks", action.initialTasks);
         } else if (action.kind === "change" && action.id.startsWith("project:init:copilot")) {
@@ -190,7 +202,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     status: `Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`,
     filters: `/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`,
     lines,
-    footer: [confirmation ? "Enter confirm · Esc cancel" : edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · ←→ views"],
+    footer: [confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · ←→ views"],
   });
   return <Box flexDirection="column" height={height} width={columns}>
     {frame.map((line, index) => <Text key={index} wrap="truncate" color={index === 1 ? "cyan" : error && index === (compact ? 3 : 4) ? "yellow" : index === frame.length - (compact ? 2 : 3) ? "green" : undefined} dimColor={!compact && index === frame.length - 2}>{line}</Text>)}

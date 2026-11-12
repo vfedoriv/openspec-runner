@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Runner } from "./runner.js";
+import { Runner, launchIdentity } from "./runner.js";
 import { Feature, type FeatureSettings } from "./feature.js";
 import { readFeature } from "./feature-state.js";
 import { initExecution, loadPlan, readiness, configFrom } from "./plan.js";
@@ -205,6 +205,8 @@ export async function main(args = process.argv.slice(2)) {
         confirm: { type: "string" },
         final: { type: "boolean" },
         retry: { type: "boolean" },
+        "expected-state": { type: "string" },
+        "expected-launch": { type: "string" },
       },
     });
     const [command, change, task] = p;
@@ -218,6 +220,12 @@ export async function main(args = process.argv.slice(2)) {
       throw new Error(`Unknown agent ${v.agent}; available: ${harnessIds().join(", ")}`);
     if (v.agent !== undefined && ["worker", "begin", "report"].includes(command))
       throw new Error("Worker lifecycle commands use the saved batch harness; do not pass --agent");
+    if (v["expected-state"] !== undefined &&
+        (!["launch", "retry", "recover", "integrate", "reconcile"].includes(command) || !/^[a-f0-9]{64}$/.test(v["expected-state"])))
+      throw new Error("Invalid expected runner state");
+    if (v["expected-launch"] !== undefined &&
+        (!["launch", "retry"].includes(command) || !/^[a-f0-9]{64}$/.test(v["expected-launch"])))
+      throw new Error("Invalid expected launch settings");
     let result: unknown;
     if (v.all && command !== "cleanup") throw new Error("--all requires cleanup");
     if (v.confirm && !["cleanup", "feature"].includes(command)) throw new Error("--confirm requires cleanup or feature approve");
@@ -308,7 +316,7 @@ export async function main(args = process.argv.slice(2)) {
     }
     else {
       if (!change) throw new Error("Specify a change name");
-      const r = new Runner(),
+      const r = new Runner(process.cwd(), v["expected-state"]),
         ids = v.tasks?.split(",").map((x) => x.trim()) ?? [];
       switch (command) {
         case "validate": {
@@ -397,6 +405,7 @@ export async function main(args = process.argv.slice(2)) {
             const capabilities = await adapter.capabilities(r.repo.root, preview.tasks[0]?.settings);
             result = {
               ...preview,
+              executionIdentity: launchIdentity(preview, defaults),
               capabilities,
               permissionPolicy: {
                 permissionMode: agentConfig?.permissionMode ?? (selectedAgent === "claude" ? "dontAsk" : undefined),
@@ -432,6 +441,7 @@ export async function main(args = process.argv.slice(2)) {
               command === "retry",
               defaults,
               selectedAgent,
+              v["expected-launch"],
             );
           }
           break;
