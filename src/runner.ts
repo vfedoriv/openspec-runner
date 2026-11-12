@@ -215,7 +215,7 @@ export class Runner {
       state, integrationHead, readFeature(this.repo.stateDir, change),
     ])).digest("hex");
   }
-  private assertActionIdentity(change: string) {
+  assertActionIdentity(change: string) {
     if (this.expectedState && this.actionIdentity(change) !== this.expectedState)
       throw new Error("Runner state changed; refresh and review the action again");
   }

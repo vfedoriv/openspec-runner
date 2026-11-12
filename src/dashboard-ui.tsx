@@ -13,7 +13,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   useFocus({ autoFocus: true });
   const [tab, setTab] = useState(0), [selected, setSelected] = useState<string>(), [pane, setPane] = useState<"list" | "details" | "activity">("list");
   const [filters, setFilters] = useState<DashboardFilters>({ search: "", includeCompleted: false, includeOlderAttempts: false, sort: "name" });
-  const [edit, setEdit] = useState<"search" | "status" | "harness" | "owner" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase">(), [text, setText] = useState("");
+  const [edit, setEdit] = useState<"search" | "status" | "harness" | "owner" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase" | "settingsFile">(), [text, setText] = useState("");
   const [help, setHelp] = useState(false), [offset, setOffset] = useState(0), [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<ActivityEntry[]>([]), [activityError, setActivityError] = useState(""), [activitySearch, setActivitySearch] = useState("");
   const [following, setFollowing] = useState(true), [mode, setMode] = useState<"raw" | "normalized">("normalized"), [activityOffset, setActivityOffset] = useState(0);
@@ -68,8 +68,9 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (!action.available) { setOutput(action.reason ?? "Unavailable"); return; }
     setLaunchFollowup(undefined);
     setPane("details"); setOffset(0);
-    const controller = new AbortController(); actionController.current = controller; setBusy(true); setMenu(undefined); setOutput(approved ? "Applying change…" : "Working… Escape cancels");
-    applying.current = !!approved;
+    const controller = new AbortController(); actionController.current = controller; setBusy(true); setMenu(undefined); const checking = /:managed-(plan|final|archive)$/.test(action.id);
+    setOutput(approved ? "Applying change…" : checking ? "Running checks…" : "Working… Escape cancels");
+    applying.current = !!approved || checking;
     try { const result = await runDashboardAction({ snapshot, action, input, signal: controller.signal, confirmation: approved });
       if (!controller.signal.aborted && !lifetime.aborted) {
         setOutput(result.text);
@@ -81,7 +82,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       } }
     catch (error) { if (!lifetime.aborted && !controller.signal.aborted && actionController.current === controller) setOutput(safeText(error instanceof Error ? error.message : error)); }
     finally {
-      if (approved) collector.refresh();
+      if (approved || checking) collector.refresh();
       applying.current = false;
       if (actionController.current === controller) { actionController.current = undefined; setBusy(false); }
     }
@@ -155,6 +156,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run)$/.test(action.id)) {
           setPreview({ action, input: {} });
           beginEdit("tasks", action.initialTasks);
+        } else if (action.available && action.id.endsWith(":managed-plan")) {
+          setMenu(undefined); setPreview({ action, input: {} }); beginEdit("settingsFile");
         } else if (action.kind === "change" && action.id.startsWith("project:init:copilot")) {
           setMenu(undefined); setPreview({ action, input: {} }); beginEdit("modelForSetup");
         } else void execute(action);

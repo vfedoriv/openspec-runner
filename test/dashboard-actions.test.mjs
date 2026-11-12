@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { collectDashboard } from "../dist/dashboard-reader.js";
 import { repository } from "../dist/system.js";
 import { loadPlan } from "../dist/plan.js";
-import { featureFixture, blocker, git } from "./helpers/feature-fixture.mjs";
+import { featureFixture, featureSettings, blocker, git } from "./helpers/feature-fixture.mjs";
 const module = await import("../dist/dashboard-actions.js").catch(() => ({}));
 const actionsFor = (...args) => { assert.equal(typeof module.actionsFor, "function", "action allowlist is implemented"); return module.actionsFor(...args); };
 const previewCommand = (...args) => module.previewCommand(...args);
@@ -217,6 +217,56 @@ test("launch retry review and repair CLI previews preserve repository and runtim
   await fixture.review();
   assert.equal((await run("fix")).role, "repair");
 });
+test("dashboard manages approval, review, repair, final approval and archive", async t => {
+  const fixture = featureFixture(t);
+  const file = join(fixture.dir, "feature settings.json");
+  const settings = JSON.stringify(featureSettings);
+  writeFileSync(file, settings);
+  const request = (suffix, input, job) => {
+    const snapshot = collectDashboard({ cwd: fixture.root });
+    const target = job ? snapshot.sessions.find(row => row.attempt.id === job) : snapshot.features[0];
+    const action = actionsFor(snapshot, target.id).find(a => a.id.endsWith(`:managed-${suffix}`));
+    assert.ok(action?.available, action?.reason ?? suffix);
+    return { snapshot, action, input, signal: new AbortController().signal };
+  };
+  const run = async (...args) => {
+    const action = request(...args);
+    const review = await runnerModule.runDashboardAction(action);
+    assert.ok(review.confirmation);
+    return runnerModule.runDashboardAction({ ...action, confirmation: review.confirmation });
+  };
+  await run("start");
+  const approval = request("plan", { settingsFile: file });
+  const { confirmation, text } = await runnerModule.runDashboardAction(approval);
+  assert.match(text, /"maxFixRounds": 2/);
+  writeFileSync(file, settings + "\n");
+  await assert.rejects(runnerModule.runDashboardAction({ ...approval, confirmation }), /settings changed/);
+  assert.equal(fixture.f.read("demo").approval, undefined);
+  writeFileSync(file, settings);
+  await runnerModule.runDashboardAction({ ...approval, confirmation });
+  fixture.control({ findings: [blocker] });
+  await run("review");
+  await fixture.f.worker("demo", fixture.f.read("demo").jobs.at(-1).id);
+  await assert.rejects(runnerModule.runDashboardAction(request("final")), /Blocking review findings/);
+  await run("repair");
+  const repair = fixture.f.read("demo").jobs.at(-1);
+  await fixture.f.worker("demo", repair.id);
+  await run("repair-integrate", undefined, repair.id);
+  fixture.control({ findings: [] });
+  await run("review");
+  await fixture.f.worker("demo", fixture.f.read("demo").jobs.at(-1).id);
+  await run("final");
+  assert.ok(fixture.f.read("demo").finalApproval);
+  fixture.control({ archiveCrash: true });
+  await assert.rejects(run("archive"), /Action failed/);
+  assert.equal(fixture.f.read("demo").phase, "archiving");
+  fixture.control({ archiveCrash: false });
+  assert.match(request("archive").action.label, /Resume archive/);
+  await run("archive");
+  assert.equal(fixture.f.read("demo").phase, "completed");
+  assert.equal(fixture.getControl().archiveCalls, 1);
+});
+
 test("action menus project known worktree availability without consulting filesystem", () => {
   const s = snapshot();
   s.sessions = [{ id: "session", featureId: "local:change", worktreeAvailable: true, role: "implementation", phase: "running", process: "unknown", terminal: "unknown", attempt: { id: "saved", path: "/definitely-not-a-current-worktree", base: "a".repeat(40), phase: "running", session: "saved", terminal: { backend: "orca", pane: "saved-pane" } } }];

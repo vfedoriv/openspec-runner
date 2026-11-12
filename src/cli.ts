@@ -221,7 +221,7 @@ export async function main(args = process.argv.slice(2)) {
     if (v.agent !== undefined && ["worker", "begin", "report"].includes(command))
       throw new Error("Worker lifecycle commands use the saved batch harness; do not pass --agent");
     if (v["expected-state"] !== undefined &&
-        (!["launch", "retry", "recover", "integrate", "reconcile"].includes(command) || !/^[a-f0-9]{64}$/.test(v["expected-state"])))
+        (!["launch", "retry", "recover", "integrate", "reconcile", "feature"].includes(command) || !/^[a-f0-9]{64}$/.test(v["expected-state"])))
       throw new Error("Invalid expected runner state");
     if (v["expected-launch"] !== undefined &&
         (!["launch", "retry"].includes(command) || !/^[a-f0-9]{64}$/.test(v["expected-launch"])))
@@ -234,8 +234,10 @@ export async function main(args = process.argv.slice(2)) {
     if (v["default-agent"] !== undefined && command !== "init")
       throw new Error("--default-agent is supported only by init");
     if (command === "feature") {
-      const action = change, name = task, feature = new Feature();
+      const action = change, name = task, feature = new Feature(process.cwd(), v["expected-state"]);
       if (!action || !name || p.length !== 3) throw new Error("Use feature <action> <change>");
+      if (v["expected-state"] && (v["dry-run"] || !["start", "adopt", "approve", "review", "fix", "integrate", "recover", "archive"].includes(action)))
+        throw new Error("Expected runner state requires a managed operation");
       if (v.agent || v["default-model"] || v["default-effort"] || v.base || v.tasks)
         throw new Error("Feature agents/base are frozen by plan approval; use --file SETTINGS with feature approve");
       if (v["dry-run"] && !["approve", "review", "fix", "archive"].includes(action))

@@ -8,8 +8,7 @@ next steps while your coordinating session operates the runner.
 
 Browsing leaves the project unchanged. Selected actions can focus an existing
 terminal, run checks and previews, and perform confirmed project setup and
-local task operations. Managed approvals remain in the CLI or coordinating
-session.
+local task and managed feature operations.
 
 ## Contents
 
@@ -420,16 +419,33 @@ Escape. The runner checks the reviewed state and resolved settings again
 before reserving attempts. For manual sessions, use the returned worker command
 or open the saved session's actions to inspect its worker or resume command.
 
-Plan approval, final approval, and archive previews are unavailable in the
-dashboard because their CLI validation or configured checks may write files.
-Their entries explain the limitation and offer display-only commands. If
-integration stops on a conflict, use the reported worktree to resolve it,
+If integration stops on a conflict, use the reported worktree to resolve it,
 then select **Continue integration** or **Abort integration** on the feature
 row. Automatic cleanup can run during integration when configured. To review
 cleanup separately, inspect candidates from Features, then confirm the exact
 attempt from Sessions. Cleanup inspection can acquire a runner lock.
 Review displayed commands and replace placeholders or supply required arguments
 using the [CLI reference](../README.md#cli-reference).
+
+### Manage a feature
+
+Open the feature's row actions to **Start managed feature** or **Adopt existing
+work**. After registration, **Check plan for approval** asks for an existing
+settings JSON file. It runs OpenSpec validation and shows the plan fingerprint,
+base, resolved settings, and repair limit before you confirm. If the file or
+feature state changes, run the check again.
+
+Use **Start review** and **Start repair** on the feature row. Their review
+screens show the approved role settings and repair round before dispatch.
+Select a job in Sessions to inspect its report, integrate a completed repair,
+or record a stopped job. An interrupted repair integration has separate
+continue and abort actions on the feature row.
+
+Use **Run final checks** to inspect the integration head, review findings,
+and intended archival scope. Final checks can write to the integration worktree,
+and approval reruns them. After final approval, choose **Archive** separately.
+If archival was interrupted, use **Resume archive**. Delegated changes retain
+their existing coordinator approval and archive requirements.
 
 ## Monitor shared assignments
 

@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { actionsFor, focusReason, previewCommand, projectTarget, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
@@ -75,6 +78,72 @@ export async function runDashboardAction(options: {
   const trusted = actionsFor(snapshot, target.id).find(a => a.id === action.id)!;
   if (trusted.kind !== action.kind) throw new Error("Action kind differs from allowlist");
   const suffix = trusted.id.slice(target.id.length + 1);
+  if (suffix.startsWith("managed-")) {
+    if (!trusted.available) throw new Error(trusted.reason ?? "Action unavailable");
+    const root = snapshot.repository.root;
+    const current = await currentSnapshot(snapshot, signal);
+    const selected = actionsFor(current, target.id).find(candidate => candidate.id === trusted.id);
+    if (!selected?.available || !selected.argv) throw new Error(selected?.reason ?? "Action is no longer eligible");
+    const command = [...selected.argv];
+    const [, operation, change] = command;
+    const feature = current.features.find(row => row.origin === "local" && row.change === change);
+    const job = current.sessions.find(row => row.id === target.id)?.attempt;
+    const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+    const cli = (args: string[], writes = false) =>
+      dashboardChild(process.execPath, [entry, ...args, "--json"], root, signal, writes);
+    const identity = async () => {
+      const source = `import { Runner } from ${JSON.stringify(new URL("./runner.js", import.meta.url).href)}; console.log(new Runner().actionIdentity(process.argv[1]));`;
+      return (await dashboardChild(process.execPath, ["--input-type=module", "-e", source, change], root, signal)).stdout.trim();
+    };
+    const settingsFile = suffix === "managed-plan" && input?.settingsFile
+      ? resolve(root, input.settingsFile) : undefined;
+    if (suffix === "managed-plan" && !settingsFile) throw new Error("Select an existing settings JSON file");
+    if (settingsFile) command.push("--file", settingsFile);
+    const settingsDigest = () => {
+      if (!settingsFile) return undefined;
+      const stat = statSync(settingsFile);
+      if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error("Select a settings JSON file up to 1 MiB");
+      return createHash("sha256").update(readFileSync(settingsFile)).digest("hex");
+    };
+    const reviewed = { action: trusted.id, root, command, identity: await identity(), settings: settingsDigest() };
+    if (options.confirmation !== undefined) {
+      const saved = JSON.parse(options.confirmation) as { reviewed: typeof reviewed; token?: string };
+      if (JSON.stringify(saved.reviewed) !== JSON.stringify(reviewed))
+        throw new Error("Feature state or settings changed; run the check and review again");
+      if (operation === "approve") {
+        if (!saved.token || !/^[a-f0-9]{64}$/.test(saved.token)) throw new Error("A checked approval token is required");
+        command.push("--confirm", saved.token);
+      }
+      try {
+        const output = await cli([...command, "--expected-state", reviewed.identity], true);
+        return { text: output.stdout + (output.stderr ? `\nDiagnostics:\n${output.stderr}` : ""), command };
+      } catch (error) {
+        if (operation === "integrate" && feature?.execution)
+          throw new Error(`${error instanceof Error ? error.message : String(error)}\nIntegration worktree: ${feature.execution.path}`);
+        throw error;
+      }
+    }
+    let details: unknown = { integration: feature?.execution, phase: feature?.phase, job };
+    let token: string | undefined;
+    if (["approve", "review", "fix", "archive"].includes(operation)) {
+      const checked = await cli([...command, "--dry-run"], operation === "approve" || operation === "archive");
+      const result = JSON.parse(checked.stdout);
+      if (operation === "archive" && !result.approved && !result.recovery)
+        throw new Error("Current final approval is required; run final checks and approve again");
+      details = result;
+      token = operation === "approve" ? result.token : undefined;
+    }
+    if (reviewed.identity !== await identity() || reviewed.settings !== settingsDigest())
+      throw new Error("Feature state or settings changed during the check; review again");
+    const effects = operation === "approve" ? "Confirmation reruns the checks before recording approval." :
+      operation === "archive" ? "Archives the change and synchronizes specs. Checks may run again and write to the integration worktree." :
+      operation === "recover" ? "Records verified termination evidence without dispatching another job." :
+      command.includes("--abort") ? "Discards pending merge and conflict edits in the integration worktree." : undefined;
+    return {
+      text: [selected.label, root, shellCommand(["openspec-runner", ...command]), effects, bounded(details)].filter(Boolean).join("\n"),
+      confirmation: JSON.stringify({ reviewed, token }),
+    };
+  }
   const localOperations = ["launch-run", "retry-run", "recover-run", "integrate-run", "integrate-continue",
     "integrate-abort", "reconcile-run", "cleanup-attempt", "cleanup-all-scope", "resume"];
   if (localOperations.includes(suffix)) {

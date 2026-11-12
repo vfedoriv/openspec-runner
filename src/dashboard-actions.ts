@@ -63,6 +63,13 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
         add("cleanup-all-scope", "Inspect and clean this attempt (completed change)", "change", staleExecution);
       }
     }
+    if (session.role !== "implementation" && feature.state) {
+      const job = session.attempt;
+      if (session.role === "repair" && job.phase === "completed" && !feature.state.transaction)
+        add("managed-repair-integrate", "Integrate saved repair", "change", staleExecution, ["feature", "integrate", feature.change, "--attempt", job.id]);
+      if (job.phase !== "integrated" && (job.phase !== "completed" || !job.worker?.exitedAt))
+        add("managed-job-recover", "Record stopped job", "change", staleExecution, ["feature", "recover", feature.change, "--attempt", job.id]);
+    }
     return actions;
   }
   const change = feature.change;
@@ -101,6 +108,33 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     for (const suffix of ["final", "archive"]) add(`${suffix}-preview`, `Preview ${suffix}`, "preview", "Existing CLI preview executes configured verification commands that may write files");
     for (const command of ["approve", "review", "fix", "archive"]) add(`feature-${command}-command`, `Display feature ${command}`, "command", undefined, ["feature", command, change]);
     add("feature-final-command", "Display final approval command", "command", undefined, ["feature", "approve", change, "--final"]);
+  }
+  if (!task) {
+    const state = feature.state;
+    const delegated = state?.delegated || snapshot.assignments.some(row => row.featureId === feature.id && row.binding)
+      ? "This change belongs to a delegated assignment" : undefined;
+    const managed = (suffix: string, label: string, command: string, reason?: string, flags: string[] = []) =>
+      add(`managed-${suffix}`, label, "change", staleExecution ?? reason, ["feature", command, change, ...flags]);
+    if (!state) {
+      managed("start", "Start managed feature", "start", delegated ?? (feature.execution ? "Existing work requires adoption" : undefined));
+      managed("adopt", "Adopt existing work", "adopt", delegated ?? (!feature.execution ? "No existing runner work to adopt" : undefined));
+    } else {
+      const closed = state.archive || state.phase === "completed" ? "Feature has entered archival" : undefined;
+      const approval = state.approval ? undefined : "Approve the plan first";
+      managed("plan", "Check plan for approval (runs OpenSpec)", "approve", delegated ?? closed);
+      managed("review", "Start review", "review", approval ?? closed);
+      managed("repair", "Start repair", "fix", approval ?? closed);
+      const latest = state.jobs?.at(-1);
+      if (latest && ["failed", "blocked", "stale"].includes(latest.phase))
+        managed("retry", `Retry ${latest.role} job`, latest.role === "review" ? "review" : "fix", approval ?? closed, ["--retry"]);
+      if (state.transaction) {
+        managed("repair-continue", "Continue repair integration", "integrate", undefined, ["--continue"]);
+        managed("repair-abort", "Abort repair integration", "integrate", undefined, ["--abort"]);
+      }
+      managed("final", "Run final checks (may write to worktree)", "approve", delegated ?? approval ?? closed, ["--final"]);
+      managed("archive", state.archive ? "Resume archive" : "Archive (checks may write to worktree)", "archive",
+        delegated ?? (state.phase === "completed" ? "Feature is already archived" : !state.archive && !state.finalApproval ? "Approve the final result first" : undefined));
+    }
   }
   const launch = actions.find(action => action.id.endsWith(":launch-preview"))!;
   add("launch-run", "Launch tasks after preview", "change", staleExecution ?? launch.reason);

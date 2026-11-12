@@ -63,7 +63,7 @@ export function resolveFeatureApprovalSettings(options: { plan: Plan; input: { i
 
 export class Feature {
   runner: Runner;
-  constructor(cwd = process.cwd()) { this.runner = new Runner(cwd); }
+  constructor(cwd = process.cwd(), expectedState?: string) { this.runner = new Runner(cwd, expectedState); }
   get repo() { return this.runner.repo; }
   read(change: string) {
     const s = readFeature(this.repo.stateDir, change);
@@ -118,6 +118,7 @@ export class Feature {
   start(change: string, adopt = false) {
     featurePath(this.repo.stateDir, change);
     return this.runner.lock(() => {
+      this.runner.assertActionIdentity(change);
       const existing = readFeature(this.repo.stateDir, change);
       if (existing) return existing;
       const execution = this.runner.read(change);
@@ -280,6 +281,7 @@ export class Feature {
   }
   approve(change: string, input: FeatureSettings, token: string) {
     const approved = this.runner.lock(() => {
+      this.runner.assertActionIdentity(change);
       const snapshot = this.planPreview(change, input);
       if (!token || token !== snapshot.token) throw new Error("Plan approval token is stale; preview and review again");
       const s = this.read(change);
@@ -339,6 +341,7 @@ export class Feature {
   }
   launch(change: string, role: "review" | "repair", retry = false) {
     const reserved = this.runner.lock(() => {
+      this.runner.assertActionIdentity(change);
       const preview = this.jobPreview(change, role, retry), s = this.read(change), id = randomUUID();
       const job: FeatureJob = { id, role, findings: preview.findings, round: preview.round,
         approvalToken: s.approval!.token,
@@ -475,6 +478,7 @@ export class Feature {
   recover(change: string, id: string) {
     // This never replays dispatch. A fresh attempt requires an explicit --retry.
     return this.update(change, s => {
+      this.runner.assertActionIdentity(change);
       const j = s.jobs.find(j => j.id === id);
       if (!j || j.phase === "integrated") throw new Error("No recoverable feature job");
       refreshCopilotEvidence(j, this.repo.common);
@@ -506,6 +510,7 @@ export class Feature {
   }
   integrate(change: string, id?: string, mode?: "continue" | "abort") {
     return this.runner.lock(() => {
+      this.runner.assertActionIdentity(change);
       const s = this.read(change), r = this.execution(s), path = r.integration.path;
       const tx = s.transaction;
       if (mode && !tx) throw new Error("No interrupted feature integration");
@@ -579,6 +584,7 @@ export class Feature {
   }
   approveFinal(change: string, token: string) {
     return this.runner.lock(() => {
+      this.runner.assertActionIdentity(change);
       const preview = this.finalPreview(change);
       if (!token || token !== preview.token) throw new Error("Final approval token is stale; review the current result again");
       const s = this.read(change);
@@ -600,6 +606,7 @@ export class Feature {
   }
   private archiveCore(change: string) {
     return this.runner.lock(() => {
+      this.runner.assertActionIdentity(change);
       const s = this.read(change), r = this.execution(s), path = r.integration.path;
       if (s.delegated) throw new Error("Delegated assignment cannot archive or complete the shared feature");
       if (s.phase === "completed") return { completed: true, archive: s.archive, branch: r.integration.branch };
