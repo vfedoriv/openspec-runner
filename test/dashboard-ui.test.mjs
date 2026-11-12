@@ -42,7 +42,9 @@ test("keys navigate details filters help and narrow terminals while collection i
   let output = ""; const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } }); stdout.isTTY = true; stdout.columns = 40; stdout.rows = 12;
   const lifetime = new AbortController(); let quit = false;
   const collector = { refresh() {}, close: async () => {}, readActivity: async () => new Promise(() => {}) };
-  const instance = render(React.createElement(DashboardUi, { snapshot, collector, lifetime: lifetime.signal, quit() { quit = true; } }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const suggested = structuredClone(snapshot);
+  suggested.features[0].nextAction = { launch: ["launch", "Alpha", "--tasks", "1.1", "--dry-run", "--json"] };
+  const instance = render(React.createElement(DashboardUi, { snapshot: suggested, collector, lifetime: lifetime.signal, quit() { quit = true; } }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
   const key = async value => { stdin.write(value); await new Promise(resolve => setTimeout(resolve, 35)); await instance.waitUntilRenderFlush(); };
   try {
     await instance.waitUntilRenderFlush(); assert.match(output, /Overview/);
@@ -52,7 +54,11 @@ test("keys navigate details filters help and narrow terminals while collection i
     await key("\u001b"); await key("/"); await key("blocked"); await key("\r");
     assert.match(output, /blocked/);
     await key("\u001b"); await key("\u001b[D"); await key("/"); for (let i = 0; i < 7; i++) await key("\u007f"); await key("\r"); await key("a"); await key("\u001b[B"); await key("\u001b[B"); await key("\r"); assert.match(output, /openspec-runner.*launch/);
-    await key("q"); assert.equal(quit, true);
+    await key("\u001b"); await key("a"); await key("\u001b[B"); await key("\r");
+    assert.match(output, /tasks: 1\.1/);
+    await key("\u0015"); await key("1.2");
+    assert.match(output, /tasks: 1\.2/);
+    await key("\u001b"); await key("q"); assert.equal(quit, true);
   } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
 });
 test("closing collector rejects queued and active activity without waiting for snapshots", async () => {

@@ -6,7 +6,10 @@ import { loadPlan } from "./plan.js";
 export type DashboardAction = {
   id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview";
   available: boolean; reason?: string; argv?: string[]; sessionId?: string;
+  initialTasks?: string;
 };
+export const taskInputLimit = 500;
+const validTaskIds = (ids: string[]) => ids.length > 0 && new Set(ids).size === ids.length && ids.every(id => /^\d+(?:\.\d+)+$/.test(id));
 export type PreviewInput = { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string };
 
 export function focusReason(session: SessionSummary): string | undefined {
@@ -41,9 +44,21 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   if (!feature?.change || feature.origin !== "local" || session) return actions;
   const change = feature.change;
   const last = task?.attempts.at(-1), retry = !!last && ["failed", "blocked", "stale"].includes(last.phase);
-  add("launch-preview", "Preview launch (select exact tasks and settings)", "preview", task && !task.ready ? task.reasons.join("; ") || "Task is not ready" : undefined);
+  const suggested = feature.id === targetId && !snapshot.sources[feature.id]?.stale ? feature.nextAction?.launch : undefined;
+  const taskText = suggested?.[3];
+  const ids = taskText?.split(",") ?? [];
+  const prefill = taskText && taskText.length <= taskInputLimit && validTaskIds(ids) &&
+    suggested?.length === 6 && suggested[0] === "launch" && suggested[1] === change && suggested[2] === "--tasks" &&
+    suggested[4] === "--dry-run" && suggested[5] === "--json" &&
+    ids.every(id => snapshot.tasks.some(t => t.featureId === feature.id && t.task.id === id && t.ready))
+    ? taskText : undefined;
+  add("launch-preview", prefill ? "Preview suggested batch" : "Preview launch (select exact tasks and settings)", "preview", task && !task.ready ? task.reasons.join("; ") || "Task is not ready" : undefined);
+  actions.at(-1)!.initialTasks = task?.task.id ?? prefill;
   add("launch-command", "Display launch command", "command", undefined, ["launch", change, "--tasks", task?.task.id ?? "TASK_IDS"]);
-  if (task) add("retry-preview", "Preview retry (select this task)", "preview", retry ? undefined : "Retry requires an unsuccessful attempt");
+  if (task) {
+    add("retry-preview", "Preview retry (select this task)", "preview", retry ? undefined : "Retry requires an unsuccessful attempt");
+    actions.at(-1)!.initialTasks = task.task.id;
+  }
   if (task) add("retry-command", "Display retry command", "command", undefined, ["retry", change, task.task.id]);
   for (const command of ["integrate", "reconcile", "cleanup"]) add(`${command}-command`, `Display ${command} command`, "command", undefined, [command, change, ...(task ? ["--tasks", task.task.id] : [])]);
   if (feature.state) {
@@ -72,7 +87,7 @@ export function previewCommand(snapshot: DashboardSnapshot, action: DashboardAct
   let argv: string[];
   if (action.id.endsWith(":launch-preview") || action.id.endsWith(":retry-preview")) {
     const ids = input.taskIds;
-    if (!ids?.length || new Set(ids).size !== ids.length || ids.some(id => !/^\d+(?:\.\d+)+$/.test(id))) throw new Error("Select exact task IDs");
+    if (!ids || !validTaskIds(ids)) throw new Error("Select exact task IDs");
     const retry = action.id.endsWith(":retry-preview");
     if (retry && (ids.length !== 1 || ids[0] !== selectedTask?.task.id)) throw new Error("Retry requires exactly the selected task");
     if (selectedTask && ids.some(id => id !== selectedTask.task.id)) throw new Error("Task selection differs from selected target");

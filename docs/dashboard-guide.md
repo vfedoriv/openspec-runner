@@ -384,8 +384,10 @@ The actions depend on the selected row:
 For a launch preview:
 
 1. Select a local feature or ready task in Features and open `a`.
-2. Choose **Preview launch** and enter exact task IDs, such as `1.1,1.2`, then Enter.
-   A task row permits only that task; select the feature row for a batch.
+2. Choose **Preview suggested batch** when available. Press Enter to accept the
+   IDs, edit them, or press Ctrl+U to clear the field and enter your own. If the
+   menu shows **Preview launch**, enter the task IDs when the field is blank.
+   Select a feature row for a batch or a task row to preview that task alone.
 3. For an unmanaged change, answer the model and effort prompts. If the plan
    inherits settings, supply an explicit model and, for Codex, effort. Explicit
    settings already recorded in the plan can be used without overrides.

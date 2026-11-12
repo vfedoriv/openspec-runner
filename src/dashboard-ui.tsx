@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
-import { actionsFor, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
+import { actionsFor, taskInputLimit, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
 import { runDashboardAction } from "./dashboard-action-runner.js";
 import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
@@ -88,7 +88,9 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         }
         setEdit(undefined); return;
       }
-      if (key.backspace || key.delete) setText(t => t.slice(0, -1)); else if (!key.ctrl && !key.meta) setText(t => (t + safeText(input)).slice(0, 500));
+      if (edit === "tasks" && key.ctrl && input === "u") setText("");
+      else if (key.backspace || key.delete) setText(t => t.slice(0, -1));
+      else if (!key.ctrl && !key.meta) setText(t => (t + safeText(input)).slice(0, taskInputLimit));
       return;
     }
     if (input === "q" || key.ctrl && input === "c") { quit(); return; }
@@ -113,7 +115,14 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (input === "a" && snapshot && target) { setMenu(actionsFor(snapshot, target)); setActionIndex(0); return; }
     if (menu) {
       if (key.upArrow || key.downArrow) setActionIndex(i => Math.max(0, Math.min(menu.length - 1, i + (key.upArrow ? -1 : 1))));
-      if (key.return) { const action = menu[actionIndex]; if (!action) return; if (action.kind === "preview" && action.available && /launch-preview|retry-preview/.test(action.id)) { setPreview({ action, input: {} }); beginEdit("tasks", snapshot?.tasks.find(t => t.id === target)?.task.id); } else void execute(action); }
+      if (key.return && snapshot && target) {
+        const action = actionsFor(snapshot, target).find(candidate => candidate.id === menu[actionIndex]?.id);
+        if (!action) return;
+        if (action.kind === "preview" && action.available && /:(launch|retry)-preview$/.test(action.id)) {
+          setPreview({ action, input: {} });
+          beginEdit("tasks", action.initialTasks);
+        } else void execute(action);
+      }
       return;
     }
     if (key.leftArrow || key.rightArrow) { setTab(t => (t + (key.leftArrow ? 4 : 1)) % 5); setPane("list"); return; }

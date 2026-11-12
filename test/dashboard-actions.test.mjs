@@ -45,6 +45,28 @@ test("launch previews require exact selected tasks and explicit unmanaged settin
   assert.deepEqual(previewCommand(s, { ...a, argv: ["rm", "-rf", "/"] }, { taskIds: ["1.1"], model: "m", effort: "high" }), ["launch", "change", "--tasks", "1.1", "--default-model", "m", "--default-effort", "high", "--dry-run", "--json"]);
 });
 
+test("feature previews prefill only fresh, valid suggestions and use the submitted IDs", () => {
+  const s = snapshot(), feature = s.features[0];
+  s.tasks.push({ ...s.tasks[0], id: "second", task: { ...s.tasks[0].task, id: "1.2" } });
+  const launch = ["launch", "change", "--tasks", "1.1,1.2", "--dry-run", "--json"];
+  const action = () => actionsFor(s, feature.id).find(a => a.id.endsWith(":launch-preview"));
+  feature.nextAction = { launch };
+  assert.equal(action().label, "Preview suggested batch");
+  assert.equal(action().initialTasks, "1.1,1.2");
+  assert.equal(previewCommand(s, action(), { taskIds: ["1.2"], model: "m", effort: "high" })[3], "1.2");
+  for (const overrides of [{ 1: "other" }, { 3: "1.1,1.1" }, { 3: "1.3" }, { 4: "--execute" }]) {
+    feature.nextAction.launch = Object.assign([...launch], overrides);
+    assert.equal(action().initialTasks, undefined);
+  }
+  feature.nextAction.launch = launch;
+  s.tasks[1].ready = false;
+  assert.equal(action().initialTasks, undefined);
+  s.tasks[1].ready = true;
+  s.sources[feature.id] = { stale: true, collectedAt: "then" };
+  assert.equal(action().initialTasks, undefined);
+  assert.equal(actionsFor(s, s.tasks[0].id).find(a => a.id.endsWith(":launch-preview")).initialTasks, "1.1");
+});
+
 test("coordination authority blockers prevent previews even with explicit settings", () => {
   const s = snapshot(); s.tasks[0].ready = false; s.tasks[0].reasons = ["Coordination authority: Assignment revoked"];
   const a = actionsFor(s, s.tasks[0].id).find(a => a.id.endsWith(":launch-preview"));
