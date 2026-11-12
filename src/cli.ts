@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Runner } from "./runner.js";
 import { Feature, type FeatureSettings } from "./feature.js";
 import { readFeature } from "./feature-state.js";
-import { loadPlan, readiness, configFrom } from "./plan.js";
+import { initExecution, loadPlan, readiness, configFrom } from "./plan.js";
 import { json, repository } from "./system.js";
 import { sessionSettings } from "./codex.js";
 import { getHarness, harnessIds, hasHarness, planningRules } from "./harnesses/registry.js";
@@ -21,6 +21,7 @@ import { renderCommand } from "./platform-command.js";
 export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
+init-execution <change> [--dry-run] [--json]   Generate starter execution.yaml
 models [--agent ID] [--json]   Query the selected harness model capabilities
 doctor [--agent ID] [--json]   Check project configuration and local execution tools
 planning-rules --agent ID      Show versioned model/effort planning guidance
@@ -145,6 +146,28 @@ export function init(
 export async function main(args = process.argv.slice(2)) {
   let jsonOutput = args.includes("--json");
   try {
+    if (args[0] === "init-execution") {
+      const { values, positionals } = parseArgs({
+        args: args.slice(1),
+        allowPositionals: true,
+        options: {
+          help: { type: "boolean", short: "h" },
+          "dry-run": { type: "boolean" },
+          json: { type: "boolean" },
+        },
+      });
+      jsonOutput = values.json === true;
+      if (values.help) {
+        console.log("init-execution <change> [--dry-run] [--json]");
+        return;
+      }
+      if (positionals.length !== 1) throw new Error("Use init-execution <change> [--dry-run] [--json]");
+      const result = initExecution(repository().root, positionals[0], { dryRun: values["dry-run"] === true });
+      if (jsonOutput) console.log(JSON.stringify(result, null, 2));
+      else if (!result.created) process.stdout.write(result.yaml);
+      else console.log(`Created ${result.path}\nReview the settings, then run openspec-runner validate ${result.change} --json`);
+      return;
+    }
     if (args[0] === "hook") { await hookCommand(args.slice(1)); return; }
     if (args[0] === "dashboard") { await dashboardCommand(args.slice(1)); return; }
     if (args[0] === "doctor") { await doctorCommand(args.slice(1)); return; }

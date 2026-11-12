@@ -7,7 +7,8 @@ import {
 } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
+import { publishExclusive } from "./platform-files.js";
 import { git, run } from "./system.js";
 import { hasHarness, harnessIds } from "./harnesses/registry.js";
 import type { AgentConfig } from "./harnesses/types.js";
@@ -310,12 +311,58 @@ export function projectPlanFiles(root: string, config: Config): string[] {
   }
   return files;
 }
-export function loadPlan(root: string, change: string): Plan {
+function changeDirectory(root: string, change: string): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(change))
     throw new Error("Expected a repository-local change name");
   const directory = resolve(root, "openspec", "changes", change);
   if (!containedPath(root, directory) || !unredirectedPath(directory))
     throw new Error("External planning stores are outside v1");
+  return directory;
+}
+
+export interface StarterExecutionResult {
+  change: string;
+  path: string;
+  agent: string;
+  taskIds: string[];
+  yaml: string;
+  created: boolean;
+}
+
+export function initExecution(root: string, change: string, { dryRun }: { dryRun: boolean }): StarterExecutionResult {
+  const directory = changeDirectory(root, change);
+  const configPath = resolve(root, "openspec/runner.yaml");
+  const tasksPath = resolve(directory, "tasks.md");
+  for (const file of [configPath, tasksPath]) {
+    if (!existsSync(file)) {
+      if (file === configPath) throw new Error("Missing openspec/runner.yaml; run openspec-runner init");
+      throw new Error(`Missing tasks.md for change ${change}`);
+    }
+    if (!containedPath(root, file) || !unredirectedPath(file) || !lstatSync(file).isFile())
+      throw new Error(`Expected a regular repository-local file: ${file}`);
+  }
+  const { defaultAgent: agent } = configFrom(parse(readFileSync(configPath, "utf8")));
+  const tasks = tasksFrom(readFileSync(tasksPath, "utf8"));
+  const taskIds = tasks.map(task => task.id);
+  const yaml = stringify({ version: 2, agent, tasks: Object.fromEntries(taskIds.map(id => [id, {}])) });
+  const document = parse(yaml);
+  assignmentsFrom(document, tasks);
+  executionAgentFrom(document);
+  const path = `openspec/changes/${change}/execution.yaml`;
+  if (!dryRun) {
+    try {
+      publishExclusive(resolve(root, path), Buffer.from(yaml));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw new Error(`${path} already exists; edit the existing file`);
+      throw error;
+    }
+  }
+  return { change, path, agent, taskIds, yaml, created: !dryRun };
+}
+
+export function loadPlan(root: string, change: string): Plan {
+  const directory = changeDirectory(root, change);
   const tasks = tasksFrom(readFileSync(resolve(directory, "tasks.md"), "utf8"));
   const config = configFrom(
     parse(readFileSync(resolve(root, "openspec/runner.yaml"), "utf8")),

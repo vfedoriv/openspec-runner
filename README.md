@@ -880,6 +880,20 @@ nothing, and the runner never injects a permission bypass.
 
 ### Per-change assignments: `execution.yaml`
 
+After project initialization, generate a starter from the numbered checkboxes:
+
+```sh
+openspec-runner init-execution user-auth --dry-run
+openspec-runner init-execution user-auth
+openspec-runner validate user-auth --json
+```
+
+Review and edit the generated file before validation. It includes completed
+tasks and uses the project's default harness. Empty assignments use the usual
+model and effort resolution, declare no dependencies, and leave parallel
+execution disabled. Existing files are preserved. Managed feature approval
+still requires explicit role settings.
+
 Place `execution.yaml` beside the change's `tasks.md`:
 
 ```yaml
@@ -1387,6 +1401,7 @@ and passing current final review/consent; archive pending/prepared/archived is i
 | `feature recover <change> --attempt ID` | Record a provably interrupted feature job without redispatching it |
 | `feature worker\|begin\|report ...` | Runner-owned supervised review/repair protocol |
 | `validate <change> [--json]` | Validate task numbering, coverage, dependencies, and OpenSpec readiness |
+| `init-execution <change> [--dry-run] [--json]` | Preview or create starter task assignments |
 | `status <change> [--json]` | Inspect task state, or route a managed change to its feature status |
 | `launch <change> --tasks IDS [--agent HARNESS]` | Launch exactly the selected tasks through one harness |
 | `launch ... --dry-run --json` | Preview without creating resources |
