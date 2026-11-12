@@ -67,10 +67,11 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
       const binding = readComponentBinding({ stateDir: repo.stateDir, change });
       const directory = resolve(repo.root, "openspec/changes", change);
       let plan: ReturnType<typeof loadPlan> | undefined;
-      if (existsSync(resolve(directory, "tasks.md")) && existsSync(resolve(directory, "execution.yaml"))) plan = loadPlan(repo.root, change);
-      else if (!state && !feature && !binding) throw new Error("Planning artifacts are missing tasks.md or execution.yaml");
+      const missingExecution = existsSync(resolve(directory, "tasks.md")) && !existsSync(resolve(directory, "execution.yaml"));
+      if (existsSync(resolve(directory, "tasks.md")) && !missingExecution) plan = loadPlan(repo.root, change);
+      else if (!missingExecution && !state && !feature && !binding) throw new Error("Planning artifacts are missing tasks.md or execution.yaml");
       if (plan) snapshot.repository.maxParallel = plan.config.maxParallel;
-      const globalReasons: string[] = [];
+      const globalReasons: string[] = missingExecution ? ["execution.yaml is missing"] : [];
       if (plan && state && state.fingerprint !== plan.fingerprint) globalReasons.push("Planning drift: artifacts changed; reconcile required");
       if (state?.transaction || feature?.transaction) globalReasons.push("Interrupted integration transaction requires recovery");
       if (feature) {
@@ -107,7 +108,7 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
         if (["failed", "blocked", "stale"].includes(current.phase)) attention(`attempt:${current.attempt.id}`, `Attempt ${current.attempt.id} is ${current.phase}${current.attempt.error ? `: ${current.attempt.error}` : ""}`, 1, current.id);
         if (["completed", "failed", "blocked"].includes(current.phase) && !current.attempt.report) attention(`report:${current.attempt.id}`, `Missing report for ${current.attempt.id}`, 1, current.id);
       }
-      snapshot.features.push({ id: source, change, origin: "local", phase: feature?.phase, state: feature, nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
+      snapshot.features.push({ id: source, change, origin: "local", ...(missingExecution ? { missingExecution } : {}), phase: feature?.phase, state: feature, nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
       snapshot.tasks.push(...summaries); snapshot.sessions.push(...sessions);
       if (binding) {
         const a = binding.assignment;

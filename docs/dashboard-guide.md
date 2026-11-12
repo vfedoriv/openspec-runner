@@ -6,9 +6,10 @@ The console dashboard shows runner progress, blockers, worker sessions, and
 shared assignments in your terminal. Use it to inspect evidence and preview
 next steps while your coordinating session operates the runner.
 
-Browsing does not launch workers, integrate results, approve plans, or change
-runner state. Selected actions can focus an existing terminal or run a supported
-dry-run preview. Execution and approvals remain in the CLI or coordinating session.
+Browsing leaves the project unchanged. Selected actions can focus an existing
+terminal, run checks and previews, or set up project and execution settings
+after confirmation. Worker execution and approvals remain in the CLI or
+coordinating session.
 
 ## Contents
 
@@ -337,6 +338,17 @@ harness turn does not complete a runner task. Check the process observation,
 report, and integration evidence in details before deciding what to do next.
 
 ## Inspect actions and previews
+
+Press `g` for project actions, including when the dashboard has no rows. You
+can check the project, list models for the default harness, read harness
+planning guidance, or set up the project for a selected harness. Setup shows
+the checkout and the skill files it can install or refresh before you confirm.
+
+A local change with a numbered task list and missing `execution.yaml` shows a
+blocker in Features. Open its row actions to preview starter settings or create
+the file. Press Enter on the review screen to apply the change or Escape to
+cancel. After reviewing and editing the file, use **Validate change** to run
+OpenSpec validation. **View saved summary** opens an existing local summary.
 
 Select a feature, task, session, or assignment and press `a`. Use the up and down
 arrows to choose an action and Enter to select it. Unavailable entries explain

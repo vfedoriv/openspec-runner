@@ -11,6 +11,7 @@ export type AttentionItem = { id: string; source: string; targetId?: string; pri
 export type FeatureSummary = {
   deliverySummary?: SummaryHandle; summaryCommand?: string[];
   nextAction?: NextAction;
+  missingExecution?: boolean;
   id: string; change?: string; origin: "local" | "shared"; phase?: FeatureState["phase"];
   completed: number; total: number; state?: FeatureState; taskIds: string[]; sessionIds: string[];
   coordination?: CoordinationStatus;

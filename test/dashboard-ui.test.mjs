@@ -48,6 +48,10 @@ test("keys navigate details filters help and narrow terminals while collection i
   const key = async value => { stdin.write(value); await new Promise(resolve => setTimeout(resolve, 35)); await instance.waitUntilRenderFlush(); };
   try {
     await instance.waitUntilRenderFlush(); assert.match(output, /Overview/);
+    await key("g"); assert.match(output, /Check project/);
+    for (let i = 0; i < 3; i++) await key("\u001b[B");
+    await key("\r"); assert.match(output, /Enter confirm/);
+    await key("\u001b"); assert.match(output, /Cancelled/);
     await key("\u001b[C"); assert.match(output, /Attention/);
     await key("\r"); assert.match(output, /details/);
     await key("?"); assert.match(output, /Esc back/);

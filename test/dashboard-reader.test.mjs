@@ -7,6 +7,8 @@ import { execFileSync } from "node:child_process";
 import { repository } from "../dist/system.js";
 import { loadPlan } from "../dist/plan.js";
 import { processStart } from "../dist/processes.js";
+import { actionsFor, projectTarget } from "../dist/dashboard-actions.js";
+import { runDashboardAction } from "../dist/dashboard-action-runner.js";
 const reader = await import("../dist/dashboard-reader.js").catch(() => ({}));
 export function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "dashboard-"));
@@ -20,6 +22,29 @@ export function fixture(t) {
   mkdirSync(repo.stateDir, { recursive: true });
   return { root, repo };
 }
+test("dashboard discovers a task-only change and creates settings only after confirmation", async t => {
+  const { root } = fixture(t);
+  const destination = join(root, "openspec/changes/demo/execution.yaml");
+  rmSync(destination);
+  const snapshot = reader.collectDashboard({ cwd: root });
+  assert.equal(snapshot.features[0].missingExecution, true);
+  assert.ok(snapshot.tasks.every(task => !task.ready));
+  assert.ok(actionsFor({ ...snapshot, features: [] }, projectTarget).some(action => action.id === "project:doctor"));
+  const actions = actionsFor(snapshot, snapshot.features[0].id);
+  const signal = new AbortController().signal;
+  const preview = await runDashboardAction({ snapshot, signal, action: actions.find(action => action.id.endsWith(":starter-preview")) });
+  assert.match(preview.text, /"created": false/);
+  const action = { ...actions.find(action => action.kind === "change"), argv: ["launch", "demo"] };
+  const review = await runDashboardAction({ snapshot, signal, action });
+  assert.match(review.text, /init-execution.*demo/);
+  assert.throws(() => readFileSync(destination), /ENOENT/);
+  const result = await runDashboardAction({ snapshot, signal, action, confirmation: review.confirmation });
+  assert.match(result.text, /"created": true/);
+  const content = readFileSync(destination, "utf8");
+  await assert.rejects(runDashboardAction({ snapshot, signal, action, confirmation: review.confirmation }), /no longer eligible/);
+  assert.equal(readFileSync(destination, "utf8"), content);
+});
+
 function state(root, attempts = [], version = 1) {
   return { version, change: "demo", fingerprint: loadPlan(root, "demo").fingerprint, integration: { path: root, branch: "main", base: "base" }, head: "head", baseline: [], attempts, ...(version === 2 ? { batches: attempts.map(a => ({ id: `batch-${a.id}`, harness: "codex", attempts: [a.id] })) } : {}) };
 }

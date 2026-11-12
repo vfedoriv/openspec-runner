@@ -1,16 +1,17 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
+import { harnessIds } from "./harnesses/registry.js";
 import { loadPlan } from "./plan.js";
 
 export type DashboardAction = {
-  id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview";
+  id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview" | "check" | "change";
   available: boolean; reason?: string; argv?: string[]; sessionId?: string;
   initialTasks?: string;
 };
 export const taskInputLimit = 500;
 const validTaskIds = (ids: string[]) => ids.length > 0 && new Set(ids).size === ids.length && ids.every(id => /^\d+(?:\.\d+)+$/.test(id));
-export type PreviewInput = { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string };
+export type PreviewInput = { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string; modelForSetup?: string };
 
 export function focusReason(session: SessionSummary): string | undefined {
   const a = session.attempt;
@@ -24,7 +25,17 @@ export function focusReason(session: SessionSummary): string | undefined {
   return undefined;
 }
 
+export const projectTarget = "project";
+
 export function actionsFor(snapshot: DashboardSnapshot, targetId: string): DashboardAction[] {
+  if (targetId === projectTarget) return [
+    { id: "project:doctor", label: "Check project", kind: "check", available: true, argv: ["doctor"] },
+    { id: "project:models", label: "List project default models", kind: "check", available: true, argv: ["models"] },
+    ...harnessIds().flatMap(agent => [
+      { id: `project:guidance:${agent}`, label: `Planning guidance · ${agent}`, kind: "check" as const, available: true, argv: ["planning-rules", "--agent", agent] },
+      { id: `project:init:${agent}`, label: `Set up project · ${agent}`, kind: "change" as const, available: true, argv: ["init", "--agent", agent] },
+    ]),
+  ];
   const task = snapshot.tasks.find(t => t.id === targetId), session = snapshot.sessions.find(s => s.id === targetId);
   const feature = snapshot.features.find(f => f.id === (task?.featureId ?? session?.featureId ?? targetId));
   if (!task && !session && !snapshot.features.some(f => f.id === targetId) && !snapshot.assignments.some(a => a.id === targetId)) return [];
@@ -32,6 +43,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   const add = (suffix: string, label: string, kind: DashboardAction["kind"], reason?: string, argv?: string[]) => actions.push({ id: `${targetId}:${suffix}`, label, kind, available: !reason, reason, argv });
   if (feature?.summaryCommand && !session) {
     const argv = [...feature.summaryCommand, ...(task ? ["--task", task.task.id] : [])];
+    if (feature.origin === "local") add("summary-read", "View saved summary", "check", undefined, argv);
     add("summary-inspect", "Display summary inspection command", "command", undefined, argv);
     add("summary-refresh", "Display summary refresh command", "command", undefined, [...argv, "--refresh"]);
     add("summary-export", "Display summary export command", "command", undefined, [...argv, "--export", "DIRECTORY"]);
@@ -43,6 +55,15 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   }
   if (!feature?.change || feature.origin !== "local" || session) return actions;
   const change = feature.change;
+  if (!task) {
+    const stale = snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined;
+    if (feature.missingExecution) {
+      add("starter-preview", "Preview starter settings", "check", stale, ["init-execution", change, "--dry-run"]);
+      add("starter-create", "Create execution.yaml", "change", stale, ["init-execution", change]);
+      return actions;
+    }
+
+  }
   const last = task?.attempts.at(-1), retry = !!last && ["failed", "blocked", "stale"].includes(last.phase);
   const suggested = feature.id === targetId && !snapshot.sources[feature.id]?.stale ? feature.nextAction?.launch : undefined;
   const taskText = suggested?.[3];
@@ -70,6 +91,8 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     for (const command of ["approve", "review", "fix", "archive"]) add(`feature-${command}-command`, `Display feature ${command}`, "command", undefined, ["feature", command, change]);
     add("feature-final-command", "Display final approval command", "command", undefined, ["feature", "approve", change, "--final"]);
   }
+  if (!task) add("validate", "Validate change (runs OpenSpec)", "check",
+    snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined, ["validate", change]);
   return actions;
 }
 
