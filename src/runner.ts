@@ -37,7 +37,7 @@ import {
 import type { HarnessSettings, WorkerReceipt } from "./harnesses/types.js";
 import { completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
 import { getHarness } from "./harnesses/registry.js";
-import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt } from "./feature-state.js";
+import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt, type FeatureJob } from "./feature-state.js";
 import {
   createWorktree,
   startTerminal,
@@ -112,6 +112,48 @@ export interface State {
   completion?: { tasks: string[]; fingerprint: string; head: string };
   cleanupResults?: CleanupResult[];
 }
+export interface RecoveryEntry {
+  kind: "integration" | "cleanup" | "worker";
+  task?: string;
+  attempt?: string;
+  worktree?: string;
+  log?: string;
+  evidence: string;
+  next: string;
+  argv: string[];
+}
+
+export function integrationRecovery(change: string, worktree: string, phase: string, options: {
+  task?: string; attempt?: string; managed?: boolean;
+}): RecoveryEntry {
+  const unresolved = attempt(() => git(worktree, "ls-files", "--unmerged"));
+  return {
+    kind: "integration", task: options.task, attempt: options.attempt, worktree,
+    evidence: `Recorded phase: ${phase}. ${unresolved === undefined ? "Git conflict evidence unavailable." :
+      unresolved ? "Git index contains unresolved conflicts." : "Git index contains no unresolved conflicts."}`,
+    next: unresolved ? "Resolve and stage conflicts in the integration worktree, then continue." :
+      "Inspect the integration worktree and address any failed checks before continuing.",
+    argv: [...(options.managed ? ["feature"] : []), "integrate", change, "--continue"],
+  };
+}
+
+export function workerRecovery(change: string, a: TaskAttempt | FeatureJob, managed: boolean): RecoveryEntry | undefined {
+  if (!a.report || a.phase === "integrated" || ("cleaned" in a && a.cleaned)) return;
+  const completed = a.report.outcome === "completed";
+  const problem = completed ? completionProblem(a) : undefined;
+  const waiting = a.worker?.terminationUncertain ? "Worker termination is uncertain." :
+    a.worker && !a.worker.exitedAt ? "No supervised exit receipt has been recorded." :
+    completed && managed && !a.worker?.exitedAt ? "A successful supervised exit receipt is required." :
+    completed && problem ? problem : agentMayBeActive(a) ? "Matching agent stop evidence is still required." : undefined;
+  if (!waiting) return;
+  return {
+    kind: "worker", task: "task" in a ? a.task : undefined, attempt: a.id, worktree: a.path, log: a.worker?.log,
+    evidence: `Report accepted (${a.report.outcome}). ${waiting}`,
+    next: `Inspect the saved session or log and refresh status before ${completed ? "integration or advancing the feature" : "retrying"}.`,
+    argv: [...(managed ? ["feature"] : []), "status", change, "--json"],
+  };
+}
+
 export interface NextAction {
   launch?: string[];
   integrate?: string[];
@@ -299,11 +341,25 @@ export class Runner {
         "Planning artifacts changed. Finish/report active sessions, then run reconcile before launching or integrating.",
       );
   }
+  recovery(change: string): RecoveryEntry[] {
+    const state = this.read(change);
+    if (!state) return [];
+    const managed = !!readFeature(this.repo.stateDir, change);
+    const entries = state.attempts.flatMap(a => workerRecovery(change, a, managed) ?? []);
+    const tx = state.transaction;
+    if (tx) entries.unshift(integrationRecovery(change, state.integration.path, tx.phase,
+      { task: tx.current, attempt: this.latest(state, tx.current)?.id }));
+    else if (state.cleanupBatch) entries.unshift({
+      kind: "cleanup", worktree: state.integration.path, evidence: "Post-integration cleanup is pending.",
+      next: "Continue integration to resume cleanup.", argv: ["integrate", change, "--continue"],
+    });
+    return entries;
+  }
   status(change: string) {
     const feature = readFeature(this.repo.stateDir, change);
     if (feature && (!existsSync(resolve(this.repo.root, "openspec/changes", change, "tasks.md")) ||
         !existsSync(resolve(this.repo.root, "openspec/changes", change, "execution.yaml")) || feature.archive))
-      return { change, feature, integration: this.read(change)?.integration, head: this.read(change)?.head,
+      return { change, feature, recovery: this.recovery(change), integration: this.read(change)?.integration, head: this.read(change)?.head,
         next: `openspec-runner feature status ${change} --json` };
     const p = loadPlan(this.repo.root, change),
       s = this.read(change);
@@ -331,6 +387,7 @@ export class Runner {
       integration: s?.integration,
       head: s?.head,
       transaction: s?.transaction,
+      recovery: this.recovery(change),
       cleanup: s?.cleanupResults,
       tasks,
       nextAction: !feature || feature.phase === "implementing"

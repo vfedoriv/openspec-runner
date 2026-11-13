@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { repository } from "./system.js";
 import { Runner, type TaskAttempt } from "./runner.js";
 import { blocking, featureActive, implementationGate, readFeature, type FeatureJob } from "./feature-state.js";
+import { Feature } from "./feature.js";
 import { readComponentBinding } from "./component-state.js";
 import { configFrom, loadPlan, tasksFrom } from "./plan.js";
 import { processStart } from "./processes.js";
@@ -109,7 +110,10 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
         if (["failed", "blocked", "stale"].includes(current.phase)) attention(`attempt:${current.attempt.id}`, `Attempt ${current.attempt.id} is ${current.phase}${current.attempt.error ? `: ${current.attempt.error}` : ""}`, 1, current.id);
         if (["completed", "failed", "blocked"].includes(current.phase) && !current.attempt.report) attention(`report:${current.attempt.id}`, `Missing report for ${current.attempt.id}`, 1, current.id);
       }
-      snapshot.features.push({ id: source, change, origin: "local", ...(missingExecution ? { missingExecution } : {}), phase: feature?.phase, state: feature, ...(state ? { execution: { head: state.head, path: state.integration.path, fingerprint: state.fingerprint, planFingerprint: plan?.fingerprint, transaction: !!state.transaction, cleanupPending: !!state.cleanupBatch, automaticCleanup: plan?.config.cleanup === "automatic" } } : {}), nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
+      const recovery = feature ? new Feature(repo.root).recovery(change) : status?.recovery ?? runner.recovery(change);
+      recovery.forEach((entry, index) => attention(`recovery:${index}`, entry.evidence, 2,
+        sessions.find(row => row.attempt.id === entry.attempt)?.id ?? source));
+      snapshot.features.push({ id: source, recovery, change, origin: "local", ...(missingExecution ? { missingExecution } : {}), phase: feature?.phase, state: feature, ...(state ? { execution: { head: state.head, path: state.integration.path, fingerprint: state.fingerprint, planFingerprint: plan?.fingerprint, transaction: !!state.transaction, cleanupPending: !!state.cleanupBatch, automaticCleanup: plan?.config.cleanup === "automatic" } } : {}), nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
       snapshot.tasks.push(...summaries); snapshot.sessions.push(...sessions);
       if (binding) {
         const a = binding.assignment;

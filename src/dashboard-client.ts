@@ -17,7 +17,7 @@ function retainSources(previous: DashboardSnapshot | undefined, next: DashboardS
     if (!previous.sources[source]) continue;
     error.stale = true;
     next.sources[source] = { ...previous.sources[source], stale: true };
-    const features = previous.features.filter(f => f.id === source).map(f => ({ ...f, nextAction: undefined }));
+    const features = previous.features.filter(f => f.id === source).map(f => ({ ...f, nextAction: undefined, recovery: f.recovery?.map(entry => ({ ...entry, evidence: `STALE: ${entry.evidence}`, argv: [] })) }));
     const ids = new Set(features.map(f => f.id));
     next.features = [...next.features.filter(f => !ids.has(f.id)), ...features];
     next.tasks = [...next.tasks.filter(t => !ids.has(t.featureId)), ...previous.tasks.filter(t => ids.has(t.featureId)).map(t => ({ ...t, ready: false, reasons: [...new Set([...t.reasons, "Source data is stale"])] }))];

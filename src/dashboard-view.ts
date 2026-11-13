@@ -1,12 +1,21 @@
 import type { ActivityEntry, ActivityPage } from "./activity-types.js";
 import type { DashboardSnapshot } from "./dashboard-types.js";
-import type { NextAction } from "./runner.js";
+import type { NextAction, RecoveryEntry } from "./runner.js";
 import { renderArgument } from "./platform-command.js";
 export const dashboardViews = ["Overview", "Attention", "Features", "Sessions", "Assignments"] as const;
 export type DashboardView = typeof dashboardViews[number];
 export type DashboardFilters = { search: string; status?: string; harness?: string; owner?: string; includeCompleted: boolean; includeOlderAttempts: boolean; sort: "name" | "attention" };
 export type DashboardRow = { id: string; label: string; targetId: string };
 export const safeText = (value: unknown): string => String(value ?? "unknown").replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+export function recoveryLines(entries: RecoveryEntry[] = []): string[] {
+  return entries.flatMap(entry => [
+    ["Recovery", entry.task && `task ${entry.task}`, entry.attempt && `attempt ${entry.attempt}`].filter(Boolean).join(" · "),
+    ...(entry.worktree ? [`Worktree · ${safeText(entry.worktree)}`] : []),
+    ...(entry.log ? [`Log · ${safeText(entry.log)}`] : []),
+    safeText(entry.evidence), safeText(entry.next),
+    ...(entry.argv.length ? nextActionLines({ blocker: { message: "", argv: entry.argv } }).slice(1) : []),
+  ]);
+}
 export function nextActionLines(action: NextAction | undefined): string[] {
   if (!action) return [];
   const shell = process.platform === "win32" ? "powershell" : "posix";
@@ -58,11 +67,16 @@ export function detailLines(s: DashboardSnapshot, targetId: string): string[] {
     if (Array.isArray(value)) { if (!value.length) lines.push(`${prefix}: none`); value.slice(0, 100).forEach((v, i) => walk(v, `${prefix} ${i + 1}`, depth + 1)); return; }
     for (const [key, v] of Object.entries(value)) walk(v, `${prefix ? prefix + " / " : ""}${key.replace(/([A-Z])/g, " $1").replace(/^./, c => c.toUpperCase())}`, depth + 1);
   };
-  if (target && "nextAction" in target) {
-    const { nextAction, ...evidence } = target;
-    lines.push(...nextActionLines(nextAction));
+  if (target && "origin" in target) {
+    const { nextAction, recovery, ...evidence } = target;
+    lines.push(...nextActionLines(nextAction), ...recoveryLines(recovery));
     walk(evidence, "");
-  } else walk(target, "");
+  } else {
+    const session = s.sessions.find(row => row.id === targetId);
+    if (session) lines.push(...recoveryLines(s.features.find(f => f.id === session.featureId)?.recovery
+      ?.filter(entry => entry.attempt === session.attempt.id)));
+    walk(target, "");
+  }
   if (s.features.some(f => f.id === targetId)) walk(s.tasks.filter(t => t.featureId === targetId), "Tasks, dependencies and settings");
   if (target && "featureId" in target) walk(s.features.find(f => f.id === target.featureId)?.state, "Feature settings and evidence");
   for (const e of s.errors) lines.push(`Source ${e.source}${e.stale ? " [STALE]" : " [ERROR]"}: ${safeText(e.message)}`);

@@ -1281,6 +1281,12 @@ in removed directories. Old interactive sessions require review before cleanup.
 
 ## Recovery and plan changes
 
+Check the `recovery` entries in `openspec-runner status <change> --json` or
+`openspec-runner feature status <change> --json`. For conflicts, resolve and
+stage changes in the listed integration worktree before running the continue
+command. If a report is accepted and exit evidence is still missing, inspect
+the listed attempt or log and refresh status.
+
 ### Interrupted preparation
 
 Attempts are persisted before external worktree, setup, or terminal side effects.

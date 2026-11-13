@@ -293,6 +293,12 @@ test("status limits launch suggestions by shared capacity and prioritizes pendin
   r.save(state);
   assert.equal(status().launch, undefined);
   assert.deepEqual(status().blocker.argv, ["integrate", "demo", "--continue"]);
+  const [recovery] = r.status("demo").recovery;
+  assert.equal(recovery.task, "1.1");
+  assert.equal(recovery.attempt, state.attempts[0].id);
+  assert.equal(recovery.worktree, state.integration.path);
+  assert.match(recovery.evidence, /no unresolved conflicts/);
+  assert.deepEqual(recovery.argv, ["integrate", "demo", "--continue"]);
 });
 
 test("status respects an exclusive task running in another change", (t) => {
@@ -433,6 +439,13 @@ test("conflicted integration blocks dependent tasks, supports abort then continu
   complete(r, a, "shared.txt", "one\n");
   complete(r, b, "shared.txt", "two\n");
   assert.throws(() => r.integrate("demo", ["1.1", "1.2"]), /CONFLICT|conflict/);
+  const beforeRecovery = readFileSync(r.path("demo"), "utf8");
+  const [recovery] = r.status("demo").recovery;
+  assert.equal(recovery.attempt, b.id);
+  assert.match(recovery.evidence, /contains unresolved conflicts/);
+  assert.match(recovery.next, /Resolve and stage/);
+  assert.deepEqual(collectDashboard({ cwd: r.repo.root }).features[0].recovery, [recovery]);
+  assert.equal(readFileSync(r.path("demo"), "utf8"), beforeRecovery);
   assert.ok(readCurrentSummary({ cwd: r.repo.root, change: "demo", task: "1.1" }));
   assert.throws(() => r.launch("demo", ["2.1"], settings), /integration/);
   r.integrate("demo", [], "abort");
@@ -926,12 +939,19 @@ test("unacknowledged worker exit prevents integration, terminal closure and remo
   const a = r.launch("demo", ["1.1"], settings)[0]; complete(r, a);
   const paneState = liveTerminal(r, a, bin, dir, "close", t);
   const s = r.read("demo"); delete s.attempts[0].worker.exitedAt; r.save(s);
+  const [waiting] = r.status("demo").recovery;
+  assert.equal(waiting.attempt, a.id);
+  assert.match(waiting.evidence, /Report accepted \(completed\).*No supervised exit receipt/);
   assert.throws(
     () => r.integrate("demo", ["1.1"]),
     /supervised worker has not exited/,
   );
   assert.equal(r.read("demo").attempts[0].phase, "completed");
   assert.equal(JSON.parse(readFileSync(paneState)).closed, false);
+  s.attempts[0].worker.exitedAt = new Date().toISOString();
+  s.attempts[0].worker.exitCode = 0;
+  r.save(s);
+  assert.deepEqual(r.status("demo").recovery, []);
   assert.equal(existsSync(a.path), true);
 });
 

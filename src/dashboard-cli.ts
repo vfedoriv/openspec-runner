@@ -2,13 +2,13 @@ import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { collectDashboard } from "./dashboard-reader.js";
 import type { DashboardSnapshot } from "./dashboard-types.js";
-import { nextActionLines } from "./dashboard-view.js";
+import { nextActionLines, recoveryLines } from "./dashboard-view.js";
 
 export function formatDashboard(snapshot: DashboardSnapshot): string {
   const lines = [`Repository: ${snapshot.repository.root}`, `Features: ${snapshot.features.length}  Tasks: ${snapshot.tasks.length}  Sessions: ${snapshot.sessions.length}`];
   for (const feature of snapshot.features) {
     lines.push(`${feature.change ?? feature.id}: ${feature.phase ?? "unmanaged"} (${feature.completed}/${feature.total} ${feature.origin === "shared" ? "components delivered" : "tasks satisfied"})`);
-    lines.push(...nextActionLines(feature.nextAction).map(line => `  ${line}`));
+    lines.push(...[...nextActionLines(feature.nextAction), ...recoveryLines(feature.recovery)].map(line => `  ${line}`));
   }
   for (const task of snapshot.tasks) lines.push(`  ${task.task.id}: ${task.ready ? "ready" : task.reasons.join("; ") || "not ready"}`);
   for (const session of snapshot.sessions) lines.push(`  ${session.attempt.id}: phase=${session.phase} report=${session.reportOutcome ?? "missing"} process=${session.process} terminal=${session.terminal}`);

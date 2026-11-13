@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { Runner, decodeState } from "./runner.js";
+import { Runner, decodeState, integrationRecovery, workerRecovery } from "./runner.js";
 import { loadPlan, assertCommitted, readiness, type Plan } from "./plan.js";
 import { atomic, clean, git, json, run, shellCommand, quote, attempt, workerRunnerCommand } from "./system.js";
 import { createWorktree, startTerminal, terminalAdapter } from "./adapters.js";
@@ -256,9 +256,16 @@ export class Feature {
       next.fixing = `feature integrate --attempt ${pendingRepair.id}`;
     const implementationAction = s.phase === "implementing" ? nextAction
       : s.phase === "awaiting-plan-approval" && nextAction?.blocker ? { blocker: nextAction.blocker } : undefined;
-    return { ...s, blocker, tasks, nextAction: implementationAction,
+    return { ...s, blocker, tasks, nextAction: implementationAction, recovery: this.recovery(change),
       next: s.jobs.some(featureActive) ? "Inspect the active job and its saved worker command" : next[s.phase], integration: r?.integration, head: r?.head,
       findings: s.jobs.filter(j => j.role === "review").at(-1)?.report?.findings ?? [], cleanup: r?.cleanupResults };
+  }
+  recovery(change: string) {
+    const s = this.read(change), execution = this.runner.read(change);
+    const entries = [...this.runner.recovery(change), ...s.jobs.flatMap(job => workerRecovery(change, job, true) ?? [])];
+    if (s.transaction && execution) entries.unshift(integrationRecovery(change, execution.integration.path, s.transaction.phase,
+      { attempt: s.transaction.attempt, managed: true }));
+    return entries;
   }
   planPreview(change: string, input: FeatureSettings) {
     const s = this.read(change);

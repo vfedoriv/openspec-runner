@@ -1,6 +1,6 @@
 import type { ActivityPage, ActivityPageOptions } from "./activity-types.js";
 import type { Assignment, Task } from "./plan.js";
-import type { NextAction, Report, TaskAttempt } from "./runner.js";
+import type { NextAction, RecoveryEntry, Report, TaskAttempt } from "./runner.js";
 import type { FeatureJob, FeatureState } from "./feature-state.js";
 import type { ComponentBinding } from "./component-state.js";
 import type { ComponentStatus, CoordinationStatus } from "./coordination-state.js";
@@ -11,6 +11,7 @@ export type AttentionItem = { id: string; source: string; targetId?: string; pri
 export type FeatureSummary = {
   deliverySummary?: SummaryHandle; summaryCommand?: string[];
   nextAction?: NextAction;
+  recovery?: RecoveryEntry[];
   missingExecution?: boolean;
   execution?: { head: string; path: string; fingerprint: string; planFingerprint?: string; transaction?: boolean; cleanupPending?: boolean; automaticCleanup?: boolean };
   id: string; change?: string; origin: "local" | "shared"; phase?: FeatureState["phase"];

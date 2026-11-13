@@ -339,6 +339,11 @@ Quiet output does not establish that a worker stopped. Likewise, a successful
 harness turn does not complete a runner task. Check the process observation,
 report, and integration evidence in details before deciding what to do next.
 
+Recovery guidance pairs the attempt and saved log with any missing worker exit
+or stop evidence. For an interrupted merge, it shows the integration worktree.
+Resolve and stage conflicts there before using the displayed continue command.
+The same entries are available in the CLI's status JSON.
+
 ## Inspect actions and previews
 
 Press `g` for project actions, including when the dashboard has no rows. You
