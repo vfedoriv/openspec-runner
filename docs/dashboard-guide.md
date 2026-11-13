@@ -1,6 +1,9 @@
 # Dashboard guide
 
-Feature/task details include saved [delivery summary status](delivery-summary-guide.md) and display-only inspection, refresh and export commands.
+Feature and task actions can open saved summaries, refresh them, export evidence,
+publish a narrative from JSON, or create a presentation brief. Export and brief
+actions show the destination before confirmation and require a new directory.
+See the [delivery summary guide](delivery-summary-guide.md).
 
 The console dashboard shows runner progress, blockers, worker sessions, and
 shared assignments in your terminal. Use it to inspect evidence and preview
@@ -448,6 +451,18 @@ If archival was interrupted, use **Resume archive**. Delegated changes retain
 their existing coordinator approval and archive requirements.
 
 ## Monitor shared assignments
+
+With a Store and map selected, use shared feature actions to inspect Store
+status or an exact record, import a receipt, or accept a submission by ID.
+Use assignment actions to inspect or import the selected assignment, inspect
+the local binding, export a component receipt, or retire the local assignment.
+Optional resource, provider, and asset files can be left blank.
+
+Review the Store revision, owner, inputs, and destination before confirming a
+handoff. The dashboard checks local Store history again before applying it.
+After a failed receipt export or acceptance, confirm again to retry with the
+same operation ID if the reviewed inputs still match. Advanced coordinator
+operations remain available through the contextual CLI commands.
 
 To include shared Store authority, supply both a local Store checkout and a
 machine map:

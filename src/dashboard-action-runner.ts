@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { readFileSync, statSync, existsSync, readdirSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { actionsFor, focusReason, previewCommand, projectTarget, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
@@ -62,8 +62,8 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
 }
 
 async function currentSnapshot(snapshot: DashboardSnapshot, signal: AbortSignal): Promise<DashboardSnapshot> {
-  const source = `import { collectDashboard } from ${JSON.stringify(new URL("./dashboard-reader.js", import.meta.url).href)}; console.log(JSON.stringify(collectDashboard({cwd: process.argv[1]})));`;
-  const result = await dashboardChild(process.execPath, ["--input-type=module", "-e", source, snapshot.repository.root], snapshot.repository.root, signal);
+  const source = `import { collectDashboard } from ${JSON.stringify(new URL("./dashboard-reader.js", import.meta.url).href)}; console.log(JSON.stringify(collectDashboard({cwd: process.argv[1], ...JSON.parse(process.argv[2])})));`;
+  const result = await dashboardChild(process.execPath, ["--input-type=module", "-e", source, snapshot.repository.root, JSON.stringify(snapshot.storeContext ?? {})], snapshot.repository.root, signal);
   return JSON.parse(result.stdout) as DashboardSnapshot;
 }
 
@@ -78,6 +78,107 @@ export async function runDashboardAction(options: {
   const trusted = actionsFor(snapshot, target.id).find(a => a.id === action.id)!;
   if (trusted.kind !== action.kind) throw new Error("Action kind differs from allowlist");
   const suffix = trusted.id.slice(target.id.length + 1);
+  if (suffix.startsWith("handoff-")) {
+    if (!trusted.available) throw new Error(trusted.reason ?? "Action unavailable");
+    const root = snapshot.repository.root;
+    const fresh = await currentSnapshot(snapshot, signal);
+    const action = actionsFor(fresh, target.id).find(candidate => candidate.id === trusted.id);
+    if (!action?.available || !action.argv) throw new Error(action?.reason ?? "Action is no longer eligible");
+    const argv = [...action.argv];
+    const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+    const cli = (args: string[], write = false) =>
+      dashboardChild(process.execPath, [entry, ...args, "--json"], root, signal, write);
+    const required = (field: keyof PreviewInput) => {
+      const value = input?.[field];
+      if (typeof value !== "string" || !value.trim() || /[\0\r\n]/.test(value))
+        throw new Error(`Enter a value for ${field}`);
+      return value;
+    };
+    const flag = (name: string, value: string) => argv.push(`--${name}=${value}`);
+    const file = (name: string, field: keyof PreviewInput) => {
+      const path = resolve(root, required(field));
+      const stat = statSync(path);
+      if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error("Select a regular input file up to 1 MiB");
+      flag(name, path);
+      return path;
+    };
+    const files: string[] = [];
+    let outputDirectory: string | undefined;
+    if (suffix === "handoff-store-record") {
+      flag("kind", required("recordKind")); flag("record", required("recordId"));
+    }
+    if (suffix === "handoff-receipt-accept") flag("submission", required("recordId"));
+    if (suffix === "handoff-receipt-import" || suffix === "handoff-summary-publish" ||
+        suffix === "handoff-component-import" && input?.inputFile) files.push(file("file", "inputFile"));
+    if (suffix === "handoff-component-export") {
+      flag("outcome", required("outcome"));
+      if (input?.reason) flag("reason", required("reason"));
+      flag("output", resolve(root, required("destination")));
+    }
+    if (suffix === "handoff-component-retire") flag("reason", required("reason"));
+    if (suffix === "handoff-summary-export") flag("export", outputDirectory = resolve(root, required("destination")));
+    if (suffix === "handoff-summary-brief") {
+      flag("presentation-brief", outputDirectory = resolve(root, required("destination")));
+      flag("audience", required("audience"));
+      if (input?.providerFile) files.push(file("provider-config", "providerFile"));
+      if (input?.assetsFile) files.push(file("assets", "assetsFile"));
+    }
+    if (action.kind === "check") return { text: (await cli(argv)).stdout, command: argv };
+    if (outputDirectory && existsSync(outputDirectory)) throw new Error("Export destination already exists");
+    if (fresh.storeContext && argv[0] === "coordination") files.push(fresh.storeContext.map);
+    const digests = () => files.map(path => createHash("sha256").update(readFileSync(path)).digest("hex"));
+    const hashes = digests();
+    const assignment = fresh.assignments.find(row => row.id === target.id);
+    const feature = fresh.features.find(row => row.id === (assignment?.featureId ??
+      fresh.tasks.find(row => row.id === target.id)?.featureId ?? target.id));
+    const saved = options.confirmation === undefined ? undefined : JSON.parse(options.confirmation) as { id?: string; operation?: string; review: string };
+    const ids = ["handoff-component-export", "handoff-receipt-accept"].includes(suffix)
+      ? { id: saved?.id ?? randomUUID(), operation: saved?.operation ?? randomUUID() } : {};
+    let details: unknown;
+    if (suffix.startsWith("handoff-summary-")) {
+      const base = feature?.summaryCommand;
+      if (!base) throw new Error("Summary subject is unavailable");
+      const task = fresh.tasks.find(row => row.id === target.id);
+      const evidence = JSON.parse((await cli([...base, ...(task ? ["--task", task.task.id] : [])])).stdout);
+      if (suffix === "handoff-summary-publish") {
+        flag("source", evidence.sourceDigest);
+        const narrative = evidence.summary?.paths?.narrative;
+        if (narrative) flag("expected-revision", basename(narrative, ".md").replace(/^narrative-/, ""));
+      }
+      details = evidence;
+    } else {
+      const head = feature?.coordination?.head;
+      if (!head) throw new Error("Store revision unavailable");
+      if (suffix === "handoff-component-export")
+        await cli(["component", "status", argv[2], ...argv.slice(3, 9), "--revision", head]);
+      const preview = JSON.parse((await cli([...argv, "--dry-run"])).stdout);
+      if ((preview.historyRevision ?? preview.head ?? head) !== head)
+        throw new Error("Store revision changed; refresh and review again");
+      if (suffix !== "handoff-component-retire") flag("expected-head", head);
+      if (suffix !== "handoff-receipt-import") {
+        if (typeof preview.token !== "string") throw new Error("Preview did not supply a confirmation token");
+        flag("confirm", preview.token);
+      }
+      if (ids.id && ids.operation) { flag("id", ids.id); flag("operation", ids.operation); }
+      details = { storeRevision: head, assignment, preview };
+    }
+    if (JSON.stringify(hashes) !== JSON.stringify(digests())) throw new Error("Input file changed during preview");
+    const review = JSON.stringify({ action: action.id, root, argv, hashes, details });
+    if (!saved) return {
+      text: [action.label, root, shellCommand(["openspec-runner", ...argv]), bounded(details)].join("\n"),
+      confirmation: JSON.stringify({ ...ids, review }),
+    };
+    if (saved.review !== review) throw new Error("Inputs or evidence changed; refresh and review again");
+    if (suffix === "handoff-receipt-import" || suffix === "handoff-summary-publish") flag("input-digest", hashes[0]);
+    try {
+      const result = await cli(argv, true);
+      return { text: result.stdout + (result.stderr ? `\nDiagnostics:\n${result.stderr}` : ""), command: argv };
+    } catch (error) {
+      if (outputDirectory && existsSync(outputDirectory))
+        throw new Error(`${String(error)}\nOutput directory: ${outputDirectory}\nFiles present: ${readdirSync(outputDirectory).join(", ")}`);
+      throw error;
+    }
+  }
   if (suffix.startsWith("managed-")) {
     if (!trusted.available) throw new Error(trusted.reason ?? "Action unavailable");
     const root = snapshot.repository.root;
@@ -221,7 +322,7 @@ export async function runDashboardAction(options: {
   }
   if (trusted.kind === "check" || trusted.kind === "change") {
     if (!trusted.available) throw new Error(trusted.reason ?? "Action unavailable");
-    const command = trusted.argv![0] === "summary" ? [...trusted.argv!] : [...trusted.argv!, "--json"];
+    const command = suffix === "summary-read" ? [...trusted.argv!] : [...trusted.argv!, "--json"];
     const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
     if (trusted.kind === "change") {
       const setup = command[0] === "init";

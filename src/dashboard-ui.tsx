@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
-import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
+import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
 import { runDashboardAction } from "./dashboard-action-runner.js";
 import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
@@ -13,7 +13,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   useFocus({ autoFocus: true });
   const [tab, setTab] = useState(0), [selected, setSelected] = useState<string>(), [pane, setPane] = useState<"list" | "details" | "activity">("list");
   const [filters, setFilters] = useState<DashboardFilters>({ search: "", includeCompleted: false, includeOlderAttempts: false, sort: "name" });
-  const [edit, setEdit] = useState<"search" | "status" | "harness" | "owner" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase" | "settingsFile">(), [text, setText] = useState("");
+  const [edit, setEdit] = useState<"search" | "status" | "harness" | "owner" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase" | "settingsFile" | DashboardField>(), [text, setText] = useState("");
   const [help, setHelp] = useState(false), [offset, setOffset] = useState(0), [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<ActivityEntry[]>([]), [activityError, setActivityError] = useState(""), [activitySearch, setActivitySearch] = useState("");
   const [following, setFollowing] = useState(true), [mode, setMode] = useState<"raw" | "normalized">("normalized"), [activityOffset, setActivityOffset] = useState(0);
@@ -80,7 +80,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
           if (next?.available) setLaunchFollowup({ action: next, input });
         }
       } }
-    catch (error) { if (!lifetime.aborted && !controller.signal.aborted && actionController.current === controller) setOutput(safeText(error instanceof Error ? error.message : error)); }
+    catch (error) {
+      if (!lifetime.aborted && !controller.signal.aborted && actionController.current === controller) {
+        setOutput(safeText(error instanceof Error ? error.message : error));
+        if (approved && /:handoff-(component-export|receipt-accept)$/.test(action.id))
+          setConfirmation({ action, input, text: approved });
+      }
+    }
     finally {
       if (approved || checking) collector.refresh();
       applying.current = false;
@@ -107,6 +113,9 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         else if (preview) {
           const updated = { ...preview, input: { ...preview.input, ...(edit === "tasks" ? { taskIds: value.split(",").map(t => t.trim()).filter(Boolean) } : { [edit]: value || undefined }) } };
           setPreview(updated);
+          const fields = updated.action.fields;
+          const nextField = fields?.[fields.indexOf(edit as DashboardField) + 1];
+          if (nextField) { beginEdit(nextField); return; }
           const feature = snapshot?.features.find(f => f.id === target || f.id === snapshot.tasks.find(t => t.id === target)?.featureId);
           if (edit === "tasks" && !updated.action.id.endsWith(":integrate-run") && !feature?.state) { beginEdit("model"); return; }
           if (edit === "model") { beginEdit("effort"); return; }
@@ -156,6 +165,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run)$/.test(action.id)) {
           setPreview({ action, input: {} });
           beginEdit("tasks", action.initialTasks);
+        } else if (action.available && action.fields?.length) {
+          setMenu(undefined); setPreview({ action, input: {} }); beginEdit(action.fields[0]);
         } else if (action.available && action.id.endsWith(":managed-plan")) {
           setMenu(undefined); setPreview({ action, input: {} }); beginEdit("settingsFile");
         } else if (action.kind === "change" && action.id.startsWith("project:init:copilot")) {

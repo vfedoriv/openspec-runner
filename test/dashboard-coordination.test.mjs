@@ -1,4 +1,5 @@
 import { delegatedContextTest as test } from "./helpers/native-support.mjs";
+import { test as portableTest } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -11,6 +12,8 @@ import { repository } from "../dist/system.js";
 import { stableDigest } from "../dist/coordination-state.js";
 import { expectedContextPaths } from "../dist/component-state.js";
 import { loadPlan } from "../dist/plan.js";
+import { actionsFor } from "../dist/dashboard-actions.js";
+import { runDashboardAction } from "../dist/dashboard-action-runner.js";
 
 function fixture(t, options = {}) {
   const f = coordinationFixture(t, options);
@@ -24,6 +27,21 @@ function commitManifest(f, id, branch) {
   writeFileSync(join(directory, "manifest.yaml"), stringify({ ...f.manifest, featureId: id, coordinationBranch: branch }));
   git(f.storeRoot, "add", "."); git(f.storeRoot, "commit", "-m", id);
 }
+
+portableTest("dashboard inspects an exact shared Store record with the selected checkout and map", async t => {
+  const f = fixture(t);
+  f.approve();
+  const snapshot = f.collect();
+  const target = snapshot.features.find(row => row.id === "shared:feature");
+  const action = actionsFor(snapshot, target.id).find(row => row.id.endsWith(":handoff-store-record"));
+  const output = await runDashboardAction({
+    snapshot, action, signal: new AbortController().signal,
+    input: { recordKind: "approval", recordId: target.coordination.approvalId },
+  });
+  const result = JSON.parse(output.text);
+  assert.equal(result.head, target.coordination.head);
+  assert.equal(result.record.id, target.coordination.approvalId);
+});
 function bind(f) {
   f.approve(); f.assign();
   const assignment = f.c.store.readRecord({ kind: "assignment", id: "assignment" });

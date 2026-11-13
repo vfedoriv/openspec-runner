@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { featureFixture } from "./helpers/feature-fixture.mjs";
 import { collectDashboard } from "../dist/dashboard-reader.js";
 import { actionsFor } from "../dist/dashboard-actions.js";
-test("dashboard exposes saved summary and display-only refresh command", async t => {
+import { runDashboardAction } from "../dist/dashboard-action-runner.js";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+test("dashboard exposes a saved summary and exports only the confirmed destination", async t => {
   const f = featureFixture(t); f.approve(); await f.review(); f.f.approveFinal("demo", f.f.finalPreview("demo").token); f.f.archive("demo");
   const snapshot = collectDashboard({ cwd: f.root });
   const feature = snapshot.features.find(x => x.change === "demo");
@@ -11,4 +14,13 @@ test("dashboard exposes saved summary and display-only refresh command", async t
   const action = actionsFor(snapshot, feature.id).find(x => x.id.endsWith(":summary-refresh"));
   assert.equal(action.kind, "command");
   assert.deepEqual(action.argv, ["summary", "demo", "--refresh"]);
+  const destination = join(f.dir, "export with spaces");
+  const exportAction = actionsFor(snapshot, feature.id).find(x => x.id.endsWith(":handoff-summary-export"));
+  const request = { snapshot, action: exportAction, input: { destination }, signal: new AbortController().signal };
+  const { confirmation } = await runDashboardAction(request);
+  assert.equal(existsSync(destination), false);
+  await assert.rejects(runDashboardAction({ ...request, input: { destination: destination + " changed" }, confirmation }), /changed/);
+  await runDashboardAction({ ...request, confirmation });
+  assert.match(readFileSync(join(destination, "basic.md"), "utf8"), /Lifecycle: feature-completed/);
+  await assert.rejects(runDashboardAction({ ...request, confirmation }), /destination already exists/);
 });

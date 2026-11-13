@@ -31,11 +31,12 @@ export type SessionSummary = {
 export type AssignmentSummary = {
   deliverySummary?: SummaryHandle;
   id: string; featureId: string; componentId: string; repository: string; change: string; owner: string;
-  importedRevision?: string; inspectedRevision?: string; binding?: ComponentBinding;
+  assignmentId?: string; importedRevision?: string; inspectedRevision?: string; binding?: ComponentBinding;
   status?: ComponentStatus; stale: boolean;
 };
 export type DashboardSnapshot = {
   version: 1; collectedAt: string;
+  storeContext?: { store: string; map: string };
   repository: { root: string; common: string; stateDir: string; identity?: string; currentWorktree: string; maxParallel?: number };
   features: FeatureSummary[]; tasks: TaskSummary[]; sessions: SessionSummary[];
   assignments: AssignmentSummary[]; attention: AttentionItem[]; errors: SourceError[];

@@ -115,7 +115,7 @@ export function collectCoordination(options: DashboardOptions, local: DashboardS
         result.assignments = result.assignments.filter(a => !(a.binding?.featureId === featureId && a.repository === assignment.repository && a.binding.assignmentId === assignment.id));
         const id = `${source}:assignment:${assignment.id}`;
         result.assignments.push({ id, featureId: source, componentId: assignment.componentId, repository: assignment.repository, change: assignment.change, owner: assignment.owner,
-          binding: imported?.binding, importedRevision: imported?.importedRevision, inspectedRevision, status: current?.assignmentId === assignment.id ? current : undefined, stale });
+          assignmentId: assignment.id, binding: imported?.binding, importedRevision: imported?.importedRevision, inspectedRevision, status: current?.assignmentId === assignment.id ? current : undefined, stale });
         if (stale) {
           const reason = importMismatch ? "Imported assignment differs from authoritative Store history" : current?.assignmentId !== assignment.id ? "Assignment revoked or no longer active in inspected history" : "Assignment approval or dependency is stale in inspected history";
           result.attention.push({ id: `${id}:stale`, source, targetId: id, priority: 1, message: reason });

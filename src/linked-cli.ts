@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 import { readFileSync, writeFileSync, realpathSync, existsSync, lstatSync } from "node:fs";
 import { resolve } from "node:path";
@@ -47,7 +48,7 @@ Input builder: ${fileURLToPath(new URL("../docs/examples/linked-feature-inputs.m
 `;
 
 type Values = Record<string, string | boolean | undefined>;
-const stringOptions = ["store", "map", "file", "expected-head", "confirm", "id", "operation", "created-at", "approved-by", "component", "owner", "assignment", "reason", "submission", "stage", "delivery-commit", "merge-style", "pr-url", "attested-by", "prepared", "target", "revision", "references", "contract-revision", "root", "repository", "change", "outcome", "output", "kind", "record"];
+const stringOptions = ["store", "map", "file", "expected-head", "confirm", "id", "operation", "created-at", "approved-by", "component", "owner", "assignment", "reason", "submission", "stage", "delivery-commit", "merge-style", "pr-url", "attested-by", "prepared", "target", "revision", "references", "contract-revision", "root", "repository", "change", "outcome", "output", "kind", "record", "input-digest"];
 const identityOptions = ["expected-head", "id", "operation", "created-at"];
 const snapshotOptions = [...identityOptions, "confirm"];
 const contextOptions = ["references", "contract-revision"];
@@ -60,7 +61,7 @@ const actions: Record<string, Record<string, string[]>> = {
     approve: [...snapshotOptions, ...contextOptions, "approved-by"],
     assign: [...snapshotOptions, ...contextOptions, "component", "owner"],
     revoke: [...identityOptions, "assignment", "reason"],
-    import: ["expected-head", "file"],
+    import: ["expected-head", "file", "input-digest"],
     accept: [...snapshotOptions, "submission"],
     review: [...snapshotOptions, "stage", "file"],
     merge: [...snapshotOptions, ...mergeOptions],
@@ -221,7 +222,10 @@ export async function linkedCommand(args: string[]): Promise<unknown> {
         result = dryRun ? { ...input, head: c.snapshot().head, assignment: c.store.readRecord({ kind: "assignment", id: input.assignmentId }) } : c.revoke({ ...input, ...identity(v) }); break;
       }
       case "import": {
-        const bytes = readFileSync(resolve(value(v, "file"))), record = decodeRecord({ value: bytes.toString("utf8") });
+        const bytes = readFileSync(resolve(value(v, "file")));
+        if (v["input-digest"] && v["input-digest"] !== createHash("sha256").update(bytes).digest("hex"))
+          throw new Error("Receipt changed after review");
+        const record = decodeRecord({ value: bytes.toString("utf8") });
         if (record.kind !== "submission" || record.featureId !== featureId) throw new Error("Import requires a submission receipt for the explicit feature");
         result = dryRun ? { record, bytes: bytes.toString("utf8"), head: c.snapshot().head } : c.importSubmission({ bytes, expectedHead: head(v) }); break;
       }

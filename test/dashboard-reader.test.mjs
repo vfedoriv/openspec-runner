@@ -35,7 +35,7 @@ test("dashboard discovers a task-only change and creates settings only after con
   const signal = new AbortController().signal;
   const preview = await runDashboardAction({ snapshot, signal, action: actions.find(action => action.id.endsWith(":starter-preview")) });
   assert.match(preview.text, /"created": false/);
-  const action = { ...actions.find(action => action.kind === "change"), argv: ["launch", "demo"] };
+  const action = { ...actions.find(action => action.id.endsWith(":starter-create")), argv: ["launch", "demo"] };
   const review = await runDashboardAction({ snapshot, signal, action });
   assert.match(review.text, /init-execution.*demo/);
   assert.throws(() => readFileSync(destination), /ENOENT/);

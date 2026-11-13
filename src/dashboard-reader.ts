@@ -38,6 +38,7 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
   const repo = repository(options.cwd), runner = new Runner(options.cwd), collectedAt = new Date().toISOString();
   const snapshot: DashboardSnapshot = {
     version: 1, collectedAt, repository: { ...repo, currentWorktree: repo.root },
+    ...(options.store && options.map ? { storeContext: { store: resolve(options.store), map: resolve(options.map) } } : {}),
     features: [], tasks: [], sessions: [], assignments: [], attention: [], errors: [], sources: {},
   };
   const configPath = resolve(repo.root, "openspec/runner.yaml");

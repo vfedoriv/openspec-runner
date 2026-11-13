@@ -7,11 +7,12 @@ import { loadPlan } from "./plan.js";
 export type DashboardAction = {
   id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview" | "check" | "change";
   available: boolean; reason?: string; argv?: string[]; sessionId?: string;
-  initialTasks?: string;
+  initialTasks?: string; fields?: DashboardField[];
 };
 export const taskInputLimit = 500;
 const validTaskIds = (ids: string[]) => ids.length > 0 && new Set(ids).size === ids.length && ids.every(id => /^\d+(?:\.\d+)+$/.test(id));
-export type PreviewInput = { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string; modelForSetup?: string; launchAgent?: string; launchBase?: string };
+export type DashboardField = "destination" | "audience" | "inputFile" | "providerFile" | "assetsFile" | "revision" | "recordKind" | "recordId" | "outcome" | "reason";
+export type PreviewInput = Partial<Record<DashboardField, string>> & { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string; modelForSetup?: string; launchAgent?: string; launchBase?: string };
 
 export function focusReason(session: SessionSummary): string | undefined {
   const a = session.attempt;
@@ -36,14 +37,25 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
       { id: `project:init:${agent}`, label: `Set up project · ${agent}`, kind: "change" as const, available: true, argv: ["init", "--agent", agent] },
     ]),
   ];
+  const assignment = snapshot.assignments.find(row => row.id === targetId);
   const task = snapshot.tasks.find(t => t.id === targetId), session = snapshot.sessions.find(s => s.id === targetId);
-  const feature = snapshot.features.find(f => f.id === (task?.featureId ?? session?.featureId ?? targetId));
+  const feature = snapshot.features.find(f => f.id === (task?.featureId ?? session?.featureId ?? assignment?.featureId ?? targetId));
   if (!task && !session && !snapshot.features.some(f => f.id === targetId) && !snapshot.assignments.some(a => a.id === targetId)) return [];
   const actions: DashboardAction[] = [{ id: `${targetId}:inspect`, label: "Inspect evidence", kind: "inspect", available: true }];
   const add = (suffix: string, label: string, kind: DashboardAction["kind"], reason?: string, argv?: string[]) => actions.push({ id: `${targetId}:${suffix}`, label, kind, available: !reason, reason, argv });
-  if (feature?.summaryCommand && !session) {
+  const form = (suffix: string, label: string, kind: "check" | "change", argv: string[], fields: DashboardField[] = [], reason?: string) => {
+    add(suffix, label, kind, reason, argv);
+    actions.at(-1)!.fields = fields;
+  };
+  const staleSource = feature && snapshot.sources[feature.id]?.stale ? "Refresh stale evidence first" : undefined;
+  if (feature?.summaryCommand && !session && !assignment) {
     const argv = [...feature.summaryCommand, ...(task ? ["--task", task.task.id] : [])];
-    if (feature.origin === "local") add("summary-read", "View saved summary", "check", undefined, argv);
+    form("summary-read", "View saved summary", "check", argv, [], staleSource);
+    form("handoff-summary-refresh", "Refresh summary", "change", [...argv, "--refresh"], [], staleSource);
+    form("handoff-summary-export", "Export summary", "change", [...argv], ["destination"], staleSource);
+    form("handoff-summary-brief", "Create presentation brief", "change", [...argv], ["destination", "audience", "providerFile", "assetsFile"], staleSource);
+    const publish = feature.origin === "local" ? ["summary", "publish", ...argv.slice(1)] : [...argv, "--publish"];
+    form("handoff-summary-publish", "Publish summary narrative", "change", publish, ["inputFile"], staleSource);
     add("summary-inspect", "Display summary inspection command", "command", undefined, argv);
     add("summary-refresh", "Display summary refresh command", "command", undefined, [...argv, "--refresh"]);
     add("summary-export", "Display summary export command", "command", undefined, [...argv, "--export", "DIRECTORY"]);
@@ -53,7 +65,36 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     add("focus", "Focus saved terminal", "focus", focusReason(session));
     actions.at(-1)!.sessionId = session.id;
   }
-  if (!feature?.change || feature.origin !== "local") return actions;
+  if (feature?.coordination && snapshot.storeContext) {
+    const { store, map } = snapshot.storeContext;
+    const { featureId, head } = feature.coordination;
+    const coordination = (operation: string) => ["coordination", operation, featureId, "--store", store, "--map", map];
+    if (!assignment) {
+      form("handoff-store-status", "Inspect Store status", "check", [...coordination("status"), "--revision", head], [], staleSource);
+      form("handoff-store-record", "Inspect Store record", "check", [...coordination("inspect"), "--revision", head], ["recordKind", "recordId"], staleSource);
+      form("handoff-receipt-import", "Import submission receipt", "change", coordination("import"), ["inputFile"], staleSource);
+      form("handoff-receipt-accept", "Accept submission", "change", coordination("accept"), ["recordId"], staleSource);
+      for (const operation of ["init", "approve", "assign", "revoke", "review", "merge", "accept-delivery", "complete", "archive-approve", "archive-prepare", "archive-inspect", "archive-recover", "archive-deliver"])
+        add(`store-${operation}-command`, `Show Store ${operation} CLI help`, "command", undefined, [...coordination(operation), "--help"]);
+    } else {
+      const id = assignment.assignmentId ?? assignment.binding?.assignmentId;
+      const component = (operation: string) => ["component", operation, featureId, "--store", store, "--repository", assignment.repository];
+      const owner = id ? ["--assignment", id, "--owner", assignment.owner] : [];
+      const change = ["--change", assignment.change];
+      const blocked = staleSource ?? (assignment.stale ? "Assignment is stale" : undefined);
+      if (id) {
+        form("handoff-component-inspect", "Inspect component assignment", "check", [...component("inspect"), ...owner, "--revision", head], [], blocked);
+        form("handoff-component-import", "Import component assignment", "change", [...component("import"), ...owner], ["inputFile"], blocked);
+      }
+      if (assignment.binding) {
+        form("handoff-component-status", "Inspect local component status", "check", [...component("status"), ...change, "--revision", head], [], staleSource);
+        form("handoff-component-export", "Export component receipt", "change", [...component("export"), ...change], ["outcome", "reason", "destination"], blocked);
+        form("handoff-component-retire", "Retire local assignment", "change", [...component("retire"), ...change, ...owner], ["reason"], staleSource);
+      }
+    }
+    return actions;
+  }
+  if (!feature?.change || feature.origin !== "local" || assignment) return actions;
   const staleExecution = snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined;
   if (session) {
     if (session.role === "implementation") {
