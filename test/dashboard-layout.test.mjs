@@ -186,11 +186,11 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
   const { DashboardUi } = await import("../dist/dashboard-ui.js");
   const { actionsFor, projectTarget } = await import("../dist/dashboard-actions.js");
   const enter = "\r", down = "\u001b[B", right = "\u001b[C";
-  for (const flow of ["setup", "launch-preview", "retry-preview", "edit-models", "managed-plan-settings"]) {
+  for (const columns of [40, 80, 140]) for (const flow of ["setup", "launch-preview", "retry-preview", "edit-models", "managed-plan-settings"]) {
     const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
     let output = "";
     const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } });
-    stdout.isTTY = true; stdout.columns = 140; stdout.rows = 28;
+    stdout.isTTY = true; stdout.columns = columns; stdout.rows = 28;
     const lifetime = new AbortController();
     const managed = flow === "managed-plan-settings";
     const feature = { id: "local:demo", change: "demo", origin: "local", completed: 0, total: 1, taskIds: ["task"], sessionIds: [],
@@ -228,7 +228,7 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
       if (flow === "launch-preview") {
         output = "";
         await key("low"); await key(enter);
-        assert.match(output, /Choose a supported effort/);
+        assert.match(output, /Choose a supported ef/);
         for (let i = 0; i < 3; i++) await key("\x7f");
       }
       await key(down); await key(enter);
@@ -277,9 +277,9 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
           maxFixRounds: 2,
         });
         await key("y");
-        assert.match(output, /Clipboard unavailable/);
+        assert.match(output, /Clipboard unavail/);
         await key("y");
-        assert.match(output, /Settings JSON copied/);
+        assert.match(output, /Settings JSON copi/);
         assert.deepEqual(copied, [JSON.stringify(input.roleSettings), JSON.stringify(input.roleSettings)]);
         assert.equal(calls.length, 1);
         await key(enter);

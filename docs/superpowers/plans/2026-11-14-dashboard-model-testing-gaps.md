@@ -28,9 +28,9 @@
 
 Files — `package.json`, `test/helpers/run-tests.mjs`, `test/helpers/feature-fixture.mjs`.
 
-- [ ] On native Windows with the pinned pnpm available, record `node --version`, `pnpm --version`, and `git --version`. Check that the test temp root supports Git init and commit, NTFS hard links and junctions, and that extensionless fixture executables run in their intended module mode. Keep fixture directories outside the repository's ESM package scope. If Git trust is required, scope it to the disposable fixture root for the test process.
-- [ ] Run `pnpm run build`, followed by `node test/helpers/run-tests.mjs test/dashboard-catalog.test.mjs test/dashboard-layout.test.mjs test/dashboard-actions.test.mjs test/execution-settings.test.mjs`. Verify all focused cases pass. Investigate setup or timeout failures before treating them as product regressions.
-- [ ] Run `pnpm test` and record pass, fail, skip, and cancellation counts, plus names and reasons for any relevant skips or failures. The baseline is reproduced when the run exits zero and the relevant Windows and dashboard cases execute. Capture fixture-backed `--json` and `--dry-run` evidence for the changed CLI paths.
+- [x] On native Windows with the pinned pnpm available, record `node --version`, `pnpm --version`, and `git --version`. Check that the test temp root supports Git init and commit, NTFS hard links and junctions, and that extensionless fixture executables run in their intended module mode. Keep fixture directories outside the repository's ESM package scope. If Git trust is required, scope it to the disposable fixture root for the test process.
+- [x] Run `pnpm run build`, followed by `node test/helpers/run-tests.mjs test/dashboard-catalog.test.mjs test/dashboard-layout.test.mjs test/dashboard-actions.test.mjs test/execution-settings.test.mjs`. Verify all focused cases pass. Investigate setup or timeout failures before treating them as product regressions.
+- [x] Run `pnpm test` and record pass, fail, skip, and cancellation counts, plus names and reasons for any relevant skips or failures. The baseline is reproduced when the run exits zero and the relevant Windows and dashboard cases execute. Capture fixture-backed `--json` and `--dry-run` evidence for the changed CLI paths.
 
 ### Task 2 — Cover assignment write guards
 
@@ -38,16 +38,16 @@ Files — `test/execution-settings.test.mjs`, `test/helpers/feature-fixture.mjs`
 
 - [ ] Add table-driven cases for YAML aliases, the wrong planning checkout, unacknowledged termination, an in-progress integration transaction, a completed repair awaiting integration, completed and archived feature state, and a valid imported binding without dashboard Store context. Use real schema-valid state for lifecycle cases so assertions reach the intended guard.
 - [ ] Assert each case rejects during preview, preserves execution file bytes, and leaves no temporary publication behind. For guards whose state can change after preview, obtain a token before introducing the condition and assert apply rejects. Check the expected blocker in each case so a parser or fixture failure cannot pass the test.
-- [ ] Run `node test/helpers/run-tests.mjs test/execution-settings.test.mjs`. Check the separate completed implementation attempt regression from the implementation plan in the same run once available.
+- [x] Run `node test/helpers/run-tests.mjs test/execution-settings.test.mjs`. Check the separate completed implementation attempt regression from the implementation plan in the same run once available.
 
 ### Task 3 — Drive picker and confirmation at narrow terminal widths
 
 Files — `test/dashboard-layout.test.mjs`, `test/dashboard-actions.test.mjs`, `test/helpers/feature-fixture.mjs`.
 
-- [ ] Reuse the existing Ink keyboard driver at 40 and 80 columns for setup, launch, retry, task edit, and approval. Assert that the selected model, effort, field errors, and confirmation remain reachable at each width and the submitted action receives the expected settings.
+- [x] Reuse the existing Ink keyboard driver at 40 and 80 columns for setup, launch, retry, task edit, and approval. Assert that the selected model, effort, field errors, and confirmation remain reachable at each width and the submitted action receives the expected settings.
 - [ ] In a seeded form with a low-effort model, select a model that advertises only high effort. Assert the old effort disappears from the field and submitted payload. Check that deliberately selecting an incompatible effort remains blocked.
 - [ ] Drive feature-level bulk editing with two explicit task IDs. Assert preview shows both proposed changes, Escape preserves bytes, and a second preview followed by Enter passes the exact reviewed token and updates only the selected assignments. Reload the dashboard and check the saved values.
-- [ ] Run `node test/helpers/run-tests.mjs test/dashboard-layout.test.mjs test/dashboard-actions.test.mjs test/execution-settings.test.mjs`; expect a zero exit with the new cases executed.
+- [x] Run `node test/helpers/run-tests.mjs test/dashboard-layout.test.mjs test/dashboard-actions.test.mjs test/execution-settings.test.mjs`; expect a zero exit with the new cases executed.
 
 ### Task 4 — Verify Codex context parity and Claude discovery
 
@@ -69,3 +69,12 @@ References — `src/harnesses/copilot-model-probe.ts`, `src/harnesses/copilot.ts
 ## Completion evidence
 
 - [ ] Record the Windows suite result and focused test outcomes in the original plan's re-check. For live cases, include the environment, command, outcome, and evidence or exact blocker. Update an open item only when its corresponding acceptance check has run.
+
+
+## Windows execution notes
+
+- Node v24.21.0, pnpm 11.7.0, Git 2.51.1.windows.1. The native fixture run passed 15 cases covering the five Ink workflows at 40, 80, and 140 columns, YAML alias rejection, and existing assignment guards. Narrow coverage exposed a truncated copy status, which now appears first in the confirmation footer.
+- The Windows normalized CLI probes returned eight Codex selectors, five Claude selectors, and only Copilot auto. These were repository-checkout probes. Managed worker comparison, Claude SDK and supervised startup, and Copilot multi-model worker verification remain open.
+- Copilot help advertises --reasoning-effort with model-dependent values. Startup and effective effort remain unverified. Native Linux is excluded by request. The optional VS Code bridge was not exercised.
+
+- Full suite exited zero with 346 passed, 123 skipped, and zero failures or cancellations. The final focused run passed all 44 cases. The new lifecycle fixture covers wrong checkout, completed and archiving state, a pending transaction, a successful repair, and uncertain termination. Valid imported binding coverage and complete temporary publication assertions remain open. The seeded effort switch and bulk Ink confirmation remain open.

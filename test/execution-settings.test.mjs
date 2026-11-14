@@ -188,6 +188,47 @@ test("assignment edits fail closed on redirected files and component authority",
   assert.equal(readFileSync(external, "utf8"), original);
 });
 
+test("assignment editor rejects YAML aliases and preserves reviewed bytes", async t => {
+  const { featureFixture } = await import("./helpers/feature-fixture.mjs");
+  const { root } = featureFixture(t, { unchecked: true });
+  const directory = join(root, "openspec/changes/demo");
+  const path = join(directory, "execution.yaml");
+  const patch = { tasks: [{ id: "1.1", model: "new" }] };
+  const preview = editExecutionSettings("demo", patch, undefined, root);
+  const aliased = 'version: 1\nshared: &assignment {}\ntasks:\n  "1.1": *assignment\n';
+  writeFileSync(path, aliased);
+  for (const token of [undefined, preview.token]) {
+    assert.throws(() => editExecutionSettings("demo", patch, token, root), /Resolve YAML aliases/);
+    assert.equal(readFileSync(path, "utf8"), aliased);
+  }
+});
+
+test("assignment editor rechecks managed lifecycle guards on confirmation", async t => {
+  const { featureFixture } = await import("./helpers/feature-fixture.mjs");
+  const { saveFeature } = await import("../dist/feature-state.js");
+  const { root, r, f } = featureFixture(t, { unchecked: true });
+  f.start("demo");
+  const original = f.read("demo");
+  const path = join(root, "openspec/changes/demo/execution.yaml");
+  const bytes = readFileSync(path);
+  const patch = { tasks: [{ id: "1.1", model: "new" }] };
+  const preview = editExecutionSettings("demo", patch, undefined, root);
+  for (const [name, state, error] of [
+    ["wrong planning checkout", { ...original, planningRoot: join(root, "other") }, /recorded planning checkout/],
+    ["completed feature", { ...original, phase: "completed" }, /Finish active work and pending integration/],
+    ["archiving feature", { ...original, phase: "archiving", archive: { head: "a".repeat(40) } }, /Finish active work and pending integration/],
+    ["repair awaiting integration", { ...original, jobs: [{ role: "repair", phase: "completed", report: { outcome: "completed" } }] }, /Finish active work and pending integration/],
+    ["uncertain termination", { ...original, jobs: [{ role: "review", phase: "failed", worker: { terminationUncertain: true } }] }, /Finish active work and pending integration/],
+    ["integration transaction", { ...original, transaction: { attempt: "repair", before: "a".repeat(40), marker: "test", phase: "merging" } }, /Finish active work and pending integration/],
+  ]) {
+    saveFeature(r.repo.stateDir, state);
+    for (const token of [undefined, preview.token]) {
+      assert.throws(() => editExecutionSettings("demo", patch, token, root), error, name);
+      assert.deepEqual(readFileSync(path), bytes, name);
+    }
+  }
+});
+
 test("Windows sharing violation preserves execution.yaml and leaves a retryable preview", { skip: process.platform !== "win32", timeout: 20000 }, async t => {
   const { featureFixture } = await import("./helpers/feature-fixture.mjs");
   const { spawn } = await import("node:child_process");
