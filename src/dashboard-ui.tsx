@@ -10,9 +10,10 @@ import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 import { dashboardFrame, dashboardLayout, type DashboardLine } from "./dashboard-layout.js";
 type Collector = ReturnType<typeof startDashboardCollector>;
-export function DashboardUi({ snapshot, collector, failure, quit, lifetime, readCatalog = readDashboardCatalog }: {
+export function DashboardUi({ snapshot, collector, failure, quit, lifetime, readCatalog = readDashboardCatalog, runAction = runDashboardAction }: {
   snapshot?: DashboardSnapshot; collector: Collector; failure?: string; quit(): void; lifetime: AbortSignal;
   readCatalog?: typeof readDashboardCatalog;
+  runAction?: typeof runDashboardAction;
 }) {
   const { columns, rows: height } = useWindowSize();
   useFocus({ autoFocus: true });
@@ -129,7 +130,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
     const controller = new AbortController(); actionController.current = controller; setBusy(true); setMenu(undefined); const checking = /:managed-(plan|final|archive)$/.test(action.id);
     setOutput(approved ? "Applying change…" : checking ? "Running checks…" : "Working… Escape cancels");
     applying.current = !!approved || checking;
-    try { const result = await runDashboardAction({ snapshot, action, input, signal: controller.signal, confirmation: approved });
+    try { const result = await runAction({ snapshot, action, input, signal: controller.signal, confirmation: approved });
       if (!controller.signal.aborted && !lifetime.aborted) {
         setOutput(result.text);
         if (action.id.endsWith(":validate")) {

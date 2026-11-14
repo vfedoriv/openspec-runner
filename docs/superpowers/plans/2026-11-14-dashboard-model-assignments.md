@@ -32,7 +32,7 @@
 
 ### Implemented with verification pending
 
-- [ ] Verify the catalog browser and keyboard choices across setup, launch, retry, task edit, and managed approval.
+- [x] Verify the catalog browser and keyboard choices across setup, launch, retry, task edit, and managed approval in Ink. Assert the selected model and effort reach each action.
 - [x] Verify stdin-based managed approval end to end, including preview and confirmation.
 - [x] Test fresh cache reuse, forced refresh failure with cached results, and cancellation when switching harnesses in `test/dashboard-catalog.test.mjs`.
 - [x] Test normalized catalog filtering of hidden and malformed rows and preservation of advertised effort choices and defaults.
