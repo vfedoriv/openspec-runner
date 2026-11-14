@@ -3,7 +3,7 @@ import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
 import { runDashboardAction } from "./dashboard-action-runner.js";
-import { dashboardViews, selectDashboardRows, preserveSelection, featureTimeline, firstRunRows, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
+import { dashboardViews, dashboardFilterChoices, defaultDashboardFilters, selectDashboardRows, preserveSelection, featureTimeline, firstRunRows, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters, type DashboardFilterKey, type DashboardView } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 import { dashboardFrame, dashboardLayout, type DashboardLine } from "./dashboard-layout.js";
@@ -11,9 +11,17 @@ type Collector = ReturnType<typeof startDashboardCollector>;
 export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { snapshot?: DashboardSnapshot; collector: Collector; failure?: string; quit(): void; lifetime: AbortSignal }) {
   const { columns, rows: height } = useWindowSize();
   useFocus({ autoFocus: true });
-  const [tab, setTab] = useState(0), [selected, setSelected] = useState<string>(), [pane, setPane] = useState<"list" | "details" | "activity">("list");
-  const [filters, setFilters] = useState<DashboardFilters>({ search: "", includeCompleted: false, includeOlderAttempts: false, sort: "name" });
-  const [edit, setEdit] = useState<"search" | "status" | "harness" | "owner" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase" | "settingsFile" | DashboardField>(), [text, setText] = useState("");
+  const [tab, setTab] = useState(0), [pane, setPane] = useState<"list" | "details" | "activity">("list");
+  const view = dashboardViews[tab];
+  const [viewFilters, setViewFilters] = useState<Partial<Record<DashboardView, DashboardFilters>>>({});
+  const [selections, setSelections] = useState<Partial<Record<DashboardView, string>>>({});
+  const [picker, setPicker] = useState<{ field: DashboardFilterKey; query: string; choice: string | undefined }>();
+  const filters = viewFilters[view] ?? defaultDashboardFilters;
+  const selected = selections[view];
+  const setFilters = (update: (previous: DashboardFilters) => DashboardFilters) =>
+    setViewFilters(previous => ({ ...previous, [view]: update(previous[view] ?? defaultDashboardFilters) }));
+  const setSelected = (id?: string) => setSelections(previous => ({ ...previous, [view]: id }));
+  const [edit, setEdit] = useState<"search" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase" | "settingsFile" | DashboardField>(), [text, setText] = useState("");
   const [help, setHelp] = useState(false), [offset, setOffset] = useState(0), [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<ActivityEntry[]>([]), [activityError, setActivityError] = useState(""), [activitySearch, setActivitySearch] = useState("");
   const [following, setFollowing] = useState(true), [mode, setMode] = useState<"raw" | "normalized">("normalized"), [activityOffset, setActivityOffset] = useState(0);
@@ -25,7 +33,6 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const changeFollowing = (value: boolean) => { followingRef.current = value; setFollowing(value); };
   const cursor = useRef<{ older?: string; newer?: string }>({}), loading = useRef(false);
   const [validated, setValidated] = useState<ReadonlySet<string>>(() => new Set());
-  const view = dashboardViews[tab];
   const filtering = !!(filters.search || filters.status || filters.harness || filters.owner);
   const guidance = snapshot && !failure && view === "Overview" && !filtering ? firstRunRows(snapshot, validated) : [];
   const list = snapshot ? [...guidance, ...selectDashboardRows(snapshot, view, filters)] : [];
@@ -36,8 +43,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const session = snapshot?.sessions.find(s => s.id === target);
   const visibleEntries = filterActivity(entries, activitySearch);
   const error = failure ?? snapshot?.errors.map(e => `${e.stale ? "STALE" : "ERROR"} ${e.source}: ${e.message}`).join("; ") ?? "";
-  const layout = dashboardLayout({ columns, rows: height, error, table: !timeline && view === "Features" && pane === "list" && !help && !menu });
-  useEffect(() => { setSelected(chosen); }, [chosen]);
+  const layout = dashboardLayout({ columns, rows: height, error, table: !timeline && view === "Features" && pane === "list" && !help && !menu && !picker });
+
   useEffect(() => { setOffset(0); if (pane === "list") setOutput(""); setMenu(undefined); actionController.current?.abort(); actionController.current = undefined; setBusy(false); }, [target, tab]);
   const load = async (direction: "older" | "newer", initial = false) => {
     if (!session?.log || loading.current || lifetime.aborted) return;
@@ -125,7 +132,27 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       setMenu(undefined); setPreview({ action, input: {} }); beginEdit("modelForSetup");
     } else void execute(action);
   };
+  const choices = picker && snapshot ? dashboardFilterChoices(snapshot, view, filters, picker.field)
+    .filter(choice => choice.label.toLowerCase().includes(picker.query.toLowerCase()) || choice.value !== undefined && choice.value === filters[picker.field]) : [];
+  const selectedChoice = choices.findIndex(choice => choice.value === picker?.choice);
+  const matchingChoice = choices.findIndex(choice => choice.label.toLowerCase().includes(picker?.query.toLowerCase() ?? ""));
+  const choiceIndex = Math.max(0, selectedChoice < 0 ? matchingChoice : selectedChoice);
   useInput((input, key) => {
+    if (picker) {
+      if (key.escape) setPicker(undefined);
+      else if (key.return && choices[choiceIndex]) {
+        const value = choices[choiceIndex].value;
+        setFilters(previous => ({ ...previous, [picker.field]: value }));
+        setPicker(undefined);
+      } else if (key.upArrow || key.downArrow) {
+        const index = Math.max(0, Math.min(choices.length - 1, choiceIndex + (key.upArrow ? -1 : 1)));
+        setPicker({ ...picker, choice: choices[index]?.value });
+      } else if (key.backspace || key.delete)
+        setPicker({ ...picker, query: picker.query.slice(0, -1), choice: undefined });
+      else if (input && !key.ctrl && !key.meta && !/[\x00-\x1f]/.test(input))
+        setPicker({ ...picker, query: (picker.query + safeText(input)).slice(0, taskInputLimit), choice: undefined });
+      return;
+    }
     if (applying.current) return;
     if (timeline) {
       if (input === "q" || key.ctrl && input === "c") { quit(); return; }
@@ -164,7 +191,6 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         const value = text.trim();
         if (edit === "activity") { activitySearchRef.current = value; setActivitySearch(value); setActivityOffset(0); }
         else if (edit === "search") setFilters(f => ({ ...f, search: value }));
-        else if (["status", "harness", "owner"].includes(edit)) setFilters(f => ({ ...f, [edit]: value || undefined }));
         else if (preview) {
           const updated = { ...preview, input: { ...preview.input, ...(edit === "tasks" ? { taskIds: value.split(",").map(t => t.trim()).filter(Boolean) } : { [edit]: value || undefined }) } };
           setPreview(updated);
@@ -194,7 +220,12 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (input === "?") { setHelp(h => !h); return; }
     if (input === "r") { collector.refresh(); return; }
     if (input === "/") { beginEdit(pane === "activity" ? "activity" : "search", pane === "activity" ? activitySearch : filters.search); return; }
-    if (input === "s" || input === "h" || input === "o") { beginEdit(input === "s" ? "status" : input === "h" ? "harness" : "owner"); return; }
+    if (input === "s" || input === "h" || input === "o") {
+      const field = input === "s" ? "status" : input === "h" ? "harness" : "owner";
+      setMenu(undefined); setHelp(false);
+      setPicker({ field, query: "", choice: filters[field] }); return;
+    }
+    if (input === "0" && pane !== "activity") { setFilters(() => defaultDashboardFilters); setPane("list"); return; }
     if (input === "c") { setFilters(f => ({ ...f, includeCompleted: !f.includeCompleted })); return; }
     if (input === "v") { setFilters(f => ({ ...f, includeOlderAttempts: !f.includeOlderAttempts })); return; }
     if (input === "z") { setFilters(f => ({ ...f, sort: f.sort === "name" ? "attention" : "name" })); return; }
@@ -246,7 +277,14 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   });
   const { capacity, compact } = layout;
   let lines: DashboardLine[];
-  if (timeline && snapshot) {
+  if (picker) {
+    const room = Math.max(1, capacity - 1);
+    const start = Math.max(0, choiceIndex - room + 1);
+    lines = [`Filter by ${picker.field} · ${picker.query || "type to search"}`,
+      ...choices.slice(start, start + room).map((choice, index) =>
+        `${index + start === choiceIndex ? "▸" : " "} ${choice.label} (${choice.count})${choice.value === filters[picker.field] ? " · current" : ""}`)];
+    if (!choices.length) lines.push("No matching choices");
+  } else if (timeline && snapshot) {
     const feature = snapshot.features.find(row => row.id === timeline.featureId);
     const source = snapshot.sources[timeline.featureId];
     const heading = `Timeline · ${feature?.change ?? timeline.featureId}${source?.stale ? ` · STALE · observed ${source.collectedAt}` : ""}`;
@@ -263,7 +301,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         `${index + start === timelineIndex ? "▸" : " "} ${event.at ?? "Undated"} · ${event.title}`)];
       if (!timelineEvents.length) lines.push("No recorded milestones");
     }
-  } else if (help) lines = ["←/→ views · ↑/↓ selection/scroll · Tab pane", "Enter details · Esc back/cancel · / search", "s status · h harness · o owner (empty clears)", "c completed · v older attempts · z sort", "a row actions · g project actions", "w raw · p pause · f resume · b older page", "x expand activity · r refresh · q exit", "Activity outcomes do not establish completion"];
+  } else if (help) lines = ["←/→ views · ↑/↓ selection/scroll · Tab pane", "Enter details · Esc back/cancel · / search", "s status · h harness · o owner · 0 reset", "c completed · v older attempts · z sort", "a row actions · g project actions", "w raw · p pause · f resume · b older page", "x expand activity · r refresh · q exit", "Activity outcomes do not establish completion"];
   else if (menu) lines = menu.slice(Math.max(0, actionIndex - capacity + 1), actionIndex + capacity).map(a => `${a.id === menu[actionIndex]?.id ? "▸" : " "} ${a.label}${a.available ? "" : ` — unavailable: ${a.reason}`}`);
   else if (pane === "activity") {
     lines = activityViewport(visibleEntries, expanded, activityOffset, capacity);
@@ -280,7 +318,12 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       const feature = snapshot?.features.find(f => f.id === r.targetId);
       return [marker, feature?.change ?? r.targetId, `${feature?.phase ?? "unmanaged"} · ${feature?.completed}/${feature?.total} ${feature?.origin === "shared" ? "components delivered" : "tasks satisfied"}`];
     });
-    if (!lines.length) lines = [snapshot ? view === "Overview" ? "No matching work · g project actions" : "No matching work" : "Collecting… keyboard remains available"];
+    if (!lines.length) {
+      const available = snapshot && selectDashboardRows(snapshot, view, { ...defaultDashboardFilters, includeCompleted: true, includeOlderAttempts: true });
+      lines = !snapshot ? ["Collecting… keyboard remains available"] : available?.length ?
+        ["No matching rows · 0 reset", ...(!filters.includeCompleted || !filters.includeOlderAttempts ? ["c show completed · v show older attempts"] : [])] :
+        [view === "Overview" ? "No data yet · g project actions" : "No data yet"];
+    }
   }
   const localFeatures = snapshot?.features.filter(feature => feature.origin === "local") ?? [];
   const satisfiedTasks = localFeatures.reduce((count, feature) => count + feature.completed, 0);
@@ -292,7 +335,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     status: `Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`,
     filters: `/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`,
     lines,
-    footer: [timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · ←→ views"],
+    footer: [picker ? "↑↓ choose · Enter apply · Esc cancel" : timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · 0 reset · ←→ views"],
   });
   return <Box flexDirection="column" height={height} width={columns}>
     {frame.map((line, index) => <Text key={index} wrap="truncate" color={index === 1 ? "cyan" : error && index === (compact ? 3 : 4) ? "yellow" : index === frame.length - (compact ? 2 : 3) ? "green" : undefined} dimColor={!compact && index === frame.length - 2}>{line}</Text>)}

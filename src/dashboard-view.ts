@@ -6,6 +6,8 @@ import { renderArgument } from "./platform-command.js";
 export const dashboardViews = ["Overview", "Attention", "Features", "Sessions", "Assignments"] as const;
 export type DashboardView = typeof dashboardViews[number];
 export type DashboardFilters = { search: string; status?: string; harness?: string; owner?: string; includeCompleted: boolean; includeOlderAttempts: boolean; sort: "name" | "attention" };
+export type DashboardFilterKey = "status" | "harness" | "owner";
+export const defaultDashboardFilters: DashboardFilters = { search: "", includeCompleted: false, includeOlderAttempts: false, sort: "name" };
 export type DashboardRow = { id: string; label: string; targetId: string; primary?: string; tasks?: string; projectSetup?: boolean };
 export const safeText = (value: unknown): string => String(value ?? "unknown").replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 export function recoveryLines(entries: RecoveryEntry[] = []): string[] {
@@ -97,7 +99,7 @@ function overviewWork(s: DashboardSnapshot) {
       priority: 1, label: `Needs you · ${error.source} · ${error.message}` });
   return rows;
 }
-export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, filters: DashboardFilters): DashboardRow[] {
+function dashboardRows(s: DashboardSnapshot, view: DashboardView, filters: DashboardFilters) {
   const rows: Array<DashboardRow & { feature?: string; status?: string; harness?: string; owner?: string; priority?: number }> = [];
   if (view === "Overview") rows.push(...overviewWork(s));
   if (view === "Overview" || view === "Features") for (const f of s.features) {
@@ -116,6 +118,20 @@ export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, f
     row.owner ??= s.assignments.find(a => a.featureId === row.feature)?.owner;
     row.harness ??= task?.harness ?? session?.attempt.agent ?? s.tasks.find(t => t.featureId === row.feature)?.harness;
   }
+  return rows;
+}
+
+export function dashboardFilterChoices(s: DashboardSnapshot, view: DashboardView, filters: DashboardFilters, field: DashboardFilterKey) {
+  const values = new Set(dashboardRows(s, view, { ...defaultDashboardFilters, includeCompleted: true, includeOlderAttempts: true })
+    .map(row => row[field]).filter((value): value is string => !!value));
+  if (filters[field]) values.add(filters[field]);
+  return [undefined, ...[...values].sort((a, b) => a.localeCompare(b))].map(value => ({
+    value, label: value ?? "Any", count: selectDashboardRows(s, view, { ...filters, [field]: value }).length,
+  }));
+}
+
+export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, filters: DashboardFilters): DashboardRow[] {
+  const rows = dashboardRows(s, view, filters);
   return rows.filter(r => (filters.includeCompleted || !completed(s, r.feature ?? "")) && (!filters.search || safeText(r.label).toLowerCase().includes(filters.search.toLowerCase())) && (!filters.status || r.status === filters.status) && (!filters.harness || r.harness === filters.harness) && (!filters.owner || r.owner === filters.owner)).sort((a, b) => view === "Overview" ? (a.priority ?? 9) - (b.priority ?? 9) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id) : filters.sort === "attention" ? (a.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === a.targetId || i.source === a.feature).map(i => i.priority))) - (b.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === b.targetId || i.source === b.feature).map(i => i.priority))) || a.label.localeCompare(b.label) : a.label.localeCompare(b.label)).map(r => ({ id: r.id, targetId: r.targetId, label: safeText(r.label), ...(r.primary ? { primary: r.primary } : {}), ...(r.tasks ? { tasks: r.tasks } : {}) }));
 }
 export function preserveSelection(rows: Array<{ id: string }>, selected?: string): string | undefined { return rows.some(r => r.id === selected) ? selected : rows[0]?.id; }

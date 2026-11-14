@@ -24,6 +24,18 @@ test("first-run guidance advances with collected project evidence", async () => 
   s.features[0].completed = 1;
   assert.deepEqual(firstRunRows(s), []);
 });
+test("filter choices keep exact owners with spaces and preserve a disappeared selection", async () => {
+  const { dashboardFilterChoices } = await import("../dist/dashboard-view.js");
+  const s = { ...snapshot, assignments: [
+    { id: "a", owner: "Build Team", componentId: "api", featureId: "local:a", status: { phase: "assigned" } },
+  ] };
+  assert.deepEqual(dashboardFilterChoices(s, "Assignments", { ...filters, owner: "Former Owner" }, "owner"), [
+    { value: undefined, label: "Any", count: 1 },
+    { value: "Build Team", label: "Build Team", count: 1 },
+    { value: "Former Owner", label: "Former Owner", count: 0 },
+  ]);
+});
+
 test("views default to active work and filter the current view", async () => {
   const { selectDashboardRows } = await import("../dist/dashboard-view.js");
   assert.deepEqual(selectDashboardRows(snapshot, "Overview", filters).map(r => r.id), ["local:a"]);
@@ -113,12 +125,17 @@ test("keys navigate details filters help and narrow terminals while collection i
     for (let i = 0; i < 3; i++) await key("\u001b[B");
     await key("\r"); assert.match(output, /Enter confirm/);
     await key("\u001b"); assert.match(output, /Cancelled/);
+    await key("s"); await key("unman"); assert.match(output, /unmanaged \(1\)/);
+    await key("\r"); assert.match(output, /s:unmanaged/);
     await key("\u001b[C"); assert.match(output, /Attention/);
+    assert.match(output.split("\n").slice(-12).join("\n"), /s:all/);
     await key("\r"); assert.match(output, /details/);
     await key("?"); assert.match(output, /Esc back/);
     await key("\u001b"); await key("/"); await key("blocked"); await key("\r");
     assert.match(output, /blocked/);
-    await key("\u001b"); await key("\u001b[D"); await key("/"); for (let i = 0; i < 7; i++) await key("\u007f"); await key("\r"); await key("a"); await key("\u001b[B"); await key("\u001b[B"); await key("\r"); assert.match(output, /openspec-runner.*launch/);
+    await key("\u001b"); await key("\u001b[D"); assert.match(output.split("\n").slice(-12).join("\n"), /s:unmanaged/);
+    await key("0"); assert.match(output.split("\n").slice(-12).join("\n"), /s:all/);
+    await key("a"); await key("\u001b[B"); await key("\u001b[B"); await key("\r"); assert.match(output, /openspec-runner.*launch/);
     await key("\u001b"); await key("a"); await key("\u001b[B"); await key("\r");
     assert.match(output, /tasks: 1\.1/);
     await key("\u0015"); await key("1.2");

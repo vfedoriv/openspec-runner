@@ -269,9 +269,10 @@ use a compact bordered list with fewer header and footer lines.
 | Key | Effect |
 |---|---|
 | `/`, text, Enter | Search visible row labels; in the activity pane, search loaded activity instead. |
-| `s`, value, Enter | Filter by exact status, such as `running`, `ready`, or `blocked`, depending on the view. |
-| `h`, value, Enter | Filter by exact harness, such as `codex` or `claude`. |
-| `o`, value, Enter | Filter by exact component owner. |
+| `s` | Open the status picker. |
+| `h` | Open the harness picker. |
+| `o` | Open the owner picker. |
+| `0` | Reset filters, sorting, and visibility switches in the current view. |
 | `c` | Include or hide completed work. |
 | `v` | Include or hide older session attempts. |
 | `z` | Switch between name and attention sorting. |
@@ -279,11 +280,10 @@ use a compact bordered list with fewer header and footer lines.
 | `?` | Toggle help. |
 | `q` / Ctrl-C | Exit. |
 
-Search is case insensitive; status, harness, and owner filters require exact
-values. To clear a filter, press its key and submit an empty value. For search,
-press `/`, erase the current text, and press Enter. Escape cancels text entry.
-Filters persist when you switch views, so a status filter useful in Sessions
-may hide every row in Assignments.
+Type to search picker choices, use the arrows to select one, and press Enter
+to apply it. Counts show how many rows each choice would display. Choose
+**Any** to clear that filter, or press Escape to cancel. Each view remembers
+its own filters and selection for the current dashboard session.
 
 Completed work and older attempts are hidden by default. If a finished feature
 or earlier attempt seems missing, toggle `c` or `v` before investigating further.

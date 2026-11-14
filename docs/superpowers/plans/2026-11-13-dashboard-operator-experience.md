@@ -59,10 +59,11 @@
 
 **Files** `src/dashboard-ui.tsx`, `src/dashboard-view.ts`, `src/dashboard-layout.ts`, and dashboard UI tests.
 
-- [ ] Replace exact-text status, harness, and owner prompts with searchable pickers populated from the selected view's unfiltered rows. Include **Any**, keep a selected value visible if refresh removes its last matching row, and show result counts before applying. Preserve activity search as its own control.
-- [ ] Store search, filters, sort, and visibility toggles independently per view for the current dashboard session. Restore each view's previous selection when still available. Provide a documented one-key reset for the current view. Persisting preferences across launches can follow if users need it.
-- [ ] Distinguish **No matching rows** from **No data yet** and show which filters are active. Offer reset on the empty state and explain hidden completed work or older attempts where relevant.
-- [ ] Test switching views with incompatible status filters, selecting owners with spaces, clearing one filter, resetting all filters in the current view, and refresh while a picker is open. Verify that narrow layouts keep selection, empty-state feedback, and reset instructions readable.
+- [x] Replace exact-text status, harness, and owner prompts with searchable pickers populated from the selected view's unfiltered rows. Include **Any**, keep a selected value visible if refresh removes its last matching row, and show result counts before applying. Preserve activity search as its own control.
+- [x] Store search, filters, sort, and visibility toggles independently per view for the current dashboard session. Restore each view's previous selection when still available. Provide a documented one-key reset for the current view. Persisting preferences across launches can follow if users need it.
+- [x] Distinguish **No matching rows** from **No data yet** and show which filters are active. Offer reset on the empty state and explain hidden completed work or older attempts where relevant.
+- [x] Verify per-view status filters, one-key reset, narrow keyboard navigation, and choice counts for owners with spaces and disappeared values.
+- [ ] Exercise refresh while a picker is open and clearing an individual filter with **Any** in a live terminal.
 
 ## Release sequence and verification
 
@@ -73,4 +74,4 @@ Ship Overview first. Timeline and path actions can follow independently once the
 - [ ] Walk through four disposable scenarios with the keyboard in standard and narrow terminals. Use a fresh repository, a running feature with a retry, a conflicted integration with a reported worker waiting for exit, and completed work hidden by filters.
 - [x] Document Overview, timeline navigation, and path-opening fallbacks in `docs/dashboard-guide.md`.
 - [x] Document first-run guidance.
-- [ ] Document filter changes when they land.
+- [x] Document filter changes when they land.
