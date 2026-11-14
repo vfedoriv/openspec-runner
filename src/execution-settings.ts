@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isAlias, isMap, isScalar, parseDocument, visit } from "yaml";
 import { readComponentBinding } from "./component-state.js";
 import { featureActive, readFeature } from "./feature-state.js";
 import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import { getHarness } from "./harnesses/registry.js";
-import { assignmentsFrom, loadPlan } from "./plan.js";
-import { replaceBytes } from "./platform-files.js";
+import { assignmentsFrom, initExecution, loadPlan } from "./plan.js";
+import { publishExclusive, replaceBytes } from "./platform-files.js";
 import { unredirectedPath } from "./platform-paths.js";
 import { Runner } from "./runner.js";
 
@@ -25,14 +25,23 @@ export function editExecutionSettings(change: string, input: unknown, confirm?: 
         state?.attempts.some(attempt => ["preparing", "manual", "launching", "running"].includes(attempt.phase) || agentMayBeActive(attempt)) ||
         feature?.jobs.some(job => featureActive(job) || job.role === "repair" && job.phase === "completed" && job.report?.outcome === "completed"))
       throw new Error("Finish active work and pending integration before editing assignments");
-    const plan = loadPlan(root, change);
-    const path = resolve(plan.directory, "execution.yaml");
+    const starter = initExecution(root, change, { dryRun: true });
+    const path = resolve(root, starter.path);
     if (!unredirectedPath(path)) throw new Error("Expected an ordinary planning file");
-    const original = readFileSync(path, "utf8");
-    if (Buffer.byteLength(original) > 1024 * 1024) throw new Error("execution.yaml exceeds 1 MiB");
+    const readExisting = () => {
+      const stat = lstatSync(path, { throwIfNoEntry: false });
+      if (!stat) return undefined;
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Expected an ordinary planning file");
+      if (stat.size > 1024 * 1024) throw new Error("execution.yaml exceeds 1 MiB");
+      return readFileSync(path);
+    };
+    const bytes = readExisting();
+    const original = bytes?.toString("utf8") ?? starter.yaml;
+    if (bytes && !Buffer.from(original).equals(bytes)) throw new Error("execution.yaml must be valid UTF-8");
     const document = parseDocument(original);
     if (document.errors.length) throw document.errors[0];
     visit(document, (_, node) => { if (isAlias(node)) throw new Error("Resolve YAML aliases before editing assignments"); });
+    const plan = loadPlan(root, change, original);
     const tasks = (input as { tasks?: unknown } | null)?.tasks;
     if (!Array.isArray(tasks) || !tasks.length) throw new Error("Select at least one task");
     const effortKey = document.get("version") === 1 ? "reasoningEffort" : "effort";
@@ -72,18 +81,28 @@ export function editExecutionSettings(change: string, input: unknown, confirm?: 
       return { task, before: plan.assignments[task], after, effective };
     });
     const next = original.includes("\r\n") ? document.toString().replace(/\n/g, "\r\n") : document.toString();
-    const token = createHash("sha256").update(JSON.stringify([runner.actionIdentity(change), path, original, next, changes])).digest("hex");
+    const diff = changes.map(({ task, before, after }) => {
+      const fields = [["model", before.model, after.model], [effortKey, before.effort ?? before.reasoningEffort, after.effort ?? after.reasoningEffort]];
+      return [`Task ${task}`, ...fields.filter(([, oldValue, newValue]) => oldValue !== newValue)
+        .flatMap(([field, oldValue, newValue]) => [`- ${field}: ${oldValue ?? "inherit"}`, `+ ${field}: ${newValue ?? "inherit"}`])].join("\n");
+    }).join("\n");
+    const token = createHash("sha256").update(JSON.stringify([
+      runner.actionIdentity(change, original), path, bytes?.toString("base64") ?? null,
+      plan.tasks.map(task => [task.id, task.completed]), next, input,
+    ])).digest("hex");
     if (confirm !== undefined) {
-      if (token !== confirm || !unredirectedPath(path) || readFileSync(path, "utf8") !== original)
+      const current = readExisting();
+      if (token !== confirm || !unredirectedPath(path) || (bytes ? !current?.equals(bytes) : current !== undefined))
         throw new Error("Assignment preview is stale; review it again");
-      if (changes.length) replaceBytes(path, Buffer.from(next));
+      if (changes.length) (bytes ? replaceBytes : publishExclusive)(path, Buffer.from(next));
     }
     const nextSteps = changes.length ? [
       "Review and commit execution.yaml",
       ...(state ? ["Reconcile the committed plan. All unintegrated attempts become stale."] : []),
       ...(feature ? ["Approve the updated managed plan"] : []),
     ] : [];
-    return { path, token, changes, applied: confirm !== undefined && changes.length > 0, nextSteps };
+    return { path, token, changes, diff, createsFile: !bytes && changes.length > 0,
+      message: changes.length ? undefined : "No assignment changes", applied: confirm !== undefined && changes.length > 0, nextSteps };
   };
   return confirm === undefined ? edit() : runner.lock(edit);
 }

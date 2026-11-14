@@ -93,6 +93,9 @@ export async function runDashboardAction(options: {
   if (suffix === "edit-models") {
     if (!trusted.available || !trusted.argv) throw new Error(trusted.reason ?? "Assignment editing is unavailable");
     const ids = input?.taskIds ?? [];
+    const task = snapshot.tasks.find(row => row.id === target.id);
+    if (task && (ids.length !== 1 || ids[0] !== task.task.id))
+      throw new Error("Task selection differs from selected target");
     const field = (value?: string) => value === ":inherit" ? null : value;
     const patch = { tasks: ids.map(id => ({ id, model: field(input?.model), effort: field(input?.effort) })) };
     const command = [...trusted.argv, "--json", ...(options.confirmation ? ["--confirm", options.confirmation] : ["--dry-run"])];
@@ -100,7 +103,9 @@ export async function runDashboardAction(options: {
     const output = await dashboardChild(process.execPath, [entry, ...command], snapshot.repository.root,
       signal, !!options.confirmation, Buffer.from(JSON.stringify(patch)));
     const result = JSON.parse(output.stdout);
-    return { text: bounded(result), command, confirmation: !options.confirmation && result.changes.length ? result.token : undefined };
+    const { diff, message, ...details } = result;
+    return { text: [message, diff && sanitize(diff), bounded(details)].filter(Boolean).join("\n"), command,
+      confirmation: !options.confirmation && result.changes.length ? result.token : undefined };
   }
   if (trusted.kind === "path") {
     const [, operation, type] = suffix.split("-");

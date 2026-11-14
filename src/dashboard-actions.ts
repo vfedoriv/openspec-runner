@@ -129,6 +129,13 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     return actions;
   }
   const change = feature.change;
+  const editAssignments = () => {
+    const delegated = feature.state?.delegated || snapshot.assignments.some(row => row.featureId === feature.id && row.binding);
+    add("edit-models", task ? "Edit model and effort" : "Assign models to tasks", "change",
+      staleExecution ?? (delegated ? "Obtain revised settings from the coordinator" : undefined),
+      ["execution-settings", change, "--file", "-"]);
+    actions.at(-1)!.initialTasks = task?.task.id;
+  };
   pathActions("integration", "integration worktree");
   if (task) {
     pathActions("worktree", "latest task worktree");
@@ -140,6 +147,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
       add("starter-preview", "Preview starter settings", "check", stale, ["init-execution", change, "--dry-run"]);
       add("starter-create", "Create execution.yaml", "change", stale, ["init-execution", change]);
       add("timeline", "View timeline", "timeline");
+      editAssignments();
       return actions;
     }
   }
@@ -226,11 +234,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   }
   if (!task) add("validate", "Validate change (runs OpenSpec)", "check",
     snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined, ["validate", change]);
-  if (!feature.missingExecution && !feature.state?.delegated) {
-    add("edit-models", task ? "Edit model and effort" : "Assign models to tasks", "change", staleExecution,
-      ["execution-settings", change, "--file", "-"]);
-    actions.at(-1)!.initialTasks = task?.task.id;
-  }
+  editAssignments();
   return actions;
 }
 

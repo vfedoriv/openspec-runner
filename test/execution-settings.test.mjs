@@ -49,3 +49,116 @@ test("assignment preview preserves bytes and rejects stale settings before apply
   writeFileSync(join(directory, "tasks.md"), "- [x] 1.1 Example\n");
   assert.throws(() => editExecutionSettings("demo", clear, undefined, root), /already satisfied/);
 });
+
+test("bulk starter preview is read-only and publishes v2 assignments exclusively", async t => {
+  const { featureFixture, git } = await import("./helpers/feature-fixture.mjs");
+  const { root } = featureFixture(t, { unchecked: true });
+  const directory = join(root, "openspec/changes/demo");
+  const path = join(directory, "execution.yaml");
+  rmSync(path);
+  writeFileSync(join(directory, "tasks.md"), "- [ ] 1.1 First\n- [ ] 1.2 Second\n");
+  const patch = { tasks: [{ id: "1.1", model: "a", effort: "high" }, { id: "1.2", model: "b", effort: "low" }] };
+  const preview = editExecutionSettings("demo", patch, undefined, root);
+  assert.equal(preview.createsFile, true);
+  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  assert.match(preview.diff, /Task 1\.1\n- model: inherit\n\+ model: a/);
+  assert.deepEqual(preview.changes.map(row => row.effective.effort), ["high", "low"]);
+  editExecutionSettings("demo", patch, preview.token, root);
+  const saved = readFileSync(path, "utf8");
+  assert.match(saved, /version: 2/);
+  assert.match(saved, /effort: low/);
+  assert.doesNotMatch(saved, /reasoningEffort/);
+  assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /stale/);
+  assert.equal(editExecutionSettings("demo", patch, undefined, root).message, "No assignment changes");
+  const mixed = { tasks: [{ id: "1.1", effort: null }, { id: "1.2", model: "c" }] };
+  const changed = editExecutionSettings("demo", mixed, undefined, root);
+  assert.deepEqual(changed.changes.map(row => [row.after.model, row.after.effort]), [["a", undefined], ["c", "low"]]);
+  assert.match(git(root, "status", "--short"), /execution.yaml/);
+});
+
+test("committed assignment changes require reconcile and approval before a retry", async t => {
+  const { featureFixture, featureSettings, git } = await import("./helpers/feature-fixture.mjs");
+  const { root, r, f, approve } = featureFixture(t, { unchecked: true });
+  approve();
+  const [attempt] = r.launch("demo", ["1.1"]);
+  const patch = { tasks: [{ id: "1.1", model: "replacement", effort: "medium" }] };
+  assert.throws(() => editExecutionSettings("demo", patch, undefined, root), /active work/);
+  const state = r.read("demo");
+  state.attempts[0].phase = "failed";
+  r.save(state);
+  const preview = editExecutionSettings("demo", patch, undefined, root);
+  state.attempts[0].description = "Changed after preview";
+  r.save(state);
+  assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /stale/);
+  const reviewed = editExecutionSettings("demo", patch, undefined, root);
+  assert.match(reviewed.nextSteps.join(" "), /All unintegrated attempts become stale/);
+  editExecutionSettings("demo", patch, reviewed.token, root);
+  assert.throws(() => r.preview("demo", ["1.1"]), /approval|reconcile/i);
+  git(root, "add", "openspec/changes/demo/execution.yaml");
+  git(root, "commit", "-m", "Assign replacement model");
+  r.reconcile("demo");
+  assert.equal(r.read("demo").attempts[0].phase, "stale");
+  assert.throws(() => r.preview("demo", ["1.1"]), /approval/i);
+  f.approve("demo", featureSettings, f.planPreview("demo", featureSettings).token);
+  const [retry] = r.launch("demo", ["1.1"], undefined, undefined, true);
+  assert.notEqual(retry.id, attempt.id);
+  assert.equal(retry.settings.model, "replacement");
+  assert.equal(retry.settings.reasoningEffort, "medium");
+  assert.equal(r.read("demo").attempts[0].settings.model, attempt.settings.model);
+});
+
+test("assignment edits fail closed on redirected files and component authority", async t => {
+  const { featureFixture } = await import("./helpers/feature-fixture.mjs");
+  const { symlinkSync } = await import("node:fs");
+  const { componentBindingPath } = await import("../dist/component-state.js");
+  const { dirname } = await import("node:path");
+  const { root, dir, r } = featureFixture(t, { unchecked: true });
+  const path = join(root, "openspec/changes/demo/execution.yaml");
+  const original = readFileSync(path, "utf8");
+  const patch = { tasks: [{ id: "1.1", model: "new" }] };
+  const preview = editExecutionSettings("demo", patch, undefined, root);
+  const binding = componentBindingPath({ stateDir: r.repo.stateDir, change: "demo" });
+  mkdirSync(dirname(binding), { recursive: true });
+  writeFileSync(binding, "{}");
+  assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /binding|record|schema|object/i);
+  assert.equal(readFileSync(path, "utf8"), original);
+  rmSync(binding);
+  const external = join(dir, "external.yaml");
+  writeFileSync(external, original);
+  rmSync(path);
+  try { symlinkSync(external, path, "file"); }
+  catch (error) {
+    if (process.platform !== "win32" || error.code !== "EPERM") throw error;
+    const directory = dirname(path);
+    const externalDirectory = join(dir, "external-plan");
+    mkdirSync(externalDirectory);
+    writeFileSync(join(externalDirectory, "execution.yaml"), original);
+    rmSync(directory, { recursive: true });
+    symlinkSync(externalDirectory, directory, "junction");
+  }
+  assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /ordinary|outside|symlink/i);
+  assert.equal(readFileSync(external, "utf8"), original);
+});
+
+test("Windows sharing violation preserves execution.yaml and leaves a retryable preview", { skip: process.platform !== "win32", timeout: 20000 }, async t => {
+  const { featureFixture } = await import("./helpers/feature-fixture.mjs");
+  const { spawn } = await import("node:child_process");
+  const { once } = await import("node:events");
+  const { readdirSync } = await import("node:fs");
+  const { root } = featureFixture(t, { unchecked: true });
+  const directory = join(root, "openspec/changes/demo");
+  const path = join(directory, "execution.yaml");
+  const original = readFileSync(path, "utf8");
+  const patch = { tasks: [{ id: "1.1", model: "new" }] };
+  const preview = editExecutionSettings("demo", patch, undefined, root);
+  const script = `$f=[IO.File]::Open('${path.replaceAll("'", "''")}', 'Open', 'Read', 'ReadWrite'); [Console]::WriteLine('locked'); [Console]::ReadLine() | Out-Null; $f.Dispose()`;
+  const reader = spawn("pwsh.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  const closed = once(reader, "close");
+  try {
+    await Promise.race([once(reader.stdout, "data"), closed.then(() => { throw new Error("Could not acquire sharing lock"); })]);
+    assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), { code: /EPERM|EACCES|EBUSY/ });
+    assert.equal(readFileSync(path, "utf8"), original);
+    assert.ok(readdirSync(directory).every(name => !name.endsWith(".tmp")));
+  } finally { reader.stdin.end("\n"); await closed; }
+  assert.equal(editExecutionSettings("demo", patch, preview.token, root).applied, true);
+});

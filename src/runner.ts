@@ -248,8 +248,8 @@ export class Runner {
   constructor(cwd = process.cwd(), private readonly expectedState?: string) {
     this.repo = repository(cwd);
   }
-  actionIdentity(change: string): string {
-    const plan = loadPlan(this.repo.root, change);
+  actionIdentity(change: string, executionDraft?: string): string {
+    const plan = loadPlan(this.repo.root, change, executionDraft);
     const state = this.read(change);
     const integrationHead = state && attempt(() => git(state.integration.path, "rev-parse", "HEAD"));
     return createHash("sha256").update(JSON.stringify([

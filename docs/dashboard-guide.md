@@ -502,7 +502,9 @@ for each task before launching.
 From a task, choose **Edit model and effort**. From a feature, choose **Assign
 models to tasks** and enter the exact task IDs. Leave a field blank to keep
 its value, or type `:inherit` to remove the override. Review the proposed
-changes before confirming. Commit the updated `execution.yaml`. If execution
+changes before confirming. If `execution.yaml` is missing, confirmation
+creates it from the starter settings with your selected assignments. Commit
+the updated `execution.yaml`. If execution
 already exists, reconcile the committed plan. Reconciliation marks all
 unintegrated attempts stale. Managed features also require plan reapproval.
 

@@ -361,17 +361,15 @@ export function initExecution(root: string, change: string, { dryRun }: { dryRun
   return { change, path, agent, taskIds, yaml, created: !dryRun };
 }
 
-export function loadPlan(root: string, change: string): Plan {
+export function loadPlan(root: string, change: string, executionDraft?: string): Plan {
   const directory = changeDirectory(root, change);
   const tasks = tasksFrom(readFileSync(resolve(directory, "tasks.md"), "utf8"));
   const config = configFrom(
     parse(readFileSync(resolve(root, "openspec/runner.yaml"), "utf8")),
   );
-  const assignments = assignmentsFrom(
-    parse(readFileSync(resolve(directory, "execution.yaml"), "utf8")),
-    tasks,
-  );
-  const execution = parse(readFileSync(resolve(directory, "execution.yaml"), "utf8"));
+  const executionPath = resolve(directory, "execution.yaml");
+  const execution = parse(executionDraft ?? readFileSync(executionPath, "utf8"));
+  const assignments = assignmentsFrom(execution, tasks);
   const files: string[] = [];
   function walk(dir: string) {
     for (const entry of readdirSync(dir).sort()) {
@@ -384,10 +382,12 @@ export function loadPlan(root: string, change: string): Plan {
     }
   }
   walk(directory);
+  const executionFile = relative(root, executionPath).split(sep).join("/");
+  if (executionDraft !== undefined && !files.includes(executionFile)) files.push(executionFile);
   files.push(...projectPlanFiles(root, config));
   const hash = createHash("sha256");
   for (const p of files.sort()) {
-    let content = readFileSync(resolve(root, p), "utf8").replace(/\r\n/g, "\n");
+    let content = (p === executionFile && executionDraft !== undefined ? executionDraft : readFileSync(resolve(root, p), "utf8")).replace(/\r\n/g, "\n");
     if (p === relative(root, resolve(directory, "tasks.md")).split(sep).join("/")) {
       const lines = content.split("\n");
       for (const task of tasks)
