@@ -33,7 +33,7 @@ export function desktopPathCommand(path: string, kind: DashboardPathKind, copy: 
   platform = process.platform, env = process.env): { command: string; args: string[]; stdin?: Buffer } | undefined {
   if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) return;
   if (platform === "win32") {
-    if (copy) return { command: "clip.exe", args: [], stdin: Buffer.from("\ufeff" + path, "utf16le") };
+    if (copy) return { command: "clip.exe", args: [], stdin: Buffer.from(path, "utf16le") };
     return kind === "log" ? { command: "notepad.exe", args: [path] } : { command: "explorer.exe", args: [path] };
   }
   if (platform === "darwin") return copy ? { command: "pbcopy", args: [], stdin: Buffer.from(path) } :

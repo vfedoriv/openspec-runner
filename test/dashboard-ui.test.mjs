@@ -98,11 +98,20 @@ test("Overview prioritizes recovery and keeps worker waits separate", async () =
     { kind: "worker", attempt: "waiting", evidence: "Report accepted. Waiting for exit.", argv: [] },
     { kind: "integration", task: "1.1", evidence: "Git index contains unresolved conflicts.", argv: [] },
   ];
+  feature.execution = { head: "head", path: "/integration", fingerprint: "plan" };
+  feature.nextAction = { integrate: ["integrate", "Alpha", "--tasks", "1.1"] };
+  s.tasks[0].attempts = [{ id: "original", phase: "completed" }];
   const filters = { search: "", includeCompleted: true, includeOlderAttempts: false, sort: "name" };
   const rows = selectDashboardRows(s, "Overview", filters);
   assert.match(rows[0].label, /Needs you.*Resolve conflict in task 1.1/);
   assert.ok(rows.find(row => row.primary?.endsWith(":managed-final")));
   assert.ok(rows.find(row => /In progress.*Waiting for exit/.test(row.label)));
+  const integration = rows.find(row => row.primary?.endsWith(":integrate-run"));
+  assert.equal(integration.targetId, feature.id);
+  assert.equal(integration.tasks, "1.1");
+  assert.equal(rows.filter(row => row.primary === integration.primary).length, 1);
+  s.tasks[0].attempts.push({ id: "replacement", phase: "completed" });
+  assert.notEqual(selectDashboardRows(s, "Overview", filters).find(row => row.primary === integration.primary).id, integration.id);
   s.sources[feature.id] = { stale: true };
   assert.ok(selectDashboardRows(s, "Overview", filters).every(row => row.targetId !== feature.id || !row.primary));
 });
@@ -198,24 +207,91 @@ test("collector metadata records missing worktree and valid capacity and harness
   assert.equal(result.sessions[0].worktreeAvailable, false);
   assert.equal(result.repository.maxParallel, 4); assert.equal(result.tasks[0].harness, "codex");
 });
-async function activityUiFixture(t, { height = 12 } = {}) {
+async function activityUiFixture(t, { height = 12, width = 100, dashboard, navigate = true } = {}) {
   const { PassThrough, Writable } = await import("node:stream");
   const React = await import("react"); const { render } = await import("ink"); const { DashboardUi } = await import("../dist/dashboard-ui.js");
   const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
-  let output = ""; const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } }); stdout.isTTY = true; stdout.columns = 100; stdout.rows = height;
+  let output = ""; const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } }); stdout.isTTY = true; stdout.columns = width; stdout.rows = height;
   const lifetime = new AbortController(), requests = [];
   const collector = { refresh() {}, close: async () => {}, readActivity(options, signal) { return new Promise(resolve => requests.push({ options, signal, resolve })); } };
   const session = { id: "stream", featureId: "local:a", taskId: "t", role: "implementation", phase: "running", process: "unknown", terminal: "unknown", log: "/log", attempt: { id: "stream", agent: "codex", phase: "running", path: "/worktree", terminal: {}, base: "a".repeat(40) } };
-  const fixture = { ...snapshot, sessions: [session] };
+  const fixture = dashboard ?? { ...snapshot, sessions: [session] };
   const props = { snapshot: fixture, collector, lifetime: lifetime.signal, quit() {} };
   const instance = render(React.createElement(DashboardUi, props), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
   t.after(() => { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); });
   const flush = async () => { await new Promise(resolve => setTimeout(resolve, 40)); await instance.waitUntilRenderFlush(); };
   const key = async input => { output = ""; stdin.write(input); await flush(); };
-  await flush(); await key("\u001b[C"); await key("\u001b[C"); await key("\u001b[C");
-  await key("\r"); await key("\r");
-  return { requests, key, flush, get output() { return output; }, clone() { instance.rerender(React.createElement(DashboardUi, { ...props, snapshot: structuredClone(fixture) })); }, page(entries, cursor) { return { entries: entries.map((text, i) => ({ version: 1, id: text, identity: { attemptId: "stream", harness: "codex" }, kind: "message", stream: "stdout", text })), ...(cursor ? { cursor } : {}), reset: false, errors: [] }; } };
+  await flush();
+  if (navigate) {
+    await key("\u001b[C"); await key("\u001b[C"); await key("\u001b[C");
+    await key("\r"); await key("\r");
+  }
+  return { requests, key, flush, get output() { return output; }, clone(next = fixture) { instance.rerender(React.createElement(DashboardUi, { ...props, snapshot: structuredClone(next) })); }, page(entries, cursor) { return { entries: entries.map((text, i) => ({ version: 1, id: text, identity: { attemptId: "stream", harness: "codex" }, kind: "message", stream: "stdout", text })), ...(cursor ? { cursor } : {}), reset: false, errors: [] }; } };
 }
+
+test("picker keeps its selection across refresh and Any clears only that filter", async t => {
+  const dashboard = { ...snapshot, assignments: [{ id: "a", featureId: "local:a", owner: "Build Team" }] };
+  const ui = await activityUiFixture(t, { dashboard, navigate: false, width: 48 });
+  await ui.key("o"); await ui.key("build");
+  assert.match(ui.output, /Build Team \(1\)/);
+  ui.clone(dashboard); await ui.flush();
+  await ui.key("\r");
+  assert.match(ui.output, /o:Build Team/);
+  await ui.key("o"); await ui.key("\u001b[A"); await ui.key("\r");
+  assert.match(ui.output, /o:all/);
+});
+
+test("Overview rejects an integration form after its attempt is replaced", async t => {
+  const dashboard = structuredClone(snapshot);
+  const feature = dashboard.features[0];
+  feature.execution = { head: "head", path: "/integration", fingerprint: "plan" };
+  feature.nextAction = { integrate: ["integrate", "Alpha", "--tasks", "1.1"] };
+  dashboard.tasks[0].attempts = [{ id: "first", phase: "completed" }];
+  const ui = await activityUiFixture(t, { dashboard, navigate: false });
+  await ui.key("\r"); assert.match(ui.output, /tasks: 1.1/);
+  dashboard.tasks[0].attempts.push({ id: "second", phase: "completed" });
+  ui.clone(dashboard); await ui.flush();
+  await ui.key("\r"); assert.match(ui.output, /Selection changed/);
+});
+
+test("timeline keeps an older attempt selected when fresh evidence arrives", async t => {
+  const dashboard = structuredClone(snapshot);
+  const session = (id, exitedAt) => ({ id, featureId: "local:a", role: "implementation", phase: "failed",
+    attempt: { id, task: "1.1", phase: "failed", terminal: {}, worker: { exitedAt } } });
+  dashboard.sessions = [session("original-attempt", "2026-11-12T08:00:00Z")];
+  const ui = await activityUiFixture(t, { dashboard, navigate: false });
+  await ui.key("c"); await ui.key("\u001b[C"); await ui.key("\u001b[C");
+  await ui.key("/");
+  await ui.key("Alpha");
+  await ui.key("\r");
+  const { actionsFor } = await import("../dist/dashboard-actions.js");
+  await ui.key("a");
+  for (const action of actionsFor(dashboard, "local:a")) {
+    if (action.kind === "timeline") break;
+    await ui.key("\u001b[B");
+  }
+  await ui.key("\r"); assert.match(ui.output, /Timeline.*Alpha/);
+  dashboard.sessions.push(session("new-attempt", "2026-11-14T08:00:00Z"));
+  ui.clone(dashboard); await ui.flush();
+  await ui.key("\r"); assert.match(ui.output, /Worker exit recorded.*original-attempt/);
+  await ui.key("\u001b"); assert.match(ui.output, /▸.*original-attempt/);
+});
+
+test("guided validation leaves a failed check visible and offers it again", async t => {
+  const { featureFixture } = await import("./helpers/feature-fixture.mjs");
+  const { collectDashboard } = await import("../dist/dashboard-reader.js");
+  const fixture = featureFixture(t, { unchecked: true });
+  fixture.control({ notReady: true });
+  const dashboard = collectDashboard({ cwd: fixture.root });
+  const ui = await activityUiFixture(t, { dashboard, navigate: false });
+  await ui.key("\r");
+  const deadline = Date.now() + 8000;
+  while (!/Action failed/.test(ui.output) && Date.now() < deadline) await ui.flush();
+  assert.match(ui.output, /Action failed/);
+  assert.match(ui.output, /Prepare missing artifacts/);
+  ui.clone(collectDashboard({ cwd: fixture.root })); await ui.flush();
+  await ui.key("\u001b"); assert.match(ui.output, /Validate the change/);
+});
 test("empty activity pages preserve newer and older continuation boundaries", async t => {
   const ui = await activityUiFixture(t);
   ui.requests[0].resolve(ui.page(["saved tail"], "tail-boundary")); await ui.flush();

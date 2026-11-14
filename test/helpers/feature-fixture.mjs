@@ -50,7 +50,8 @@ if (args[0] === 'archive') {
 } else if (args[0] === 'validate') {
   if (control.failValidation) process.exit(1);
   console.log(JSON.stringify({ valid: true }));
-} else console.log(JSON.stringify(args[0] === 'status' ? { artifacts: [] } : { state: 'ready' }));
+} else console.log(JSON.stringify(args[0] === 'status' ? { artifacts: [] } :
+  control.notReady ? { state: 'blocked', instruction: 'Prepare missing artifacts' } : { state: 'ready' }));
 `);
   const worker = `
 const fs = require('node:fs'), cp = require('node:child_process');

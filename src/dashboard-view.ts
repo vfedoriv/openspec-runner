@@ -89,8 +89,14 @@ function overviewWork(s: DashboardSnapshot) {
     if (feature.phase === "awaiting-final-approval" && !feature.state?.finalApproval)
       add("final", "Approve final result", 2, feature.id, "managed-final");
     const integrate = feature.nextAction?.integrate;
-    if (integrate?.[0] === "integrate" && integrate[1] === feature.change && integrate[2] === "--tasks" && integrate[3])
-      add(`integrate:${integrate[3]}`, `Integrate tasks ${integrate[3]}`, 3, feature.id, "integrate-run", integrate[3]);
+    if (integrate?.length === 4 && integrate[0] === "integrate" && integrate[1] === feature.change && integrate[2] === "--tasks") {
+      const ids = integrate[3].split(",");
+      const attempts = ids.map(id => s.tasks.find(row => row.featureId === feature.id && row.task.id === id)?.attempts.at(-1));
+      if (new Set(ids).size === ids.length && ids.every(id => /^\d+(?:\.\d+)+$/.test(id)) &&
+          attempts.every(attempt => attempt?.phase === "completed"))
+        add(`integrate:${integrate[3]}:${attempts.map(attempt => attempt!.id).join(",")}`,
+          `Integrate tasks ${integrate[3]}`, 3, feature.id, "integrate-run", integrate[3]);
+    }
     const launch = actionsFor(s, feature.id).find(a => a.id.endsWith(":launch-run") && a.available && a.initialTasks);
     if (launch) add(`launch:${launch.initialTasks}`, `Preview launch for tasks ${launch.initialTasks}`, 5, feature.id, "launch-run", launch.initialTasks);
   }

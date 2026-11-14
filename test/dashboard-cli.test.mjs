@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -9,12 +9,15 @@ test("dashboard emits once json and plain without ui", t => {
   const root = mkdtempSync(join(tmpdir(), "dashboard-cli-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   spawnSync("git", ["init", "-b", "main"], { cwd: root });
+  const entries = readdirSync(root);
   for (const args of [["--once"], [], ["--json"], ["--json", "--change", "missing"]]) {
     const result = spawnSync(process.execPath, [entry, "dashboard", ...args], { cwd: root, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     if (args.includes("--json")) { const s = JSON.parse(result.stdout); assert.equal(s.version, 1); assert.deepEqual(s.features, []); }
     else assert.match(result.stdout, /Features.*0|0 features/i);
   }
+  assert.deepEqual(readdirSync(root), entries);
+  assert.equal(existsSync(join(root, ".git", "openspec-runner")), false);
   for (const args of [["--bogus"], ["--store", "store"], ["--map", "map"], ["extra"]]) {
     const result = spawnSync(process.execPath, [entry, "dashboard", ...args], { cwd: root, encoding: "utf8" });
     assert.equal(result.status, 1); assert.match(result.stderr, /Unknown|together|Unexpected/);

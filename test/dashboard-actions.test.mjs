@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { desktopPathCommand, validateDashboardPath } from "../dist/dashboard-paths.js";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -148,6 +148,12 @@ test("focus preserves the exact historical attempt and never creates or resumes 
   assert.deepEqual(readdirSync(repo.stateDir), ["demo.json"]);
   state.attempts[0].session = "changed"; writeFileSync(path, JSON.stringify(state));
   assert.match((await run()).text, /changed|disappeared/);
+  const pathAction = actionsFor(selected, "local:demo:attempt:old").find(a => a.id.endsWith(":path-open-worktree"));
+  state.attempts[0].path = join(root, "replacement"); writeFileSync(path, JSON.stringify(state));
+  const pathResult = await runnerModule.runDashboardAction({ snapshot: selected, action: pathAction, signal: new AbortController().signal });
+  assert.match(pathResult.text, /Saved path changed/);
+  assert.ok(pathResult.text.includes(root));
+  state.attempts[0].path = root;
   const oldPath = process.env.PATH, oldHerdr = process.env.HERDR_ENV;
   t.after(() => { process.env.PATH = oldPath; if (oldHerdr === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = oldHerdr; });
   mkdirSync(join(root, "bin"));
@@ -278,9 +284,23 @@ test("desktop path helpers keep shell metacharacters literal and reject paths ou
   assert.throws(() => validateDashboardPath(log, root, "worktree"), /wrong file type/);
   assert.throws(() => validateDashboardPath(join(root, "missing.log"), root, "log"), /unavailable/);
   assert.deepEqual(desktopPathCommand(log, "log", false, "win32", {}).args, [log]);
+  assert.equal(desktopPathCommand(log, "log", true, "win32", {}).stdin.toString("utf16le"), log);
   assert.equal(desktopPathCommand(log, "log", true, "linux", { WAYLAND_DISPLAY: "wayland-0" }).stdin.toString(), log);
   assert.equal(desktopPathCommand(log, "log", false, "linux", {}), undefined);
   assert.equal(desktopPathCommand(log, "log", true, "win32", { SSH_CONNECTION: "remote" }), undefined);
+  const real = join(root, "real");
+  const redirected = join(root, "redirected");
+  mkdirSync(real);
+  symlinkSync(real, redirected, process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => validateDashboardPath(redirected, root, "worktree"), /redirected/);
+});
+
+test("clipboard helper transport sends the literal saved path on stdin", async () => {
+  const path = "folder with spaces & punctuation/worker.log";
+  const helper = desktopPathCommand(path, "log", true, "linux", { WAYLAND_DISPLAY: "wayland-0" });
+  const result = await runnerModule.dashboardChild(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"],
+    process.cwd(), new AbortController().signal, false, helper.stdin);
+  assert.equal(result.stdout, path);
 });
 
 test("action menus project known worktree availability without consulting filesystem", () => {
