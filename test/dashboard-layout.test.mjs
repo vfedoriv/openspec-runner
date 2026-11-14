@@ -186,16 +186,18 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
   const { DashboardUi } = await import("../dist/dashboard-ui.js");
   const { actionsFor, projectTarget } = await import("../dist/dashboard-actions.js");
   const enter = "\r", down = "\u001b[B", right = "\u001b[C";
-  for (const columns of [40, 80, 140]) for (const flow of ["setup", "launch-preview", "retry-preview", "edit-models", "managed-plan-settings"]) {
+  for (const columns of [40, 80, 140]) for (const flow of ["setup", "launch-preview", "retry-preview", "edit-models", "managed-plan-settings", "seeded-settings"]) {
     const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
     let output = "";
     const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } });
     stdout.isTTY = true; stdout.columns = columns; stdout.rows = 28;
     const lifetime = new AbortController();
-    const managed = flow === "managed-plan-settings";
+    const seeded = flow === "seeded-settings";
+    const managed = flow === "managed-plan-settings" || seeded;
+    const saved = { harness: "claude", model: "sample-a", effort: "low" };
     const feature = { id: "local:demo", change: "demo", origin: "local", completed: 0, total: 1, taskIds: ["task"], sessionIds: [],
-      ...(managed ? { state: { phase: "awaiting-plan-approval", jobs: [] } } : {}) };
-    const task = { id: "task", featureId: feature.id, task: { id: "1.1", description: "Example" }, ready: true, reasons: [], harness: "codex",
+      ...(managed ? { state: { phase: "awaiting-plan-approval", jobs: [], ...(seeded ? { approval: { implementation: saved, review: saved, repair: saved, maxFixRounds: 2 } } : {}) } } : {}) };
+    const task = { id: "task", featureId: feature.id, task: { id: "1.1", description: "Example" }, ready: true, reasons: [], harness: seeded ? "claude" : "codex",
       attempts: flow === "retry-preview" ? [{ phase: "failed" }] : [] };
     const snapshot = { version: 1, repository: { root: "/repo" }, features: [feature], tasks: [task], sessions: [], assignments: [], attention: [], errors: [], sources: {} };
     const calls = [];
@@ -247,13 +249,28 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
         await key("a");
       }
       const actions = actionsFor(snapshot, target);
-      const suffix = flow === "setup" ? ":init:copilot" : ":" + flow;
+      const suffix = flow === "setup" ? ":init:copilot" : managed ? ":managed-plan-settings" : ":" + flow;
       const index = actions.findIndex(action => action.id.endsWith(suffix));
       assert.ok(index >= 0, flow);
       for (let i = 0; i < index; i++) await key(down);
       await key(enter);
       if (flow === "setup") { await key(down); await key(enter); }
-      else if (managed) {
+      else if (seeded) {
+        assert.match(output, /model: sample-a/);
+        for (let i = 0; i < "sample-a".length; i++) await key("\x7f");
+        output = "";
+        await key("sample-b"); await key(enter);
+        assert.match(output, /implementation effort: +·/);
+        await key("low"); await key(enter);
+        assert.match(output, /Choose a supported ef/);
+        assert.equal(calls.length, 0);
+        for (let i = 0; i < 3; i++) await key("\x7f");
+        await key(enter);
+        for (let i = 0; i < 2; i++) {
+          await key(enter); await key(enter); await key(enter);
+        }
+        await key(enter);
+      } else if (managed) {
         for (let i = 0; i < 3; i++) {
           if (i > 0) await key(enter);
           await pickModelAndEffort();
@@ -269,7 +286,14 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
       assert.equal(calls.length, 1, flow);
       const input = calls[0].input;
       if (flow === "setup") assert.equal(input.modelForSetup, "Model Name (vendor)");
-      else if (managed) {
+      else if (seeded) {
+        assert.equal(input.roleSettings.implementation.model, "sample-b");
+        assert.equal(input.roleSettings.implementation.effort, undefined);
+        assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(input.roleSettings)).implementation, "effort"), false);
+        await key(enter);
+        assert.equal(calls[1].confirmation, "reviewed");
+        assert.deepEqual(calls[1].input, input);
+      } else if (managed) {
         assert.deepEqual(input.roleSettings, {
           implementation: { harness: "codex", model: "sample-b", effort: "high" },
           review: { harness: "codex", model: "sample-b", effort: "high" },
@@ -290,5 +314,100 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
         assert.equal(input.effort, "high", flow);
       }
     } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
+  }
+});
+
+test("bulk assignment review preserves bytes on Escape and saves only reviewed tasks", async t => {
+  const React = await import("react");
+  const { render } = await import("ink");
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { featureFixture } = await import("./helpers/feature-fixture.mjs");
+  const { actionsFor } = await import("../dist/dashboard-actions.js");
+  const { runDashboardAction } = await import("../dist/dashboard-action-runner.js");
+  const { collectDashboard } = await import("../dist/dashboard-reader.js");
+  const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const { selectDashboardRows, defaultDashboardFilters } = await import("../dist/dashboard-view.js");
+  const { root } = featureFixture(t, { unchecked: true });
+  const directory = join(root, "openspec/changes/demo");
+  const path = join(directory, "execution.yaml");
+  writeFileSync(join(directory, "tasks.md"), "- [ ] 1.1 First\n- [ ] 1.2 Second\n- [ ] 1.3 Untouched\n");
+  writeFileSync(path, 'version: 1\ntasks:\n  "1.1": {}\n  "1.2": {}\n  "1.3": {model: keep}\n');
+  const bytes = readFileSync(path);
+  const snapshot = collectDashboard({ cwd: root });
+  const target = snapshot.features[0].id;
+  const row = selectDashboardRows(snapshot, "Features", defaultDashboardFilters).findIndex(entry => entry.targetId === target);
+  const action = actionsFor(snapshot, target).findIndex(entry => entry.id.endsWith(":edit-models"));
+  assert.ok(row >= 0 && action >= 0);
+
+  const stdin = new PassThrough();
+  stdin.isTTY = true;
+  stdin.setRawMode = () => stdin;
+  let output = "";
+  const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } });
+  stdout.isTTY = true;
+  stdout.columns = 40;
+  stdout.rows = 28;
+  const lifetime = new AbortController();
+  const calls = [];
+  let pending;
+  const instance = render(React.createElement(DashboardUi, {
+    snapshot, collector: { refresh() {} }, lifetime: lifetime.signal, quit() {},
+    readCatalog: async (_, harness) => ({ harness, status: "available", entries: [{ selector: "new-model" }] }),
+    runAction(request) {
+      const call = { request };
+      calls.push(call);
+      pending = runDashboardAction(request).then(result => { call.result = result; return result; });
+      return pending;
+    },
+  }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const key = async value => {
+    stdin.write(value);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    await instance.waitUntilRenderFlush();
+  };
+  const down = "\u001b[B", right = "\u001b[C", enter = "\r";
+  async function review() {
+    output = "";
+    pending = undefined;
+    await key("a");
+    for (let i = 0; i < action; i++) await key(down);
+    await key(enter);
+    await key("1.1,1.2"); await key(enter);
+    await key("new-model"); await key(down); await key(enter);
+    await key(enter);
+    assert.ok(pending);
+    const result = await pending;
+    assert.match(result.text, /Task 1\.1[\s\S]*Task 1\.2/);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    await instance.waitUntilRenderFlush();
+    output = output.slice(-3000);
+    assert.match(output, /Task 1\.1[\s\S]*\+ model: new-model[\s\S]*Task 1\.2[\s\S]*\+ model: new-model/);
+    assert.match(output, /Enter confirm · Esc cancel/);
+    assert.deepEqual(readFileSync(path), bytes);
+  }
+  try {
+    await instance.waitUntilRenderFlush();
+    await key(right); await key(right);
+    for (let i = 0; i < row; i++) await key(down);
+    await review();
+    await key("\u001b");
+    assert.equal(calls.length, 1);
+    assert.deepEqual(readFileSync(path), bytes);
+    await review();
+    const reviewed = calls[1];
+    assert.ok(reviewed.result.confirmation);
+    assert.deepEqual(reviewed.request.input.taskIds, ["1.1", "1.2"]);
+    await key(enter);
+    await pending;
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].request.confirmation, reviewed.result.confirmation);
+    assert.deepEqual(calls[2].request.input, reviewed.request.input);
+    const reloaded = collectDashboard({ cwd: root });
+    assert.deepEqual(reloaded.tasks.map(row => [row.task.id, row.assignment.model]), [
+      ["1.1", "new-model"], ["1.2", "new-model"], ["1.3", "keep"],
+    ]);
+  } finally {
+    lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy();
   }
 });

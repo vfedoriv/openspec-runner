@@ -103,3 +103,5 @@ Native Windows follow-up reproduced the full suite with 346 passed and 123 skipp
 ## Release scope
 
 Ship the Models panel and launch picker together. Follow with task assignments and in-dashboard managed approval. After those workflows are in use, the most useful optional additions are filtering tasks by effective model, copying a model and effort pair to selected tasks, and refreshing a single harness catalog. Provider switching, mid-session model edits, cross-harness per-task routing, and cost estimates each need their own execution or evidence contract.
+
+Native Linux follow-up passed the full suite with 451 passed and 23 skipped and the focused suite with 43 passed and two Windows-only skips. It verified the assignment guards, seeded effort switch, bulk Ink confirmation, and Codex planning/worker catalog parity. See the [Linux execution notes](2026-11-14-dashboard-model-testing-gaps.md#linux-execution-notes) for the Claude selector difference and Copilot authentication blocker.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -197,9 +197,11 @@ test("assignment editor rejects YAML aliases and preserves reviewed bytes", asyn
   const preview = editExecutionSettings("demo", patch, undefined, root);
   const aliased = 'version: 1\nshared: &assignment {}\ntasks:\n  "1.1": *assignment\n';
   writeFileSync(path, aliased);
+  const entries = readdirSync(directory).sort();
   for (const token of [undefined, preview.token]) {
     assert.throws(() => editExecutionSettings("demo", patch, token, root), /Resolve YAML aliases/);
     assert.equal(readFileSync(path, "utf8"), aliased);
+    assert.deepEqual(readdirSync(directory).sort(), entries);
   }
 });
 
@@ -209,22 +211,36 @@ test("assignment editor rechecks managed lifecycle guards on confirmation", asyn
   const { root, r, f } = featureFixture(t, { unchecked: true });
   f.start("demo");
   const original = f.read("demo");
-  const path = join(root, "openspec/changes/demo/execution.yaml");
+  const directory = join(root, "openspec/changes/demo");
+  const path = join(directory, "execution.yaml");
   const bytes = readFileSync(path);
+  const entries = readdirSync(directory).sort();
   const patch = { tasks: [{ id: "1.1", model: "new" }] };
   const preview = editExecutionSettings("demo", patch, undefined, root);
+  const { git, featureSettings } = await import("./helpers/feature-fixture.mjs");
+  const head = git(root, "rev-parse", "HEAD");
+  const repair = {
+    id: "repair", role: "repair", phase: "completed", base: head, path: root, branch: "main",
+    fingerprint: preview.token, approvalToken: preview.token, terminal: {}, parallel: false,
+    settings: featureSettings.repair, round: 1, findings: [], session: "repair-session",
+    report: { attempt: "repair", session: "repair-session", head, fingerprint: preview.token,
+      outcome: "completed", commit: head, summary: "Repaired", verification: ["Checked repair"] },
+  };
+  const archive = { before: head, marker: "archive-test", directories: [] };
   for (const [name, state, error] of [
     ["wrong planning checkout", { ...original, planningRoot: join(root, "other") }, /recorded planning checkout/],
     ["completed feature", { ...original, phase: "completed" }, /Finish active work and pending integration/],
-    ["archiving feature", { ...original, phase: "archiving", archive: { head: "a".repeat(40) } }, /Finish active work and pending integration/],
-    ["repair awaiting integration", { ...original, jobs: [{ role: "repair", phase: "completed", report: { outcome: "completed" } }] }, /Finish active work and pending integration/],
-    ["uncertain termination", { ...original, jobs: [{ role: "review", phase: "failed", worker: { terminationUncertain: true } }] }, /Finish active work and pending integration/],
-    ["integration transaction", { ...original, transaction: { attempt: "repair", before: "a".repeat(40), marker: "test", phase: "merging" } }, /Finish active work and pending integration/],
+    ["archiving feature", { ...original, phase: "archiving", archive: { ...archive, phase: "started" } }, /Finish active work and pending integration/],
+    ["archived feature", { ...original, phase: "completed", archive: { ...archive, phase: "committed", commit: head, path: "openspec/changes/archive/demo" } }, /Finish active work and pending integration/],
+    ["repair awaiting integration", { ...original, jobs: [repair] }, /Finish active work and pending integration/],
+    ["uncertain termination", { ...original, jobs: [{ ...repair, role: "review", phase: "failed", settings: featureSettings.review, report: undefined, worker: { token: "review-worker", log: join(root, "review.log"), terminationUncertain: true } }] }, /Finish active work and pending integration/],
+    ["integration transaction", { ...original, transaction: { attempt: "repair", before: head, marker: "test", phase: "merging" } }, /Finish active work and pending integration/],
   ]) {
     saveFeature(r.repo.stateDir, state);
     for (const token of [undefined, preview.token]) {
       assert.throws(() => editExecutionSettings("demo", patch, token, root), error, name);
       assert.deepEqual(readFileSync(path), bytes, name);
+      assert.deepEqual(readdirSync(directory).sort(), entries, name);
     }
   }
 });

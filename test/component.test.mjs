@@ -106,6 +106,27 @@ if (process.argv.includes('--help')) { console.log('--add-dir --model --cd'); pr
   assert.equal(readFileSync(context, "utf8"), "Shared guidance\n");
 });
 
+test("assignment editor rejects a valid imported binding without dashboard Store context", async t => {
+  const { editExecutionSettings } = await import("../dist/execution-settings.js");
+  const f = fixture(t);
+  const directory = join(f.root, "openspec/changes/demo");
+  const path = join(directory, "execution.yaml");
+  const bytes = readFileSync(path);
+  const entries = readdirSync(directory).sort();
+  const patch = { tasks: [{ id: "1.1", model: "new" }] };
+  const reviewed = editExecutionSettings("demo", patch, undefined, f.root);
+  const { component, input } = f.imported();
+  const preview = await component.inspect(input);
+  const binding = await component.import({ ...input, token: preview.token });
+  assert.equal(binding.phase, "ready");
+  assert.ok(f.f.read("demo").delegated);
+  for (const token of [undefined, reviewed.token]) {
+    assert.throws(() => editExecutionSettings("demo", patch, token, f.root), /Obtain revised settings from the coordinator/);
+    assert.deepEqual(readFileSync(path), bytes);
+    assert.deepEqual(readdirSync(directory).sort(), entries);
+  }
+});
+
 test("retirement preserves evidence and lets a different assignment reuse the clone", async t => {
   const f = fixture(t), { component, input } = f.imported(), preview = await component.inspect(input);
   const binding = await component.import({ ...input, token: preview.token });

@@ -214,8 +214,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
     modelField || effortField ? catalogNotice : "",
     effortField && roleValue?.harness === "codex" ? "Explicit effort required" : "",
     effortField && roleValue?.harness === "claude" ? "Blank uses Claude CLI default" : "",
-    effortField && !catalogNotice ? fieldError || (effortEntry?.effortSupport === "unsupported" ? "Effort unavailable"
-      : !effortEntry?.efforts?.length ? "Effort support unknown" : "") : fieldError,
+    effortField && !catalogNotice && !fieldError ? (effortEntry?.effortSupport === "unsupported" ? "Effort unavailable"
+      : !effortEntry?.efforts?.length ? "Effort support unknown" : "") : "",
   ].filter(Boolean).map(hint => ` · ${hint}`).join("");
   useInput((input, key) => {
     if (models) {
@@ -517,7 +517,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
     status: `Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`,
     filters: `/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`,
     lines,
-    footer: [models ? "←→ harness · ↑↓ scroll · type to search · Ctrl+R refresh · Esc back" : picker ? "↑↓ choose · Enter apply · Esc cancel" : timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? [copyNotice, confirmation.settingsJson && "y Copy settings JSON", "Enter confirm · Esc cancel"].filter(Boolean).join(" · ") : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${role ? role + " " : ""}${edit}: ${text}${selectionHint} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · 0 reset · ←→ views"],
+    footer: [models ? "←→ harness · ↑↓ scroll · type to search · Ctrl+R refresh · Esc back" : picker ? "↑↓ choose · Enter apply · Esc cancel" : timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? [copyNotice, confirmation.settingsJson && "y Copy settings JSON", "Enter confirm · Esc cancel"].filter(Boolean).join(" · ") : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${fieldError ? fieldError + " · " : ""}${role ? role + " " : ""}${edit}: ${text}${selectionHint} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · 0 reset · ←→ views"],
   });
   return <Box flexDirection="column" height={height} width={columns}>
     {frame.map((line, index) => <Text key={index} wrap="truncate" color={index === 1 ? "cyan" : error && index === (compact ? 3 : 4) ? "yellow" : index === frame.length - (compact ? 2 : 3) ? "green" : undefined} dimColor={!compact && index === frame.length - 2}>{line}</Text>)}

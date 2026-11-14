@@ -110,7 +110,7 @@ export async function runDashboardAction(options: {
       signal, !!options.confirmation, Buffer.from(JSON.stringify(patch)));
     const result = JSON.parse(output.stdout);
     const { diff, message, ...details } = result;
-    return { text: [message, diff && sanitize(diff), bounded(details)].filter(Boolean).join("\n"), command,
+    return { text: [message, diff && diff.split("\n").map(sanitize).join("\n"), bounded(details)].filter(Boolean).join("\n"), command,
       confirmation: !options.confirmation && result.changes.length ? result.token : undefined };
   }
   if (trusted.kind === "path") {
