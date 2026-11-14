@@ -20,7 +20,7 @@
 - [x] Put unresolved integration and repair conflicts first, then actionable failures, approvals, and eligible integrations. Prefer a single integration item for an exact suggested selection. Show eligible launch suggestions after work that requires a decision. Rank ties by feature name and stable ID.
 - [x] Show passive waits in **In progress**, including accepted reports awaiting exit or stop evidence. Show source failures as inspection items. Deduplicate Attention, recovery, and lifecycle signals for the same operation and target. If evidence establishes several distinct issues, keep each separately reachable.
 - [x] Enter opens evidence for conflicts, failures, and waits. For eligible reviewable operations, Enter opens the existing form or review flow, including its exact-task selection and explicit confirmation. Recheck the current action and never silently substitute a different attempt. When the list is empty, point to project actions.
-- [ ] Link the Overview empty state to the guided first-run flow once Phase 4 lands.
+- [x] Link the Overview empty state to the guided first-run flow once Phase 4 lands.
 - [x] Verify conflict ordering, approval and wait display, and stale action suppression.
 - [ ] Extend tests for mixed snapshots with ready integration, exact target dispatch, deduplication, and selection changes during refresh.
 
@@ -49,10 +49,11 @@
 
 **Files** `src/dashboard-reader.ts`, `src/dashboard-actions.ts`, `src/dashboard-view.ts`, `src/dashboard-ui.tsx`, and dashboard tests.
 
-- [ ] Derive the first actionable step from the collected evidence. Missing runner config leads to project setup. A configured repository with no numbered change leads to instructions for creating an OpenSpec change and numbered `tasks.md`. A valid task list without `execution.yaml` leads to starter preview and creation. A configured change with invalid artifacts leads to the relevant error or explicit validation.
-- [ ] Use the existing project setup and feature actions, with the same harness choices, checks, and confirmations. After success, refresh and advance the guidance from the new evidence. Keep the exact failed step and error available for retry.
-- [ ] Show guidance only when it applies to the actual repository or selected change. Distinguish onboarding from a filter hiding all rows, a failed collection, an explicitly scoped `--change`, and a repository whose work is complete.
-- [ ] Test a fresh repository, missing config, malformed task list, task-only change, completed change, and an OpenSpec validation failure. Verify that setup and starter creation run only after confirmation.
+- [x] Derive the first actionable step from the collected evidence. Missing runner config leads to project setup. A configured repository with no numbered change leads to instructions for creating an OpenSpec change and numbered `tasks.md`. A valid task list without `execution.yaml` leads to starter preview and creation. A configured change with invalid artifacts leads to the relevant error or explicit validation.
+- [x] Use the existing project setup and feature actions, with the same harness choices, checks, and confirmations. After success, refresh and advance the guidance from the new evidence. Keep the exact failed step and error available for retry.
+- [x] Show guidance only when it applies to the actual repository or selected change. Distinguish onboarding from a filter hiding all rows, a failed collection, an explicitly scoped `--change`, and a repository whose work is complete.
+- [x] Test guidance for missing and invalid config, missing or scoped changes, malformed tasks, starter creation, and completed work. Existing dashboard action tests verify confirmation before writes.
+- [ ] Exercise an OpenSpec validation failure through the guided flow.
 
 ## 5. Make filters discoverable and easy to reset
 
@@ -71,4 +72,5 @@ Ship Overview first. Timeline and path actions can follow independently once the
 - [ ] Run the affected dashboard tests and `pnpm test` for phases 4–5. Confirm that `dashboard --once` and `dashboard --json` remain read-only and compatible with existing consumers.
 - [ ] Walk through four disposable scenarios with the keyboard in standard and narrow terminals. Use a fresh repository, a running feature with a retry, a conflicted integration with a reported worker waiting for exit, and completed work hidden by filters.
 - [x] Document Overview, timeline navigation, and path-opening fallbacks in `docs/dashboard-guide.md`.
-- [ ] Document first-run and filter changes when they land.
+- [x] Document first-run guidance.
+- [ ] Document filter changes when they land.

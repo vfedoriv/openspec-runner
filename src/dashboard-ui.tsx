@@ -3,7 +3,7 @@ import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
 import { runDashboardAction } from "./dashboard-action-runner.js";
-import { dashboardViews, selectDashboardRows, preserveSelection, featureTimeline, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
+import { dashboardViews, selectDashboardRows, preserveSelection, featureTimeline, firstRunRows, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 import { dashboardFrame, dashboardLayout, type DashboardLine } from "./dashboard-layout.js";
@@ -24,7 +24,11 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]), activitySearchRef = useRef("");
   const changeFollowing = (value: boolean) => { followingRef.current = value; setFollowing(value); };
   const cursor = useRef<{ older?: string; newer?: string }>({}), loading = useRef(false);
-  const view = dashboardViews[tab], list = snapshot ? selectDashboardRows(snapshot, view, filters) : [];
+  const [validated, setValidated] = useState<ReadonlySet<string>>(() => new Set());
+  const view = dashboardViews[tab];
+  const filtering = !!(filters.search || filters.status || filters.harness || filters.owner);
+  const guidance = snapshot && !failure && view === "Overview" && !filtering ? firstRunRows(snapshot, validated) : [];
+  const list = snapshot ? [...guidance, ...selectDashboardRows(snapshot, view, filters)] : [];
   const chosen = preserveSelection(list, selected), target = list.find(r => r.id === chosen)?.targetId;
   const timelineEvents = timeline && snapshot ? featureTimeline(snapshot, timeline.featureId) : [];
   const timelineIndex = Math.max(0, timelineEvents.findIndex(event => event.id === timeline?.selected));
@@ -34,7 +38,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const error = failure ?? snapshot?.errors.map(e => `${e.stale ? "STALE" : "ERROR"} ${e.source}: ${e.message}`).join("; ") ?? "";
   const layout = dashboardLayout({ columns, rows: height, error, table: !timeline && view === "Features" && pane === "list" && !help && !menu });
   useEffect(() => { setSelected(chosen); }, [chosen]);
-  useEffect(() => { setOffset(0); setOutput(""); setMenu(undefined); actionController.current?.abort(); actionController.current = undefined; setBusy(false); }, [target, tab]);
+  useEffect(() => { setOffset(0); if (pane === "list") setOutput(""); setMenu(undefined); actionController.current?.abort(); actionController.current = undefined; setBusy(false); }, [target, tab]);
   const load = async (direction: "older" | "newer", initial = false) => {
     if (!session?.log || loading.current || lifetime.aborted) return;
     const own = generation.current, controller = new AbortController(); activityController.current = controller; loading.current = true;
@@ -78,6 +82,10 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     try { const result = await runDashboardAction({ snapshot, action, input, signal: controller.signal, confirmation: approved });
       if (!controller.signal.aborted && !lifetime.aborted) {
         setOutput(result.text);
+        if (action.id.endsWith(":validate")) {
+          const feature = snapshot.features.find(feature => action.id === `${feature.id}:validate`);
+          if (feature?.planFingerprint) setValidated(previous => new Set([...previous, `${feature.id}:${feature.planFingerprint}`]));
+        }
         if (result.confirmation) setConfirmation({ action, input, text: result.confirmation });
         if (target && /:(launch|retry)-preview$/.test(action.id)) {
           const next = actionsFor(snapshot, target).find(candidate => candidate.id === action.id.replace(/-preview$/, "-run"));
@@ -217,6 +225,14 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (key.tab) { setPane(p => p === "list" ? "details" : p === "details" && session ? "activity" : "list"); return; }
     if (key.return && pane === "list" && view === "Overview" && snapshot && target) {
       const row = list.find(entry => entry.id === chosen);
+      if (row?.projectSetup) {
+        overviewSelection.current = undefined;
+        setMenu(actionsFor(snapshot, projectTarget).filter(entry => entry.id.startsWith("project:init:")));
+        setActionIndex(0); return;
+      }
+      if (row?.id.startsWith("first-run:") && !row.primary) {
+        setOutput(row.label); setOffset(0); setPane("details"); return;
+      }
       const action = row?.primary && actionsFor(snapshot, target).find(entry => entry.id === row.primary && entry.available);
       if (action) { openAction(action, row.tasks, row.id); return; }
     }

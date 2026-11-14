@@ -68,6 +68,12 @@ session after inspecting the current evidence.
 
 ## Choose a view
 
+**First run** on Overview shows the next setup step. Press Enter to choose a
+harness for project setup, create starter settings for a numbered task list,
+or validate the current plan. Setup and file creation require confirmation.
+A successful validation clears its prompt for that plan during the current
+dashboard session. If a check fails, its output stays available to inspect.
+
 Overview puts **Needs you** items first, including conflicts, failed attempts,
 approvals, and ready integrations. Press Enter to inspect the evidence or open
 the indicated review flow. Writes still require confirmation. Accepted reports

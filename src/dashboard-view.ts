@@ -1,12 +1,12 @@
 import type { ActivityEntry, ActivityPage } from "./activity-types.js";
-import { actionsFor } from "./dashboard-actions.js";
+import { actionsFor, projectTarget } from "./dashboard-actions.js";
 import type { DashboardSnapshot } from "./dashboard-types.js";
 import type { NextAction, RecoveryEntry } from "./runner.js";
 import { renderArgument } from "./platform-command.js";
 export const dashboardViews = ["Overview", "Attention", "Features", "Sessions", "Assignments"] as const;
 export type DashboardView = typeof dashboardViews[number];
 export type DashboardFilters = { search: string; status?: string; harness?: string; owner?: string; includeCompleted: boolean; includeOlderAttempts: boolean; sort: "name" | "attention" };
-export type DashboardRow = { id: string; label: string; targetId: string; primary?: string; tasks?: string };
+export type DashboardRow = { id: string; label: string; targetId: string; primary?: string; tasks?: string; projectSetup?: boolean };
 export const safeText = (value: unknown): string => String(value ?? "unknown").replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 export function recoveryLines(entries: RecoveryEntry[] = []): string[] {
   return entries.flatMap(entry => [
@@ -31,6 +31,31 @@ export function nextActionLines(action: NextAction | undefined): string[] {
   return lines;
 }
 const completed = (s: DashboardSnapshot, id: string) => { const f = s.features.find(f => f.id === id); return !!f && (f.phase === "completed" || !f.phase && f.total > 0 && f.completed === f.total && !s.sessions.some(a => a.featureId === id && ["preparing", "running", "launching", "manual"].includes(a.phase))); };
+export function firstRunRows(s: DashboardSnapshot, validated: ReadonlySet<string> = new Set()): DashboardRow[] {
+  if (!s.setup) return [];
+  const { configuration, scopedChange } = s.setup;
+  const row = (key: string, label: string, targetId = projectTarget, suffix?: string): DashboardRow => ({
+    id: `first-run:${key}`, label: `First run · ${label}`, targetId,
+    ...(suffix ? { primary: actionsFor(s, targetId).find(action => action.available && action.id.endsWith(`:${suffix}`))?.id } : {}),
+  });
+  if (configuration === "missing") return [{ ...row("setup", "Set up the project (choose a harness)"), projectSetup: true }];
+  if (configuration === "invalid") return [row("config", "Check invalid runner configuration", projectTarget, "doctor")];
+  const local = s.features.filter(f => f.origin === "local");
+  const errors = s.errors.filter(error => error.source.startsWith("local:"));
+  const guidance = errors.map(error => row(`error:${error.source}`, `${error.source.slice(6)} · ${error.message}`, error.source));
+  for (const feature of local) {
+    if (s.sources[feature.id]?.stale || errors.some(error => error.source === feature.id)) continue;
+    if (feature.missingExecution) guidance.push(
+      row(`starter:${feature.id}`, `${feature.change} · Create starter settings`, feature.id, "starter-create"));
+    else if (feature.planFingerprint && !feature.execution && !feature.state &&
+      feature.completed < feature.total && !validated.has(`${feature.id}:${feature.planFingerprint}`))
+      guidance.push(row(`validate:${feature.id}:${feature.planFingerprint}`, `${feature.change} · Validate the change`, feature.id, "validate"));
+  }
+  if (guidance.length || local.length || s.errors.length) return guidance;
+  return scopedChange ? [row("scope", `No local change named ${scopedChange}. Check --change or create its OpenSpec task list.`)] :
+    [row("tasks", "Create an OpenSpec change with numbered checkboxes in tasks.md")];
+}
+
 function overviewWork(s: DashboardSnapshot) {
   const rows: Array<DashboardRow & { feature: string; priority: number }> = [];
   for (const feature of s.features) {

@@ -13,6 +13,7 @@ export type FeatureSummary = {
   nextAction?: NextAction;
   recovery?: RecoveryEntry[];
   missingExecution?: boolean;
+  planFingerprint?: string;
   execution?: { head: string; path: string; fingerprint: string; planFingerprint?: string; transaction?: boolean; cleanupPending?: boolean; automaticCleanup?: boolean };
   id: string; change?: string; origin: "local" | "shared"; phase?: FeatureState["phase"];
   completed: number; total: number; state?: FeatureState; taskIds: string[]; sessionIds: string[];
@@ -37,6 +38,7 @@ export type AssignmentSummary = {
 };
 export type DashboardSnapshot = {
   version: 1; collectedAt: string;
+  setup?: { configuration: "missing" | "invalid" | "ready"; scopedChange?: string };
   storeContext?: { store: string; map: string };
   repository: { root: string; common: string; stateDir: string; identity?: string; currentWorktree: string; maxParallel?: number };
   features: FeatureSummary[]; tasks: TaskSummary[]; sessions: SessionSummary[];

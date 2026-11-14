@@ -43,9 +43,10 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
     features: [], tasks: [], sessions: [], assignments: [], attention: [], errors: [], sources: {},
   };
   const configPath = resolve(repo.root, "openspec/runner.yaml");
-  if (existsSync(configPath)) {
+  snapshot.setup = { configuration: existsSync(configPath) ? "ready" : "missing", scopedChange: options.change };
+  if (snapshot.setup.configuration === "ready") {
     try { snapshot.repository.maxParallel = configFrom(parse(readFileSync(configPath, "utf8"))).maxParallel; }
-    catch (error) { snapshot.errors.push({ source: "configuration", message: error instanceof Error ? error.message : String(error), stale: false }); }
+    catch (error) { snapshot.setup.configuration = "invalid"; snapshot.errors.push({ source: "configuration", message: error instanceof Error ? error.message : String(error), stale: false }); }
   }
   const changes = new Set<string>();
   const discover = (directory: string, directories = false) => {
@@ -113,7 +114,7 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
       const recovery = feature ? new Feature(repo.root).recovery(change) : status?.recovery ?? runner.recovery(change);
       recovery.forEach((entry, index) => attention(`recovery:${index}`, entry.evidence, 2,
         sessions.find(row => row.attempt.id === entry.attempt)?.id ?? source));
-      snapshot.features.push({ id: source, recovery, change, origin: "local", ...(missingExecution ? { missingExecution } : {}), phase: feature?.phase, state: feature, ...(state ? { execution: { head: state.head, path: state.integration.path, fingerprint: state.fingerprint, planFingerprint: plan?.fingerprint, transaction: !!state.transaction, cleanupPending: !!state.cleanupBatch, automaticCleanup: plan?.config.cleanup === "automatic" } } : {}), nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
+      snapshot.features.push({ id: source, recovery, change, planFingerprint: plan?.fingerprint, origin: "local", ...(missingExecution ? { missingExecution } : {}), phase: feature?.phase, state: feature, ...(state ? { execution: { head: state.head, path: state.integration.path, fingerprint: state.fingerprint, planFingerprint: plan?.fingerprint, transaction: !!state.transaction, cleanupPending: !!state.cleanupBatch, automaticCleanup: plan?.config.cleanup === "automatic" } } : {}), nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
       snapshot.tasks.push(...summaries); snapshot.sessions.push(...sessions);
       if (binding) {
         const a = binding.assignment;

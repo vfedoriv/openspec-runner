@@ -2,6 +2,28 @@ import test from "node:test";
 import assert from "node:assert/strict";
 const filters = { search: "", includeCompleted: false, includeOlderAttempts: false, sort: "name" };
 const snapshot = { version: 1, collectedAt: "now", repository: { root: "/repo" }, features: [{ id: "local:a", origin: "local", change: "Alpha", completed: 0, total: 1, taskIds: ["t"], sessionIds: [] }, { id: "local:b", origin: "local", change: "Beta", phase: "completed", completed: 1, total: 1, taskIds: [], sessionIds: [] }], tasks: [{ id: "t", featureId: "local:a", harness: "claude", task: { id: "1.1", description: "Build", completed: false }, ready: true, reasons: [], assignment: { dependsOn: [], model: "model" }, attempts: [] }], sessions: [], assignments: [], attention: [{ id: "alert", source: "local:a", targetId: "t", priority: 1, message: "Blocked" }], errors: [], sources: {} };
+test("first-run guidance advances with collected project evidence", async () => {
+  const { firstRunRows } = await import("../dist/dashboard-view.js");
+  const s = { ...structuredClone(snapshot), features: [], tasks: [], setup: { configuration: "missing" } };
+  assert.equal(firstRunRows(s)[0].projectSetup, true);
+  s.setup.configuration = "invalid";
+  assert.equal(firstRunRows(s)[0].primary, "project:doctor");
+  s.setup.configuration = "ready";
+  assert.match(firstRunRows(s)[0].label, /numbered checkboxes/);
+  s.setup.scopedChange = "Alpha";
+  assert.match(firstRunRows(s)[0].label, /No local change named Alpha/);
+  s.errors.push({ source: "local:Alpha", message: "Duplicate task number: 1.1" });
+  assert.match(firstRunRows(s)[0].label, /Duplicate task/);
+  s.errors = [];
+  s.features = [{ ...snapshot.features[0], missingExecution: true }];
+  assert.equal(firstRunRows(s)[0].primary, "local:a:starter-create");
+  s.features[0].missingExecution = false;
+  s.features[0].planFingerprint = "current";
+  assert.equal(firstRunRows(s)[0].primary, "local:a:validate");
+  assert.deepEqual(firstRunRows(s, new Set(["local:a:current"])), []);
+  s.features[0].completed = 1;
+  assert.deepEqual(firstRunRows(s), []);
+});
 test("views default to active work and filter the current view", async () => {
   const { selectDashboardRows } = await import("../dist/dashboard-view.js");
   assert.deepEqual(selectDashboardRows(snapshot, "Overview", filters).map(r => r.id), ["local:a"]);
