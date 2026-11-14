@@ -488,8 +488,10 @@ left and right arrows to switch harnesses, and use the up and down arrows
 to scroll. Press Ctrl+R to refresh and Escape to return.
 Codex lists its visible models and their advertised effort levels. Copilot CLI
 queries its catalog through the optional Copilot SDK. An account that exposes
-only Copilot Fusion can return a single `auto` entry. Claude Code offers example
-aliases. Use a selector from the authenticated Copilot CLI or VS Code model
+only Copilot Fusion can return a single `auto` entry. Compatible Claude Code
+versions report model selectors and advertised effort levels during CLI
+initialization. The dashboard shows example aliases if that query fails.
+Use a selector from the authenticated Copilot CLI or VS Code model
 picker when discovery is unavailable.
 
 In a model or effort field, type a value or use the arrow keys to select a

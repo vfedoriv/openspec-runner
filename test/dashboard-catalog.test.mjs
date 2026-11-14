@@ -104,7 +104,7 @@ test("catalog loader distinguishes missing executables and timeout from availabl
   }
 });
 
-test("missing Codex executable returns an unavailable CLI catalog", async t => {
+for (const harness of ["codex", "claude", "copilot"]) test(`missing ${harness} executable returns an unavailable CLI catalog`, async t => {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const { fileURLToPath } = await import("node:url");
@@ -117,10 +117,10 @@ test("missing Codex executable returns an unavailable CLI catalog", async t => {
   env.PATH = cwd;
   const { stdout } = await promisify(execFile)(process.execPath, [
     fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url)),
-    "models", "--agent", "codex", "--catalog", "--json",
+    "models", "--agent", harness, "--catalog", "--json",
   ], { cwd, env });
   const result = JSON.parse(stdout);
   assert.equal(result.status, "unavailable");
-  assert.match(result.reason, /not found|ENOENT/i);
-  assert.deepEqual(result.entries, []);
+  assert.match(result.reason, /not found|ENOENT|catalog unavailable/i);
+  assert.deepEqual(result.entries.map(row => row.selector), harness === "claude" ? ["haiku", "sonnet", "opus"] : []);
 });

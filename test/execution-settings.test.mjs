@@ -66,6 +66,9 @@ test("bulk starter preview is read-only and publishes v2 assignments exclusively
   editExecutionSettings("demo", patch, preview.token, root);
   const saved = readFileSync(path, "utf8");
   assert.match(saved, /version: 2/);
+  const { collectDashboard } = await import("../dist/dashboard-reader.js");
+  const reopened = collectDashboard({ cwd: root, change: "demo" });
+  assert.deepEqual(reopened.tasks.map(row => [row.assignment.model, row.assignment.effort]), [["a", "high"], ["b", "low"]]);
   assert.match(saved, /effort: low/);
   assert.doesNotMatch(saved, /reasoningEffort/);
   assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /stale/);

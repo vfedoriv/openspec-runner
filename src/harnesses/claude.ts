@@ -203,11 +203,34 @@ export async function claudeCapabilities(cwd = process.cwd()): Promise<HarnessCa
   }
 }
 
-export async function claudeModels(): Promise<ModelDiscovery> {
+export async function claudeModels(options?: { discover?: boolean; cwd?: string }): Promise<ModelDiscovery> {
+  let reason = "Use an alias or selector from Claude Code's model picker";
+  if (options?.discover) {
+    try {
+      const { dashboardChild } = await import("../dashboard-action-runner.js");
+      const request = { type: "control_request", request_id: "catalog", request: { subtype: "initialize" } };
+      const { stdout } = await dashboardChild("claude", [
+        "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+      ], options.cwd ?? process.cwd(), AbortSignal.timeout(15_000), false, Buffer.from(JSON.stringify(request) + "\n"));
+      for (const line of stdout.split("\n").filter(Boolean)) {
+        const message = JSON.parse(line);
+        const response = message.type === "control_response" ? message.response : undefined;
+        if (response?.request_id !== request.request_id || response.subtype !== "success") continue;
+        const entries: unknown = response.response?.models;
+        if (!Array.isArray(entries) || !entries.length) break;
+        const models = entries.flatMap(row => row && typeof row.value === "string" ? [{
+          model: row.value, displayName: row.displayName,
+          supportedReasoningEfforts: row.supportsEffort === false ? [] : row.supportedEffortLevels,
+        }] : []);
+        if (models.length) return { harness: "claude", status: "available", exhaustive: false, models };
+      }
+    } catch { /* Older or unavailable CLIs retain the alias fallback. */ }
+    reason = "Claude catalog unavailable. " + reason;
+  }
   return {
     harness: "claude",
     status: "unavailable",
-    reason: "Claude Code does not expose a stable, non-inference model catalog through the CLI",
+    reason,
     examples: ["haiku", "sonnet", "opus"],
     exhaustive: false,
   };

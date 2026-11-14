@@ -75,8 +75,9 @@
 
 ### 5. Verify richer discovery and document the operator workflow
 
-- [ ] Prototype Claude discovery and complete Copilot verification for missing runtimes, Linux shutdown, and multi-model accounts. Copilot SDK 1.0.34 and CLI 1.0.112 were verified on Windows with an `auto`-only catalog. Evaluate VS Code discovery only if the profile-scoped manual workflow proves too limiting.
-- [ ] Update `docs/dashboard-guide.md` and the CLI reference with the model picker, one-off launch defaults, durable task edits, and managed approval flow. Run `pnpm test`, exercise affected commands with `--json` and `--dry-run`, and run the Ink keyboard flows at narrow and wide terminal sizes. Verify that reopening the dashboard reflects the saved plan and that attempt history distinguishes requested and observed model evidence.
+- [x] Verify live Claude discovery with Claude Code 2.1.312 on Windows. Its control initialization returned five selectors and effort metadata without a user prompt. Missing Claude and Copilot executables were verified with CLI fixtures.
+- [ ] Verify native Linux Copilot shutdown and a live multi-model Copilot account. Copilot SDK 1.0.34 and CLI 1.0.112 returned only `auto` on the available Free account. This WSL distribution has no native Node.js or Copilot runtime. Evaluate VS Code discovery only if the profile-scoped manual workflow proves too limiting.
+- [x] Update `docs/dashboard-guide.md` and the CLI reference with the model picker, one-off launch defaults, durable task edits, and managed approval flow. Run `pnpm test`, exercise affected commands with `--json` and `--dry-run`, and run the Ink keyboard flows at narrow and wide terminal sizes. Verify that reopening the dashboard reflects the saved plan and that attempt history distinguishes requested and observed model evidence.
 
 ## Release scope
 
