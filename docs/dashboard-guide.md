@@ -510,7 +510,11 @@ unintegrated attempts stale. Managed features also require plan reapproval.
 
 Choose **Choose model settings for approval** on a managed feature to enter
 implementation, review, and repair settings in the dashboard. The existing
-approval check shows the resolved settings for each task before confirmation.
+approval check shows the previous and proposed settings for each task, including
+which models come from the implementation default. Enter an explicit effort for
+Codex. Leave Claude effort blank to use its CLI default where the task has no
+effort override. The preview also displays the form JSON for reuse with
+`feature approve --file`.
 
 ## Monitor shared assignments
 

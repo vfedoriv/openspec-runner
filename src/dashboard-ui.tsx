@@ -207,6 +207,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   const selectionHint = [
     matches.length ? `↑↓ ${matches[catalogIndex ?? 0]}` : "",
     modelField || effortField ? catalogNotice : "",
+    effortField && roleValue?.harness === "codex" ? "Explicit effort required" : "",
+    effortField && roleValue?.harness === "claude" ? "Blank uses Claude CLI default" : "",
     effortField && !catalogNotice ? fieldError || (effortEntry?.effortSupport === "unsupported" ? "Effort unavailable"
       : !effortEntry?.efforts?.length ? "Effort support unknown" : "") : fieldError,
   ].filter(Boolean).map(hint => ` · ${hint}`).join("");
@@ -291,6 +293,9 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
       }
       if (key.return) {
         const value = (catalogIndex === undefined ? text : matches[catalogIndex] ?? text).trim();
+        if (effortField && roleValue?.harness === "codex" && !value) {
+          setFieldError("Choose an explicit Codex effort"); return;
+        }
         if (edit === "launchAgent" && value && !harnessIds().includes(value)) {
           setFieldError("Select a registered harness"); return;
         }

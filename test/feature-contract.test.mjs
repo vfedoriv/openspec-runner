@@ -4,6 +4,32 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { blocking, featureActive, featurePath, readFeature, settingsIdentity, validateFeatureReport } from "../dist/feature-state.js";
+import { resolveFeatureApprovalSettings } from "../dist/feature.js";
+
+test("managed role resolution preserves explicit task settings and Claude default effort", () => {
+  const plan = {
+    agent: "codex", config: { agents: {} },
+    tasks: [{ id: "1.1" }, { id: "1.2" }],
+    assignments: {
+      "1.1": { dependsOn: [], parallel: false },
+      "1.2": { model: "pinned", reasoningEffort: "high", dependsOn: [], parallel: false },
+    },
+  };
+  const input = {
+    implementation: { harness: "codex", model: "changed-default", effort: "medium" },
+    review: { harness: "claude", model: "sonnet" },
+    repair: { harness: "codex", model: "repair", effort: "high" },
+  };
+  const resolved = resolveFeatureApprovalSettings({ plan, input });
+  assert.deepEqual(Object.values(resolved.tasks).map(task => [task.model, task.reasoningEffort]), [
+    ["changed-default", "medium"], ["pinned", "high"],
+  ]);
+  assert.equal(resolved.review.effort, undefined);
+  assert.equal(resolved.repair.harness, "codex");
+  assert.throws(() => resolveFeatureApprovalSettings({
+    plan, input: { ...input, implementation: { harness: "codex", model: "changed-default" } },
+  }), /explicit Codex effort/);
+});
 
 const report = () => ({ attempt: "job", session: "session", outcome: "completed", head: "a".repeat(40),
   fingerprint: "fingerprint", summary: "Reviewed", verification: ["Checked acceptance criteria"], findings: [] });

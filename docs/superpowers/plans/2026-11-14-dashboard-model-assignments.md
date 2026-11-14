@@ -69,9 +69,9 @@
 
 ### 4. Compose managed approval settings in the dashboard
 
-- [ ] Add an approval form for implementation defaults, review, repair, and the existing repair-round limit. Seed it from the prior approval when present and provide an explicit choice for missing fields. Display per-task effective settings from `resolveFeatureApprovalSettings`, including how an implementation-default change would affect inherited tasks. Show where an explicit Codex effort must be supplied and how omitted Claude effort resolves in each case.
-- [ ] Extend the existing `feature approve` action to accept `--file -` for the reviewed form payload through bounded CLI stdin. Retain `--file SETTINGS`. Reuse `Feature.planPreview`, its OpenSpec validation, and `Feature.approve`, with the expected runner state and approval token checked on confirmation. Keep approval its own operator action after any required commit and reconciliation. Offer copy or export of the settings JSON when useful for CLI review and reuse.
-- [ ] Test distinct review and repair harnesses, inherited and explicit task settings, an existing repair budget, stale form or plan previews, uncommitted planning artifacts, a same-plan role update, and rejection of local approval for imported assignments.
+- [x] Add an approval form for implementation defaults, review, repair, and the existing repair-round limit. Seed it from the prior approval when present and provide an explicit choice for missing fields. Display per-task effective settings from `resolveFeatureApprovalSettings`, including how an implementation-default change would affect inherited tasks. Show where an explicit Codex effort must be supplied and how omitted Claude effort resolves in each case.
+- [x] Extend the existing `feature approve` action to accept `--file -` for the reviewed form payload through bounded CLI stdin. Retain `--file SETTINGS`. Reuse `Feature.planPreview`, its OpenSpec validation, and `Feature.approve`, with the expected runner state and approval token checked on confirmation. Keep approval its own operator action after any required commit and reconciliation. Offer copy or export of the settings JSON when useful for CLI review and reuse.
+- [x] Test distinct review and repair harnesses, inherited and explicit task settings, an existing repair budget, stale form or plan previews, uncommitted planning artifacts, a same-plan role update, and rejection of local approval for imported assignments.
 
 ### 5. Verify richer discovery and document the operator workflow
 

@@ -38,6 +38,15 @@ test("action runner rejects forged command execution", async () => {
 
 const snapshot = () => ({ version: 1, collectedAt: "now", repository: { root: "/tmp", common: "/tmp", stateDir: "/tmp", currentWorktree: "/tmp" }, features: [{ id: "local:change", change: "change", origin: "local", taskIds: ["local:change:task:1.1"], sessionIds: [], completed: 0, total: 1 }], tasks: [{ id: "local:change:task:1.1", featureId: "local:change", task: { id: "1.1", description: "work", completed: false, line: 0 }, ready: true, reasons: [], attempts: [] }], sessions: [], assignments: [], attention: [], errors: [], sources: {} });
 
+test("managed approval composition is unavailable for an imported assignment", async () => {
+  const s = snapshot();
+  s.features[0].state = { phase: "implementing", jobs: [] };
+  s.assignments.push({ featureId: s.features[0].id, binding: {} });
+  const action = actionsFor(s, s.features[0].id).find(row => row.id.endsWith(":managed-plan-settings"));
+  assert.equal(action.available, false);
+  await assert.rejects(runnerModule.runDashboardAction({ snapshot: s, action, signal: new AbortController().signal }), /delegated assignment/);
+});
+
 test("launch previews require exact tasks and delegate default resolution to the CLI", () => {
   const s = snapshot(), a = actionsFor(s, s.features[0].id).find(a => a.id.endsWith(":launch-preview"));
   assert.throws(() => previewCommand(s, a, {}), /task/i);
@@ -259,10 +268,23 @@ test("dashboard manages approval, review, repair, final approval and archive", a
   assert.equal(fixture.f.read("demo").approval, undefined);
   writeFileSync(file, settings);
   await runnerModule.runDashboardAction({ ...approval, confirmation });
-  const fromForm = request("plan-settings", { roleSettings: { ...featureSettings, maxFixRounds: 3 } });
+  const roleSettings = {
+    ...featureSettings, maxFixRounds: 3,
+    implementation: { harness: "codex", model: "new-default", effort: "medium" },
+    review: { harness: "claude", model: "sonnet" },
+  };
+  const fromForm = request("plan-settings", { roleSettings });
   const formPreview = await runnerModule.runDashboardAction(fromForm);
   assert.match(formPreview.text, /"maxFixRounds": 3/);
+  assert.match(formPreview.text, /Implementation default model/);
+  assert.match(formPreview.text, /Settings JSON for CLI reuse/);
   assert.ok(formPreview.confirmation);
+  const planningPath = join(fixture.root, "openspec/changes/demo/tasks.md");
+  const planningBytes = readFileSync(planningPath);
+  writeFileSync(planningPath, Buffer.concat([planningBytes, Buffer.from("\n# Changed plan\n")]));
+  await assert.rejects(runnerModule.runDashboardAction({ ...fromForm, confirmation: formPreview.confirmation }), /state or settings changed/);
+  await assert.rejects(runnerModule.runDashboardAction(fromForm), /Commit current planning artifact|Planning artifacts must be committed/);
+  writeFileSync(planningPath, planningBytes);
   await assert.rejects(runnerModule.runDashboardAction({
     ...fromForm,
     input: { roleSettings: { ...featureSettings, maxFixRounds: 4 } },
@@ -271,6 +293,9 @@ test("dashboard manages approval, review, repair, final approval and archive", a
   assert.equal(fixture.f.read("demo").approval.maxFixRounds, 2);
   await runnerModule.runDashboardAction({ ...fromForm, confirmation: formPreview.confirmation });
   assert.equal(fixture.f.read("demo").approval.maxFixRounds, 3);
+  assert.equal(fixture.f.read("demo").approval.tasks["1.1"].model, "new-default");
+  assert.equal(fixture.f.read("demo").approval.review.effort, undefined);
+  assert.equal(fixture.f.read("demo").approval.repair.harness, "codex");
   fixture.control({ findings: [blocker] });
   await run("review");
   await fixture.f.worker("demo", fixture.f.read("demo").jobs.at(-1).id);

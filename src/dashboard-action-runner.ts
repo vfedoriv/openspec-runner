@@ -315,6 +315,22 @@ export async function runDashboardAction(options: {
         throw new Error("Current final approval is required; run final checks and approve again");
       details = result;
       token = operation === "approve" ? result.token : undefined;
+      if (settingsInput) {
+        const before = feature?.state?.approval?.tasks;
+        const assigned = new Map(current.tasks.filter(row => row.featureId === feature?.id)
+          .map(row => [row.task.id, row.assignment?.model]));
+        const taskSettings = Object.entries(result.tasks as Record<string, import("./harnesses/types.js").HarnessSettings>)
+          .map(([task, settings]) => ({
+            task,
+            previous: before?.[task] && {
+              model: before[task].model, effort: before[task].effort ?? before[task].reasoningEffort,
+            },
+            model: settings.model,
+            effort: settings.effort ?? settings.reasoningEffort ?? "Harness default",
+            source: assigned.get(task) && assigned.get(task) !== "session" ? "Explicit task model" : "Implementation default model",
+          }));
+        details = { taskSettings, ...result };
+      }
     }
     if (reviewed.identity !== await identity() || reviewed.settings !== settingsDigest())
       throw new Error("Feature state or settings changed during the check; review again");
@@ -323,7 +339,9 @@ export async function runDashboardAction(options: {
       operation === "recover" ? "Records verified termination evidence without dispatching another job." :
       command.includes("--abort") ? "Discards pending merge and conflict edits in the integration worktree." : undefined;
     return {
-      text: [selected.label, root, shellCommand(["openspec-runner", ...command]), effects, bounded(details)].filter(Boolean).join("\n"),
+      text: [selected.label, root, shellCommand(["openspec-runner", ...command]), effects,
+        bounded(details), settingsInput && "Settings JSON for CLI reuse (save as a file and pass --file)",
+        settingsInput && bounded(input?.roleSettings)].filter(Boolean).join("\n"),
       confirmation: JSON.stringify({ reviewed, token }),
     };
   }
