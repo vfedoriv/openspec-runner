@@ -32,7 +32,7 @@ export const projectTarget = "project";
 export function actionsFor(snapshot: DashboardSnapshot, targetId: string): DashboardAction[] {
   if (targetId === projectTarget) return [
     { id: "project:doctor", label: "Check project", kind: "check", available: true, argv: ["doctor"] },
-    { id: "project:models", label: "List project default models", kind: "check", available: true, argv: ["models"] },
+    { id: "project:models", label: "Models", kind: "check", available: true, argv: ["models", "--agent", snapshot.repository.defaultHarness ?? "codex", "--catalog"] },
     ...harnessIds().flatMap(agent => [
       { id: `project:guidance:${agent}`, label: `Planning guidance · ${agent}`, kind: "check" as const, available: true, argv: ["planning-rules", "--agent", agent] },
       { id: `project:init:${agent}`, label: `Set up project · ${agent}`, kind: "change" as const, available: true, argv: ["init", "--agent", agent] },

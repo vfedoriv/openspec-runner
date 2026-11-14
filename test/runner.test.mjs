@@ -88,7 +88,19 @@ function fixture(t, options = {}) {
   );
   executable(
     join(bin, "codex"),
-    `if(process.argv.includes('--version')) console.log('codex-cli 0.153.4'); else {const rl=require('readline').createInterface({input:process.stdin});rl.on('line',l=>{const m=JSON.parse(l);if(m.id) console.log(JSON.stringify({id:m.id,result:m.method==='initialize'?{}:{data:[{id:'model-a',model:'model-a',defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}],nextCursor:null}}));});}`,
+    `if(process.argv.includes('--version')) console.log('codex-cli 0.153.4'); else {
+      const rl=require('readline').createInterface({input:process.stdin});
+      rl.on('line', line => {
+        const m=JSON.parse(line);
+        if (!m.id) return;
+        let result = {};
+        if (m.method === 'model/list') {
+          if (m.params.cursor === 'second') result = {data: m.params.includeHidden ? [{id:'hidden',model:'hidden',hidden:true}] : [{id:'model-b',model:'model-b',displayName:'Model B'}],nextCursor:null};
+          else result = {data:[{id:'model-a',model:'model-a',defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}],nextCursor:'second'};
+        }
+        console.log(JSON.stringify({id:m.id,result}));
+      });
+    }`,
   );
   git(root, "init", "-b", "main");
   git(root, "config", "user.email", "test@example.invalid");
@@ -247,9 +259,17 @@ test("version-tested SQLite metadata reads current calling thread after model sw
   executable(join(f.bin, "codex"), `console.log('codex-cli 9.0.0')`);
   await assert.rejects(sessionSettings("caller", home), /Unsupported/);
 });
-test("model/list reads advertised model defaults through app-server", async (t) => {
-  fixture(t);
+test("model/list paginates and preserves the legacy and normalized CLI projections", async (t) => {
+  const { root } = fixture(t);
   assert.equal((await models())[0].defaultReasoningEffort, "medium");
+  const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+  const catalog = (...args) => JSON.parse(execFileSync(process.execPath, [cli, "models", ...args, "--json"], { cwd: root, encoding: "utf8" }));
+  assert.deepEqual(catalog().map(row => row.model), ["model-a", "hidden"]);
+  assert.deepEqual(catalog("--agent", "codex").models.map(row => row.model), ["model-a", "hidden"]);
+  const normalized = catalog("--agent", "codex", "--catalog");
+  assert.equal(normalized.scope, root);
+  assert.deepEqual(normalized.entries.filter(row => row.source === "discovered").map(row => row.selector), ["model-a", "model-b"]);
+  assert.equal(normalized.entries.find(row => row.selector === "model-b").label, "Model B");
 });
 test("status and dashboard suggest the same batch and wait for exit before suggesting integration", (t) => {
   const { runner: r, root } = fixture(t);

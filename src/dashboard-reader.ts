@@ -45,7 +45,11 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
   const configPath = resolve(repo.root, "openspec/runner.yaml");
   snapshot.setup = { configuration: existsSync(configPath) ? "ready" : "missing", scopedChange: options.change };
   if (snapshot.setup.configuration === "ready") {
-    try { snapshot.repository.maxParallel = configFrom(parse(readFileSync(configPath, "utf8"))).maxParallel; }
+    try {
+      const config = configFrom(parse(readFileSync(configPath, "utf8")));
+      snapshot.repository.maxParallel = config.maxParallel;
+      snapshot.repository.defaultHarness = config.defaultAgent;
+    }
     catch (error) { snapshot.setup.configuration = "invalid"; snapshot.errors.push({ source: "configuration", message: error instanceof Error ? error.message : String(error), stale: false }); }
   }
   const changes = new Set<string>();

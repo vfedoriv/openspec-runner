@@ -129,3 +129,47 @@ test("Ctrl+R refreshes the model picker and displays retained choices on failure
     assert.match(stripVTControlCharacters(output), /auto .*Cached catalog · refresh failed/);
   } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
 });
+
+test("Models panel searches labels and switches harnesses without running a worker", async () => {
+  const React = await import("react");
+  const { render } = await import("ink");
+  const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const { actionsFor, projectTarget } = await import("../dist/dashboard-actions.js");
+  const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+  let output = "";
+  const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } });
+  stdout.isTTY = true; stdout.columns = 120; stdout.rows = 24;
+  const lifetime = new AbortController();
+  const snapshot = { version: 1, repository: { root: "/repo" }, features: [], tasks: [], sessions: [], assignments: [], attention: [], errors: [], sources: {} };
+  const requests = [];
+  const readCatalog = async (_, harness) => {
+    requests.push(harness);
+    return { harness, status: "available", entries: harness === "codex" ? [
+      { selector: "sample-a", label: "Alpha", source: "discovered" },
+      { selector: "sample-b", label: "Beta", source: "discovered", efforts: ["high"], defaultEffort: "high" },
+    ] : [{ selector: "sonnet", source: "example" }] };
+  };
+  const instance = render(React.createElement(DashboardUi, { snapshot, collector: { refresh() {} }, lifetime: lifetime.signal, quit() {}, readCatalog }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const key = async value => {
+    stdin.write(value);
+    await new Promise(resolve => setTimeout(resolve, 35));
+    await instance.waitUntilRenderFlush();
+  };
+  try {
+    await instance.waitUntilRenderFlush();
+    await key("g");
+    const index = actionsFor(snapshot, projectTarget).findIndex(action => action.id === "project:models");
+    for (let i = 0; i < index; i++) await key("\u001b[B");
+    await key("\r");
+    assert.match(output, /sample-a/);
+    output = "";
+    await key("Beta");
+    assert.match(output, /sample-b · Beta · discovered · effort high · default high/);
+    assert.doesNotMatch(output, /sample-a/);
+    output = "";
+    await key("\u001b[C");
+    assert.match(output, /Models · claude/);
+    assert.match(output, /sonnet · example/);
+    assert.deepEqual(requests, ["codex", "claude"]);
+  } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
+});

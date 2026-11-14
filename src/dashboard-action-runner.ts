@@ -426,13 +426,14 @@ export async function runDashboardAction(options: {
       }
     }
     const output = await dashboardChild(process.execPath, [entry, ...command], snapshot.repository.root, signal, trusted.kind === "change");
-    if (trusted.id.startsWith("project:catalog:")) {
+    if (trusted.id === "project:models" || trusted.id.startsWith("project:catalog:")) {
       const catalog = JSON.parse(output.stdout) as Awaited<ReturnType<typeof import("./model-catalog.js").modelCatalog>>;
       const entries = catalog.entries.map(entry => [
         entry.selector,
         entry.label && entry.label !== entry.selector ? entry.label : undefined,
         entry.source === "example" ? "Example selector" : undefined,
         entry.efforts?.length ? `Effort ${entry.efforts.join(", ")}` : undefined,
+        entry.effortSupport === "unsupported" ? "Effort unavailable" : undefined,
         entry.defaultEffort ? `Default ${entry.defaultEffort}` : undefined,
       ].filter(Boolean).join(" · "));
       return { text: [catalog.harness, catalog.reason, ...entries].filter(Boolean).join("\n"), command };

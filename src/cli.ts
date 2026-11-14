@@ -305,12 +305,16 @@ export async function main(args = process.argv.slice(2)) {
     else if (command === "models") {
       let configuredVersion: 1 | 2 | undefined;
       let defaultAgent: string | undefined;
-      if (!v.agent) {
+      let configured: ReturnType<typeof configFrom> | undefined;
+      let catalogCwd = process.cwd();
+      if (!v.agent || v.catalog) {
         try {
           const root = repository(process.cwd()).root;
           const path = resolve(root, "openspec/runner.yaml");
           if (existsSync(path)) {
             const config = configFrom(parse(readFileSync(path, "utf8")));
+            configured = config;
+            catalogCwd = root;
             configuredVersion = config.version;
             defaultAgent = config.defaultAgent;
           }
@@ -319,7 +323,7 @@ export async function main(args = process.argv.slice(2)) {
         }
       }
       const adapter = getHarness(v.agent ?? defaultAgent ?? "codex");
-      if (v.catalog) result = await modelCatalog(adapter.id);
+      if (v.catalog) result = await modelCatalog(adapter.id, catalogCwd, configured?.agents[adapter.id]?.defaultModel);
       else {
         const discovered = await adapter.models();
         result = v.agent || configuredVersion === 2

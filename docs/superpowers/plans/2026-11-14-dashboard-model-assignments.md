@@ -36,6 +36,7 @@
 - [x] Verify stdin-based managed approval end to end, including preview and confirmation.
 - [x] Test fresh cache reuse, forced refresh failure with cached results, and cancellation when switching harnesses in `test/dashboard-catalog.test.mjs`.
 - [x] Test normalized catalog filtering of hidden and malformed rows and preservation of advertised effort choices and defaults.
+- [x] Classify effort availability in discovered catalog rows, deduplicate valid effort selectors, and display when the runner does not support effort.
 - [x] Verify the full Windows suite after fixing the dashboard startup and action ordering regressions. Recorded run passed 324 tests with 123 skipped. Subsequent catalog normalization coverage passed in the focused suite.
 - [x] Verify Ctrl+R and the refresh notice in the Ink keyboard flow. Layout regression tests also pass at 40, 80, and 96 columns.
 - [x] Exercise task assignment preview and confirmation through the executable with `--file -` and `--json`.
@@ -45,10 +46,12 @@
 
 ### 1. Add a typed catalog and read-only Models panel
 
-- [ ] Add `src/model-catalog.ts` and adapter support in `src/harnesses/types.ts`. Normalize entries to a selector, label, source (`discovered`, `configured`, `example`, or `saved`), optional visibility, and effort support (`known choices`, `unsupported`, or `unknown`) with optional advertised default. Include catalog status, fetch time, scope, and an actionable failure reason. Validate provider payloads before rendering and deduplicate by selector within the selected harness. Keep adapters responsible for interpreting provider-specific fields.
-- [ ] Reuse `src/codex.ts` discovery with an explicit working directory. Preserve Codex's CLI text and JSON contracts, including the unqualified v1 array and explicit-agent envelope. Add `models --agent HARNESS --catalog --json` for the normalized format. Keep discovery outside snapshot collection. Scope an in-memory success cache to harness and query context, expose refresh, and identify a previous result as stale if refresh fails. Deduplicate concurrent queries and discard late results after the user switches harnesses.
-- [ ] Add the panel entry in `src/dashboard-actions.ts` and its bounded asynchronous action in `src/dashboard-action-runner.ts`. Reuse the process helpers for timeout, cancellation, and cleanup. Render a compact, scrollable list and details in the Ink UI. Catalog operations must work in a read-only dashboard and send zero inference prompts.
-- [ ] Test paginated results, hidden entries, malformed payloads, missing executables, timeout, cancellation, a failed refresh after success, and a harness switch during a pending request. Verify legacy `models --json` and explicit `models --agent codex --json` shapes with a fake backend.
+- [x] Add `src/model-catalog.ts` and adapter support in `src/harnesses/types.ts`. Normalize entries to a selector, label, source (`discovered`, `configured`, `example`, or `saved`), optional visibility, and effort support (`known choices`, `unsupported`, or `unknown`) with optional advertised default. Include catalog status, fetch time, scope, and an actionable failure reason. Validate provider payloads before rendering and deduplicate by selector within the selected harness. Keep adapters responsible for interpreting provider-specific fields.
+- [x] Reuse `src/codex.ts` discovery with an explicit working directory. Preserve Codex's CLI text and JSON contracts, including the unqualified v1 array and explicit-agent envelope. Add `models --agent HARNESS --catalog --json` for the normalized format. Keep discovery outside snapshot collection. Scope an in-memory success cache to harness and query context, expose refresh, and identify a previous result as stale if refresh fails. Deduplicate concurrent queries and discard late results after the user switches harnesses.
+- [x] Add read-only Models actions and a bounded catalog query. Render a scrollable, searchable model list in Ink with harness switching, effort options, source labels, and refresh. Verify search and harness switching with an Ink keyboard test.
+- [x] Open Models on the configured project harness by default. Include query scope, fetch time, and configured model selectors in the typed catalog.
+- [x] Verify Codex pagination and both legacy CLI projections alongside picker-visible catalog output using a fake app-server.
+- [x] Test paginated results, hidden entries, malformed payloads, missing executables, timeout, cancellation, a failed refresh after success, and a harness switch during a pending request. Verify legacy `models --json` and explicit `models --agent codex --json` shapes with a fake backend.
 
 ### 2. Use the picker for setup and unmanaged launch or retry
 

@@ -58,6 +58,69 @@ test("normalized catalogs omit hidden and malformed entries and preserve model e
   const catalog = await modelCatalog("catalog-fixture");
   assert.equal(catalog.status, "available");
   assert.deepEqual(catalog.entries, [{
-    selector: "visible", label: "Visible model", source: "discovered", efforts: ["high"], defaultEffort: "high",
+    selector: "visible", label: "Visible model", source: "discovered", efforts: ["high"], defaultEffort: "high", effortSupport: "supported",
   }]);
+});
+
+test("concurrent readers share discovery and cancellation releases only the cancelled reader", async () => {
+  const cache = new Map();
+  const first = new AbortController(), second = new AbortController();
+  let calls = 0, finish, sharedSignal;
+  const response = new Promise(resolve => { finish = resolve; });
+  const read = signal => { calls++; sharedSignal = signal; return response; };
+  const displays = [];
+  const a = loadPickerCatalog(cache, "codex", first.signal, read, () => {});
+  const b = loadPickerCatalog(cache, "codex", second.signal, read, result => displays.push(result));
+  await Promise.resolve();
+  first.abort();
+  assert.equal(calls, 1);
+  assert.equal(sharedSignal.aborted, false);
+  finish(codex);
+  await Promise.all([a, b]);
+  assert.equal(displays.at(-1), codex);
+});
+
+test("saved selectors remain visible for their harness", async () => {
+  const { catalogEntries } = await import("../dist/dashboard-catalog.js");
+  const snapshot = { tasks: [
+    { harness: "codex", assignment: { model: "example" } },
+    { harness: "codex", assignment: { model: "retired" } },
+    { harness: "claude", assignment: { model: "sonnet" } },
+  ] };
+  assert.deepEqual(catalogEntries(codex, snapshot, "codex"), [
+    { selector: "example" },
+    { selector: "retired", source: "saved" },
+  ]);
+});
+
+test("catalog loader distinguishes missing executables and timeout from available models", async () => {
+  for (const error of [Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT" }), new Error("Action timed out")]) {
+    const cache = new Map();
+    const displays = [];
+    await loadPickerCatalog(cache, "codex", new AbortController().signal, async () => { throw error; },
+      (...args) => displays.push(args));
+    assert.deepEqual(displays.at(-1), [undefined, "Catalog unavailable · enter a selector"]);
+    assert.equal(cache.size, 0);
+  }
+});
+
+test("missing Codex executable returns an unavailable CLI catalog", async t => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { fileURLToPath } = await import("node:url");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const cwd = mkdtempSync(join(tmpdir(), "missing-catalog-cli-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"));
+  env.PATH = cwd;
+  const { stdout } = await promisify(execFile)(process.execPath, [
+    fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url)),
+    "models", "--agent", "codex", "--catalog", "--json",
+  ], { cwd, env });
+  const result = JSON.parse(stdout);
+  assert.equal(result.status, "unavailable");
+  assert.match(result.reason, /not found|ENOENT/i);
+  assert.deepEqual(result.entries, []);
 });

@@ -480,7 +480,11 @@ their existing coordinator approval and archive requirements.
 
 ## Choose models and effort
 
-Open Project actions with `g` and choose **Browse models** for a harness.
+Open Project actions with `g` and choose **Models** to start with the project
+default harness, or choose **Browse models** for a specific harness.
+In the Models panel, type to search by selector or display name, use the
+left and right arrows to switch harnesses, and use the up and down arrows
+to scroll. Press Ctrl+R to refresh and Escape to return.
 Codex lists its visible models and their advertised effort levels. Copilot CLI
 queries its catalog through the optional Copilot SDK. An account that exposes
 only Copilot Fusion can return a single `auto` entry. Claude Code offers example

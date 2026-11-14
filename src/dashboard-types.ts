@@ -40,7 +40,7 @@ export type DashboardSnapshot = {
   version: 1; collectedAt: string;
   setup?: { configuration: "missing" | "invalid" | "ready"; scopedChange?: string };
   storeContext?: { store: string; map: string };
-  repository: { root: string; common: string; stateDir: string; identity?: string; currentWorktree: string; maxParallel?: number };
+  repository: { root: string; common: string; stateDir: string; identity?: string; currentWorktree: string; maxParallel?: number; defaultHarness?: string };
   features: FeatureSummary[]; tasks: TaskSummary[]; sessions: SessionSummary[];
   assignments: AssignmentSummary[]; attention: AttentionItem[]; errors: SourceError[];
   sources: Record<string, { collectedAt: string; stale: boolean }>;
