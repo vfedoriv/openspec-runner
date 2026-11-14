@@ -34,6 +34,25 @@ test("activity reads use collector IPC and page errors leave snapshots intact", 
     await assert.rejects(collector.readActivity({ log: "/missing", identity: { attemptId: "a", harness: "codex" }, direction: "older" }, abort.signal), /cancel/i);
   } finally { await collector.close(); }
 });
+test("Overview prioritizes recovery and keeps worker waits separate", async () => {
+  const { selectDashboardRows } = await import("../dist/dashboard-view.js");
+  const s = structuredClone(snapshot);
+  const feature = s.features[0];
+  feature.phase = "awaiting-final-approval";
+  feature.state = { approval: {}, jobs: [] };
+  feature.recovery = [
+    { kind: "worker", attempt: "waiting", evidence: "Report accepted. Waiting for exit.", argv: [] },
+    { kind: "integration", task: "1.1", evidence: "Git index contains unresolved conflicts.", argv: [] },
+  ];
+  const filters = { search: "", includeCompleted: true, includeOlderAttempts: false, sort: "name" };
+  const rows = selectDashboardRows(s, "Overview", filters);
+  assert.match(rows[0].label, /Needs you.*Resolve conflict in task 1.1/);
+  assert.ok(rows.find(row => row.primary?.endsWith(":managed-final")));
+  assert.ok(rows.find(row => /In progress.*Waiting for exit/.test(row.label)));
+  s.sources[feature.id] = { stale: true };
+  assert.ok(selectDashboardRows(s, "Overview", filters).every(row => row.targetId !== feature.id || !row.primary));
+});
+
 test("keys navigate details filters help and narrow terminals while collection is unresolved", async () => {
   const { PassThrough, Writable } = await import("node:stream");
   const React = await import("react"); const { render } = await import("ink");
@@ -80,7 +99,7 @@ test("closing collector rejects queued and active activity without waiting for s
 test("managed features stay active after tasks finish until lifecycle completion", async () => {
   const { selectDashboardRows } = await import("../dist/dashboard-view.js");
   const managed = { ...snapshot, features: [{ ...snapshot.features[0], completed: 1, phase: "awaiting-final-approval" }] };
-  assert.equal(selectDashboardRows(managed, "Overview", filters).length, 1);
+  assert.deepEqual(selectDashboardRows(managed, "Overview", filters).map(row => row.targetId), ["local:a", "local:a"]);
 });
 test("session activity ignores a late response after selection changes and exposes raw follow controls", async () => {
   const { PassThrough, Writable } = await import("node:stream");

@@ -94,8 +94,28 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     }
   };
   const beginEdit = (kind: typeof edit, initial = "") => { setEdit(kind); setText(initial); };
+  const overviewSelection = useRef<string | undefined>(undefined);
+  const openAction = (action: DashboardAction, tasks?: string, rowId?: string) => {
+    overviewSelection.current = rowId;
+    if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run)$/.test(action.id)) {
+      setPreview({ action, input: {} });
+      beginEdit("tasks", tasks ?? action.initialTasks);
+    } else if (action.available && action.fields?.length) {
+      setMenu(undefined); setPreview({ action, input: {} }); beginEdit(action.fields[0]);
+    } else if (action.available && action.id.endsWith(":managed-plan")) {
+      setMenu(undefined); setPreview({ action, input: {} }); beginEdit("settingsFile");
+    } else if (action.kind === "change" && action.id.startsWith("project:init:copilot")) {
+      setMenu(undefined); setPreview({ action, input: {} }); beginEdit("modelForSetup");
+    } else void execute(action);
+  };
   useInput((input, key) => {
     if (applying.current) return;
+    if (key.return && overviewSelection.current && (confirmation || edit) &&
+        !list.some(row => row.id === overviewSelection.current && row.primary === (confirmation?.action.id ?? preview?.action.id))) {
+      overviewSelection.current = undefined;
+      setConfirmation(undefined); setEdit(undefined); setPreview(undefined);
+      setPane("details"); setOutput("Selection changed; review the current item again"); return;
+    }
     if (confirmation && (key.return || key.escape)) {
       setConfirmation(undefined);
       if (key.return) void execute(confirmation.action, confirmation.input, confirmation.text);
@@ -162,21 +182,17 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         if (!menuTarget) return;
         const action = actionsFor(snapshot, menuTarget).find(candidate => candidate.id === menu[actionIndex]?.id);
         if (!action) return;
-        if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run)$/.test(action.id)) {
-          setPreview({ action, input: {} });
-          beginEdit("tasks", action.initialTasks);
-        } else if (action.available && action.fields?.length) {
-          setMenu(undefined); setPreview({ action, input: {} }); beginEdit(action.fields[0]);
-        } else if (action.available && action.id.endsWith(":managed-plan")) {
-          setMenu(undefined); setPreview({ action, input: {} }); beginEdit("settingsFile");
-        } else if (action.kind === "change" && action.id.startsWith("project:init:copilot")) {
-          setMenu(undefined); setPreview({ action, input: {} }); beginEdit("modelForSetup");
-        } else void execute(action);
+        openAction(action);
       }
       return;
     }
     if (key.leftArrow || key.rightArrow) { setTab(t => (t + (key.leftArrow ? 4 : 1)) % 5); setPane("list"); return; }
     if (key.tab) { setPane(p => p === "list" ? "details" : p === "details" && session ? "activity" : "list"); return; }
+    if (key.return && pane === "list" && view === "Overview" && snapshot && target) {
+      const row = list.find(entry => entry.id === chosen);
+      const action = row?.primary && actionsFor(snapshot, target).find(entry => entry.id === row.primary && entry.available);
+      if (action) { openAction(action, row.tasks, row.id); return; }
+    }
     if (key.return) { setPane(p => p === "list" ? "details" : session ? "activity" : "details"); return; }
     if (key.upArrow || key.downArrow) {
       const delta = key.upArrow ? -1 : 1;
@@ -204,7 +220,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       const feature = snapshot?.features.find(f => f.id === r.targetId);
       return [marker, feature?.change ?? r.targetId, `${feature?.phase ?? "unmanaged"} · ${feature?.completed}/${feature?.total} ${feature?.origin === "shared" ? "components delivered" : "tasks satisfied"}`];
     });
-    if (!lines.length) lines = [snapshot ? "No matching work" : "Collecting… keyboard remains available"];
+    if (!lines.length) lines = [snapshot ? view === "Overview" ? "No matching work · g project actions" : "No matching work" : "Collecting… keyboard remains available"];
   }
   const localFeatures = snapshot?.features.filter(feature => feature.origin === "local") ?? [];
   const satisfiedTasks = localFeatures.reduce((count, feature) => count + feature.completed, 0);

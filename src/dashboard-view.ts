@@ -1,11 +1,12 @@
 import type { ActivityEntry, ActivityPage } from "./activity-types.js";
+import { actionsFor } from "./dashboard-actions.js";
 import type { DashboardSnapshot } from "./dashboard-types.js";
 import type { NextAction, RecoveryEntry } from "./runner.js";
 import { renderArgument } from "./platform-command.js";
 export const dashboardViews = ["Overview", "Attention", "Features", "Sessions", "Assignments"] as const;
 export type DashboardView = typeof dashboardViews[number];
 export type DashboardFilters = { search: string; status?: string; harness?: string; owner?: string; includeCompleted: boolean; includeOlderAttempts: boolean; sort: "name" | "attention" };
-export type DashboardRow = { id: string; label: string; targetId: string };
+export type DashboardRow = { id: string; label: string; targetId: string; primary?: string; tasks?: string };
 export const safeText = (value: unknown): string => String(value ?? "unknown").replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 export function recoveryLines(entries: RecoveryEntry[] = []): string[] {
   return entries.flatMap(entry => [
@@ -30,8 +31,50 @@ export function nextActionLines(action: NextAction | undefined): string[] {
   return lines;
 }
 const completed = (s: DashboardSnapshot, id: string) => { const f = s.features.find(f => f.id === id); return !!f && (f.phase === "completed" || !f.phase && f.total > 0 && f.completed === f.total && !s.sessions.some(a => a.featureId === id && ["preparing", "running", "launching", "manual"].includes(a.phase))); };
+function overviewWork(s: DashboardSnapshot) {
+  const rows: Array<DashboardRow & { feature: string; priority: number }> = [];
+  for (const feature of s.features) {
+    const name = feature.change ?? feature.id;
+    const stale = s.sources[feature.id]?.stale || s.errors.some(error => error.source === feature.id);
+    const add = (key: string, label: string, priority: number, targetId = feature.id, suffix?: string, tasks?: string) => {
+      const primary = !stale && suffix ? actionsFor(s, targetId).find(a => a.available && a.id === `${targetId}:${suffix}`)?.id : undefined;
+      rows.push({ id: `${feature.id}:overview:${key}`, targetId, feature: feature.id, priority,
+        label: `${priority < 6 ? "Needs you" : "In progress"} · ${name} · ${label}`, primary, tasks });
+    };
+    if (stale) { add("stale", "Inspect source error", 1); continue; }
+    const recovery = feature.recovery ?? [];
+    for (const entry of recovery) {
+      const session = s.sessions.find(row => row.featureId === feature.id && row.attempt.id === entry.attempt);
+      if (entry.kind === "worker")
+        add(`worker:${entry.attempt}`, entry.evidence, 6, session?.id);
+      else add(`${entry.kind}:${entry.attempt ?? entry.task ?? ""}`, entry.kind === "cleanup" ? "Resume cleanup" :
+        /contains unresolved conflicts/.test(entry.evidence) ? `Resolve conflict${entry.task ? ` in task ${entry.task}` : ""}` :
+        "Inspect interrupted integration", 0);
+    }
+    const waiting = new Set(recovery.map(entry => entry.attempt));
+    for (const session of s.sessions.filter(row => row.featureId === feature.id)) {
+      if (waiting.has(session.attempt.id)) continue;
+      const latest = s.sessions.filter(row => row.featureId === feature.id && row.role === session.role && row.taskId === session.taskId).at(-1);
+      if (latest?.id === session.id && ["failed", "blocked", "stale"].includes(session.phase))
+        add(`failed:${session.id}`, `Inspect ${session.phase} ${session.role} attempt ${session.attempt.id}`, 1, session.id);
+    }
+    if (feature.phase === "awaiting-plan-approval") add("plan", "Approve plan", 2, feature.id, "managed-plan");
+    if (feature.phase === "awaiting-final-approval" && !feature.state?.finalApproval)
+      add("final", "Approve final result", 2, feature.id, "managed-final");
+    const integrate = feature.nextAction?.integrate;
+    if (integrate?.[0] === "integrate" && integrate[1] === feature.change && integrate[2] === "--tasks" && integrate[3])
+      add(`integrate:${integrate[3]}`, `Integrate tasks ${integrate[3]}`, 3, feature.id, "integrate-run", integrate[3]);
+    const launch = actionsFor(s, feature.id).find(a => a.id.endsWith(":launch-run") && a.available && a.initialTasks);
+    if (launch) add(`launch:${launch.initialTasks}`, `Preview launch for tasks ${launch.initialTasks}`, 5, feature.id, "launch-run", launch.initialTasks);
+  }
+  for (const error of s.errors) if (!s.features.some(f => f.id === error.source))
+    rows.push({ id: `overview:error:${error.source}`, targetId: error.source, feature: error.source,
+      priority: 1, label: `Needs you · ${error.source} · ${error.message}` });
+  return rows;
+}
 export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, filters: DashboardFilters): DashboardRow[] {
   const rows: Array<DashboardRow & { feature?: string; status?: string; harness?: string; owner?: string; priority?: number }> = [];
+  if (view === "Overview") rows.push(...overviewWork(s));
   if (view === "Overview" || view === "Features") for (const f of s.features) {
     rows.push({ id: f.id, targetId: f.id, feature: f.id, status: f.phase ?? "unmanaged", owner: s.assignments.find(a => a.featureId === f.id)?.owner, label: `${f.change ?? f.id} · ${f.phase ?? "unmanaged"} · ${f.completed}/${f.total} ${f.origin === "shared" ? "components delivered" : "tasks satisfied"}` });
     if (view === "Features") for (const t of s.tasks.filter(t => t.featureId === f.id)) rows.push({ id: t.id, targetId: t.id, feature: f.id, status: t.attempts.at(-1)?.phase ?? (t.task.completed ? "satisfied" : t.ready ? "ready" : "blocked"), harness: t.harness, label: `${t.task.id} ${t.task.description} · ${t.ready ? "ready" : t.reasons.join("; ") || "not ready"}` });
@@ -48,7 +91,7 @@ export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, f
     row.owner ??= s.assignments.find(a => a.featureId === row.feature)?.owner;
     row.harness ??= task?.harness ?? session?.attempt.agent ?? s.tasks.find(t => t.featureId === row.feature)?.harness;
   }
-  return rows.filter(r => (filters.includeCompleted || !completed(s, r.feature ?? "")) && (!filters.search || safeText(r.label).toLowerCase().includes(filters.search.toLowerCase())) && (!filters.status || r.status === filters.status) && (!filters.harness || r.harness === filters.harness) && (!filters.owner || r.owner === filters.owner)).sort((a, b) => filters.sort === "attention" ? (a.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === a.targetId || i.source === a.feature).map(i => i.priority))) - (b.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === b.targetId || i.source === b.feature).map(i => i.priority))) || a.label.localeCompare(b.label) : a.label.localeCompare(b.label)).map(r => ({ id: r.id, targetId: r.targetId, label: safeText(r.label) }));
+  return rows.filter(r => (filters.includeCompleted || !completed(s, r.feature ?? "")) && (!filters.search || safeText(r.label).toLowerCase().includes(filters.search.toLowerCase())) && (!filters.status || r.status === filters.status) && (!filters.harness || r.harness === filters.harness) && (!filters.owner || r.owner === filters.owner)).sort((a, b) => view === "Overview" ? (a.priority ?? 9) - (b.priority ?? 9) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id) : filters.sort === "attention" ? (a.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === a.targetId || i.source === a.feature).map(i => i.priority))) - (b.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === b.targetId || i.source === b.feature).map(i => i.priority))) || a.label.localeCompare(b.label) : a.label.localeCompare(b.label)).map(r => ({ id: r.id, targetId: r.targetId, label: safeText(r.label), ...(r.primary ? { primary: r.primary } : {}), ...(r.tasks ? { tasks: r.tasks } : {}) }));
 }
 export function preserveSelection(rows: Array<{ id: string }>, selected?: string): string | undefined { return rows.some(r => r.id === selected) ? selected : rows[0]?.id; }
 export function mergeActivity(previous: ActivityEntry[], page: ActivityPage, direction: "older" | "newer"): ActivityEntry[] {

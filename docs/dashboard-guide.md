@@ -68,6 +68,11 @@ session after inspecting the current evidence.
 
 ## Choose a view
 
+Overview puts **Needs you** items first, including conflicts, failed attempts,
+approvals, and ready integrations. Press Enter to inspect the evidence or open
+the indicated review flow. Writes still require confirmation. Accepted reports
+that are waiting for worker exit evidence appear under **In progress**.
+
 Use the left and right arrow keys to move between five views.
 
 | View | Use it to |
