@@ -1,11 +1,12 @@
 import { getHarness } from "./harnesses/registry.js";
 
-export async function modelCatalog(harness: string) {
+export async function modelCatalog(harness: string, cwd = process.cwd()) {
   const adapter = getHarness(harness);
   try {
-    const result = await adapter.models({ includeHidden: false });
+    const result = await adapter.models({ includeHidden: false, discover: true, cwd });
     const entries = new Map<string, {
       selector: string;
+      label?: string;
       source: "discovered" | "example";
       efforts?: string[];
       defaultEffort?: string;
@@ -17,7 +18,7 @@ export async function modelCatalog(harness: string) {
       const row = model as Record<string, unknown>;
       const selector = row.model ?? row.id;
       if (typeof selector !== "string" || !selector.trim() || /[\x00-\x1f\x7f]/.test(selector) || row.hidden === true) continue;
-      const efforts = Array.isArray(row.supportedReasoningEfforts)
+      const efforts = harness !== "copilot" && Array.isArray(row.supportedReasoningEfforts)
         ? row.supportedReasoningEfforts.flatMap((value: unknown) => {
           const effort = typeof value === "object" && value !== null
             ? (value as Record<string, unknown>).reasoningEffort : value;
@@ -25,10 +26,11 @@ export async function modelCatalog(harness: string) {
         }) : undefined;
       entries.set(selector, {
         selector, source: "discovered", efforts,
-        defaultEffort: typeof row.defaultReasoningEffort === "string" ? row.defaultReasoningEffort : undefined,
+        label: typeof (row.displayName ?? row.name) === "string" ? String(row.displayName ?? row.name) : undefined,
+        defaultEffort: harness !== "copilot" && typeof row.defaultReasoningEffort === "string" ? row.defaultReasoningEffort : undefined,
       });
     }
-    return { harness, status: result.status, reason: result.reason, entries: [...entries.values()] };
+    return { harness, status: result.status, reason: result.reason, entries: [...entries.values()], fetchedAt: new Date().toISOString() };
   } catch (error) {
     return { harness, status: "unavailable", reason: error instanceof Error ? error.message : String(error), entries: [] };
   }

@@ -1389,7 +1389,8 @@ and passing current final review/consent; archive pending/prepared/archived is i
 | Command | Purpose |
 |---|---|
 | `init [--agent codex\|claude\|all]` | Create `runner.yaml` when absent and install selected project skills |
-| `models [--agent HARNESS] [--json]` | Query the selected harness model capabilities; Claude discovery is explicitly non-exhaustive |
+| `models [--agent HARNESS] [--catalog] [--json]` | Query model capabilities. Use `--catalog` for the normalized dashboard format and live Copilot CLI discovery. |
+| `execution-settings CHANGE --file PATCH --dry-run --json` | Preview task model and effort changes. Apply the reviewed patch with `--confirm TOKEN`. |
 | `doctor [--agent HARNESS] [--json]` | Diagnose project configuration and local execution tools before selecting tasks |
 | `planning-rules --agent HARNESS [--json]` | Show bundled and configured versioned planning guidance with hashes |
 | `feature start <change> [--json]` | Register an opt-in lifecycle before its OpenSpec artifacts are complete |

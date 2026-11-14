@@ -2,13 +2,17 @@ import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
+import { loadPickerCatalog, type CatalogCache } from "./dashboard-catalog.js";
 import { readDashboardCatalog, runDashboardAction } from "./dashboard-action-runner.js";
 import { dashboardViews, dashboardFilterChoices, defaultDashboardFilters, selectDashboardRows, preserveSelection, featureTimeline, firstRunRows, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters, type DashboardFilterKey, type DashboardView } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 import { dashboardFrame, dashboardLayout, type DashboardLine } from "./dashboard-layout.js";
 type Collector = ReturnType<typeof startDashboardCollector>;
-export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { snapshot?: DashboardSnapshot; collector: Collector; failure?: string; quit(): void; lifetime: AbortSignal }) {
+export function DashboardUi({ snapshot, collector, failure, quit, lifetime, readCatalog = readDashboardCatalog }: {
+  snapshot?: DashboardSnapshot; collector: Collector; failure?: string; quit(): void; lifetime: AbortSignal;
+  readCatalog?: typeof readDashboardCatalog;
+}) {
   const { columns, rows: height } = useWindowSize();
   useFocus({ autoFocus: true });
   const [tab, setTab] = useState(0), [pane, setPane] = useState<"list" | "details" | "activity">("list");
@@ -21,7 +25,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const setFilters = (update: (previous: DashboardFilters) => DashboardFilters) =>
     setViewFilters(previous => ({ ...previous, [view]: update(previous[view] ?? defaultDashboardFilters) }));
   const setSelected = (id?: string) => setSelections(previous => ({ ...previous, [view]: id }));
-  const [edit, setEdit] = useState<"search" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase" | "settingsFile" | DashboardField>(), [text, setText] = useState("");
+  const [edit, setEdit] = useState<"search" | "activity" | "tasks" | "model" | "effort" | "modelForSetup" | "launchAgent" | "launchBase" | "settingsFile" | "maxFixRounds" | DashboardField>(), [text, setText] = useState("");
   const [help, setHelp] = useState(false), [offset, setOffset] = useState(0), [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<ActivityEntry[]>([]), [activityError, setActivityError] = useState(""), [activitySearch, setActivitySearch] = useState("");
   const [following, setFollowing] = useState(true), [mode, setMode] = useState<"raw" | "normalized">("normalized"), [activityOffset, setActivityOffset] = useState(0);
@@ -32,8 +36,16 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const [roleIndex, setRoleIndex] = useState<number>();
   const role = roleIndex === undefined ? undefined : roles[roleIndex];
   const roleSettings = preview?.input.roleSettings;
+  const [validated, setValidated] = useState<ReadonlySet<string>>(() => new Set());
+  const filtering = !!(filters.search || filters.status || filters.harness || filters.owner);
+  const guidance = snapshot && !failure && view === "Overview" && !filtering ? firstRunRows(snapshot, validated) : [];
+  const list = snapshot ? [...guidance, ...selectDashboardRows(snapshot, view, filters)] : [];
+  const chosen = preserveSelection(list, selected), target = list.find(r => r.id === chosen)?.targetId;
   const roleValue = role && roleSettings ? roleSettings[role] : undefined;
   const [catalog, setCatalog] = useState<Awaited<ReturnType<typeof readDashboardCatalog>>>();
+  const catalogCache = useRef<CatalogCache>(new Map());
+  const [catalogRefresh, setCatalogRefresh] = useState(0);
+  const [catalogNotice, setCatalogNotice] = useState("");
   const [catalogIndex, setCatalogIndex] = useState<number>();
   const modelField = edit === "model" || edit === "modelForSetup";
   const effortField = edit === "effort";
@@ -41,28 +53,29 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const catalogHarness = edit === "modelForSetup" ? preview?.action.id.split(":").at(-1)
     : roleValue?.harness || preview?.input.launchAgent || taskHarness;
   const catalogRoot = snapshot?.repository.root;
+  const catalogKey = JSON.stringify([catalogRoot, catalogHarness]);
   useEffect(() => {
     setCatalog(undefined);
+    setCatalogNotice("");
     if (!catalogRoot || !catalogHarness || !modelField && !effortField) return;
     const controller = new AbortController();
     const cancel = () => controller.abort();
+    if (lifetime.aborted) return;
     lifetime.addEventListener("abort", cancel, { once: true });
-    void readDashboardCatalog(catalogRoot, catalogHarness, controller.signal)
-      .then(result => { if (!controller.signal.aborted) setCatalog(result); }, () => {});
+    void loadPickerCatalog(catalogCache.current, catalogKey, controller.signal,
+      () => readCatalog(catalogRoot, catalogHarness, controller.signal),
+      (result, notice) => { setCatalog(result); setCatalogNotice(notice); });
     return () => { controller.abort(); lifetime.removeEventListener("abort", cancel); };
-  }, [catalogRoot, catalogHarness, modelField || effortField, lifetime]);
-  const choicesForField = modelField ? catalog?.entries.map(entry => entry.selector)
-    : effortField ? catalog?.entries.find(entry => entry.selector === (roleValue?.model ?? preview?.input.model))?.efforts : undefined;
+  }, [catalogRoot, catalogHarness, catalogKey, catalogRefresh, modelField || effortField, lifetime, readCatalog]);
+  const activeCatalog = catalog?.harness === catalogHarness ? catalog : undefined;
+  const choicesForField = modelField ? activeCatalog?.entries.map(entry => entry.selector)
+    : effortField ? activeCatalog?.entries.find(entry => entry.selector === (roleValue?.model ?? preview?.input.model))?.efforts : undefined;
   const matches = choicesForField?.filter(value => value.toLowerCase().includes(text.toLowerCase())) ?? [];
   const actionController = useRef<AbortController | undefined>(undefined), activityController = useRef<AbortController | undefined>(undefined), generation = useRef(0);
   const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]), activitySearchRef = useRef("");
   const changeFollowing = (value: boolean) => { followingRef.current = value; setFollowing(value); };
   const cursor = useRef<{ older?: string; newer?: string }>({}), loading = useRef(false);
-  const [validated, setValidated] = useState<ReadonlySet<string>>(() => new Set());
-  const filtering = !!(filters.search || filters.status || filters.harness || filters.owner);
-  const guidance = snapshot && !failure && view === "Overview" && !filtering ? firstRunRows(snapshot, validated) : [];
-  const list = snapshot ? [...guidance, ...selectDashboardRows(snapshot, view, filters)] : [];
-  const chosen = preserveSelection(list, selected), target = list.find(r => r.id === chosen)?.targetId;
+
   const timelineEvents = timeline && snapshot ? featureTimeline(snapshot, timeline.featureId) : [];
   const timelineIndex = Math.max(0, timelineEvents.findIndex(event => event.id === timeline?.selected));
   const timelineEvent = timelineEvents[timelineIndex];
@@ -178,7 +191,10 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const selectedChoice = choices.findIndex(choice => choice.value === picker?.choice);
   const matchingChoice = choices.findIndex(choice => choice.label.toLowerCase().includes(picker?.query.toLowerCase() ?? ""));
   const choiceIndex = Math.max(0, selectedChoice < 0 ? matchingChoice : selectedChoice);
-  const selectionHint = matches.length ? ` · ↑↓ ${matches[catalogIndex ?? 0]}` : "";
+  const selectionHint = [
+    matches.length ? `↑↓ ${matches[catalogIndex ?? 0]}` : "",
+    modelField || effortField ? catalogNotice : "",
+  ].filter(Boolean).map(hint => ` · ${hint}`).join("");
   useInput((input, key) => {
     if (picker) {
       if (key.escape) setPicker(undefined);
@@ -229,6 +245,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     if (confirmation && !key.upArrow && !key.downArrow) return;
     if (edit) {
       if (key.escape) { setEdit(undefined); setPreview(undefined); setRoleIndex(undefined); return; }
+      if ((modelField || effortField) && key.ctrl && input === "r") {
+        const cached = catalogCache.current.get(catalogKey);
+        if (cached) cached.fetchedAt = 0;
+        setCatalogIndex(undefined);
+        setCatalogRefresh(value => value + 1);
+        return;
+      }
       if ((key.upArrow || key.downArrow) && matches.length) {
         setCatalogIndex(Math.max(0, Math.min(matches.length - 1, (catalogIndex ?? (key.upArrow ? matches.length : -1)) + (key.upArrow ? -1 : 1))));
         return;
@@ -238,6 +261,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
         if (edit === "activity") { activitySearchRef.current = value; setActivitySearch(value); setActivityOffset(0); }
         else if (edit === "search") setFilters(f => ({ ...f, search: value }));
         else if (preview) {
+          if (edit === "maxFixRounds" && roleSettings) {
+            if (value && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) return;
+            void execute(preview.action, { roleSettings: {
+              ...roleSettings, maxFixRounds: value ? Number(value) : undefined,
+            } });
+            setPreview(undefined); setEdit(undefined); return;
+          }
           if (role && roleSettings && roleValue && roleIndex !== undefined) {
             const next = { ...roleValue };
             if (edit === "launchAgent") {
@@ -257,7 +287,9 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
             if (nextRole) {
               setRoleIndex(roleIndex + 1); beginEdit("launchAgent", roleSettings[nextRole].harness); return;
             }
-            void execute(updated.action, updated.input); setRoleIndex(undefined); setPreview(undefined); setEdit(undefined); return;
+            setRoleIndex(undefined);
+            beginEdit("maxFixRounds", String(roleSettings.maxFixRounds ?? 2));
+            return;
           }
           const updated = { ...preview, input: { ...preview.input, ...(edit === "tasks" ? { taskIds: value.split(",").map(t => t.trim()).filter(Boolean) } : { [edit]: value || undefined }) } };
           setPreview(updated);

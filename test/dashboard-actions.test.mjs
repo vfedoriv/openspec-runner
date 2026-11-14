@@ -251,6 +251,18 @@ test("dashboard manages approval, review, repair, final approval and archive", a
   assert.equal(fixture.f.read("demo").approval, undefined);
   writeFileSync(file, settings);
   await runnerModule.runDashboardAction({ ...approval, confirmation });
+  const fromForm = request("plan-settings", { roleSettings: { ...featureSettings, maxFixRounds: 3 } });
+  const formPreview = await runnerModule.runDashboardAction(fromForm);
+  assert.match(formPreview.text, /"maxFixRounds": 3/);
+  assert.ok(formPreview.confirmation);
+  await assert.rejects(runnerModule.runDashboardAction({
+    ...fromForm,
+    input: { roleSettings: { ...featureSettings, maxFixRounds: 4 } },
+    confirmation: formPreview.confirmation,
+  }), /settings changed/);
+  assert.equal(fixture.f.read("demo").approval.maxFixRounds, 2);
+  await runnerModule.runDashboardAction({ ...fromForm, confirmation: formPreview.confirmation });
+  assert.equal(fixture.f.read("demo").approval.maxFixRounds, 3);
   fixture.control({ findings: [blocker] });
   await run("review");
   await fixture.f.worker("demo", fixture.f.read("demo").jobs.at(-1).id);

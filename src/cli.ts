@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { modelCatalog } from "./model-catalog.js";
 import { editExecutionSettings } from "./execution-settings.js";
-import { mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync, readFileSync, openSync, closeSync, readSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Runner, launchIdentity } from "./runner.js";
@@ -24,7 +24,8 @@ export const help = `openspec-runner — explicit OpenSpec task batches in isola
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
 init-execution <change> [--dry-run] [--json]   Generate starter execution.yaml
-models [--agent ID] [--json]   Query the selected harness model capabilities
+models [--agent ID] [--catalog] [--json]   Query the selected harness model capabilities
+execution-settings <change> --file PATCH [--dry-run | --confirm TOKEN]
 doctor [--agent ID] [--json]   Check project configuration and local execution tools
 planning-rules --agent ID      Show versioned model/effort planning guidance
 feature <action> <change>      Manage an opt-in feature lifecycle
@@ -145,6 +146,23 @@ export function init(
     skills,
   };
 }
+function readSettingsInput(path: string): unknown {
+  const fd = path === "-" ? 0 : openSync(resolve(path), "r");
+  const bytes = Buffer.alloc(1024 * 1024 + 1);
+  let length = 0;
+  try {
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (!count) break;
+      length += count;
+    }
+  } finally {
+    if (path !== "-") closeSync(fd);
+  }
+  if (length === bytes.length) throw new Error("Settings input exceeds 1 MiB");
+  return JSON.parse(bytes.toString("utf8", 0, length));
+}
+
 export async function main(args = process.argv.slice(2)) {
   let jsonOutput = args.includes("--json");
   try {
@@ -231,8 +249,10 @@ export async function main(args = process.argv.slice(2)) {
       throw new Error("Invalid expected launch settings");
     let result: unknown;
     if (v.all && command !== "cleanup") throw new Error("--all requires cleanup");
-    if (v.confirm && !["cleanup", "feature"].includes(command)) throw new Error("--confirm requires cleanup or feature approve");
-    if (v["dry-run"] && !["cleanup", "launch", "retry", "feature"].includes(command)) throw new Error("--dry-run is supported only for cleanup, launch/retry and feature previews");
+    if (v.confirm && !["cleanup", "feature", "execution-settings"].includes(command))
+      throw new Error("--confirm requires cleanup, feature approve, or execution-settings");
+    if (v["dry-run"] && !["cleanup", "launch", "retry", "feature", "execution-settings"].includes(command))
+      throw new Error("--dry-run is supported only for cleanup, launch/retry, feature previews, and execution-settings");
     if ((v.final || v.retry) && command !== "feature") throw new Error("--final and --retry require feature");
     if (v["default-agent"] !== undefined && command !== "init")
       throw new Error("--default-agent is supported only by init");
@@ -257,9 +277,7 @@ export async function main(args = process.argv.slice(2)) {
           if (v.final) result = v["dry-run"] ? feature.finalPreview(name) : feature.approveFinal(name, v.confirm ?? "");
           else {
             if (!v.file) throw new Error("Plan approval requires --file SETTINGS containing implementation, review, and repair settings");
-            const bytes = readFileSync(v.file === "-" ? 0 : resolve(v.file));
-            if (bytes.length > 1024 * 1024) throw new Error("Settings input exceeds 1 MiB");
-            const input = JSON.parse(bytes.toString("utf8")) as FeatureSettings;
+            const input = readSettingsInput(v.file) as FeatureSettings;
             result = v["dry-run"] ? feature.planPreview(name, input) : feature.approve(name, input, v.confirm ?? "");
           }
           break;
@@ -313,9 +331,7 @@ export async function main(args = process.argv.slice(2)) {
     } else if (command === "execution-settings") {
       if (!change || p.length !== 2 || !v.file || !!v["dry-run"] === !!v.confirm)
         throw new Error("Use execution-settings <change> --file PATCH with --dry-run or --confirm TOKEN");
-      const bytes = readFileSync(v.file === "-" ? 0 : resolve(v.file));
-      if (bytes.length > 1024 * 1024) throw new Error("Settings input exceeds 1 MiB");
-      result = editExecutionSettings(change, JSON.parse(bytes.toString("utf8")), v.confirm);
+      result = editExecutionSettings(change, readSettingsInput(v.file), v.confirm);
     } else if (command === "planning-rules") {
       if (!v.agent || v.agent === "all") throw new Error("planning-rules requires --agent HARNESS");
       let root = process.cwd();

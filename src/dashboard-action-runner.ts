@@ -430,6 +430,7 @@ export async function runDashboardAction(options: {
       const catalog = JSON.parse(output.stdout) as Awaited<ReturnType<typeof import("./model-catalog.js").modelCatalog>>;
       const entries = catalog.entries.map(entry => [
         entry.selector,
+        entry.label && entry.label !== entry.selector ? entry.label : undefined,
         entry.source === "example" ? "Example selector" : undefined,
         entry.efforts?.length ? `Effort ${entry.efforts.join(", ")}` : undefined,
         entry.defaultEffort ? `Default ${entry.defaultEffort}` : undefined,

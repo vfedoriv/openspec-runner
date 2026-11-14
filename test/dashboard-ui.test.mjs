@@ -426,3 +426,25 @@ for (const [name, completed, total, expected] of [["shared-only", 0, 0, "0/0"], 
     } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
   });
 }
+
+test("session details distinguish requested and observed model", async () => {
+  const { detailLines } = await import("../dist/dashboard-view.js");
+  const session = { id: "session:model", featureId: "local:a", attempt: {
+    id: "attempt:model", settings: { model: "auto", requestedModel: "auto", observedModel: "observed-model" },
+  } };
+  const lines = detailLines({ ...snapshot, sessions: [session] }, session.id);
+  assert.ok(lines.includes("Requested model: auto"));
+  assert.ok(lines.includes("Observed model: observed-model"));
+});
+
+test("task details distinguish configured and approved model settings", async () => {
+  const { detailLines } = await import("../dist/dashboard-view.js");
+  const task = { id: "task:model", featureId: "local:a", task: { id: "1.1" }, assignment: { model: "new-model" } };
+  const features = snapshot.features.map(feature => feature.id === task.featureId ? {
+    ...feature, state: { approval: { tasks: { "1.1": { model: "approved-model", effort: "high" } } } },
+  } : feature);
+  const lines = detailLines({ ...snapshot, features, tasks: [task] }, task.id);
+  assert.ok(lines.includes("Configured model: new-model"));
+  assert.ok(lines.includes("Configured effort: Inherit"));
+  assert.ok(lines.includes("Approved model: approved-model · effort high"));
+});

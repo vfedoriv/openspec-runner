@@ -1,6 +1,6 @@
 # Dashboard Model Assignments Implementation Plan
 
-**Status** — Proposal for review.
+**Status** — Core dashboard workflows implemented. Checkboxes indicate completed verification for the stated scope.
 
 **Goal** — Let operators browse models by harness, choose compatible reasoning effort, and review and save model assignments where they manage local OpenSpec work.
 
@@ -20,10 +20,28 @@
 | --- | --- | --- |
 | Codex | Use the installed `app-server` and paginated `model/list`. Show picker-visible entries by default and use the per-model effort values. Preserve the existing CLI projection, which currently includes hidden entries. | Verify which provider and configuration the probe sees in the planning checkout and how that compares with managed workers. [App Server model catalog](https://learn.chatgpt.com/docs/app-server#list-models-modellist) |
 | Claude Code | Show the existing aliases as examples, configured selectors, and manual entry. When the CLI advertises effort, show its accepted values as CLI-wide unless per-model support is known. Preserve omitted effort where the existing resolver permits it. | Test `Query.supportedModels()` from the official Agent SDK with the installed Claude executable and matching configuration, without submitting a prompt. Verify cleanup and which aliases and effort levels the execution CLI accepts. [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/typescript) |
-| Copilot CLI | Show configured selectors and manual entry. Point users to `/model` in the authenticated CLI. The runner adapter currently rejects effort. | Test SDK `listModels()` using the resolved CLI binary, matching credentials and policy, with no worker session or model request. Evaluate effort independently by checking that worker startup can pass and honor it. [Copilot SDK compatibility](https://docs.github.com/en/copilot/how-tos/copilot-sdk/troubleshooting/compatibility) · [CLI programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference) |
+| Copilot CLI | The dashboard queries SDK `listModels()` through the installed CLI and falls back to manual entry. The Windows probe returned `auto` on Copilot Free. | Verify Linux and a catalog with multiple selectable models. Evaluate effort independently by checking that worker startup can pass and honor it. [Copilot SDK compatibility](https://docs.github.com/en/copilot/how-tos/copilot-sdk/troubleshooting/compatibility) · [CLI programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference) |
 | VS Code Copilot | Show configured selectors and manual entry. Point users to the editor's model picker and the custom-agent selector for their profile. The runner adapter currently rejects effort. | Consider an opt-in editor bridge only after testing profile and host identity, consent behavior, and the mapping from enumerated models to selectors accepted by the generated `.agent.md`. [VS Code Language Model API](https://code.visualstudio.com/api/extension-guides/ai/language-model) · [Custom agent file reference](https://code.visualstudio.com/docs/agents/reference/custom-agent-file-reference) |
 
 ## Implementation sequence
+
+### Implemented and verified
+
+- [x] Add a CLI-backed preview and confirmation for local task edits. Verify dry-run byte preservation, stale-token rejection, v1 effort spelling, and inheritance reset.
+- [x] Add optional Copilot CLI discovery and verify the runner returns the `auto` entry via the installed Windows CLI without an inference request.
+
+### Implemented with verification pending
+
+- [ ] Verify the catalog browser and keyboard choices across setup, launch, retry, task edit, and managed approval.
+- [x] Verify stdin-based managed approval end to end, including preview and confirmation.
+- [x] Test fresh cache reuse, forced refresh failure with cached results, and cancellation when switching harnesses in `test/dashboard-catalog.test.mjs`.
+- [x] Test normalized catalog filtering of hidden and malformed rows and preservation of advertised effort choices and defaults.
+- [x] Verify the full Windows suite after fixing the dashboard startup and action ordering regressions. Recorded run passed 324 tests with 123 skipped. Subsequent catalog normalization coverage passed in the focused suite.
+- [x] Verify Ctrl+R and the refresh notice in the Ink keyboard flow. Layout regression tests also pass at 40, 80, and 96 columns.
+- [x] Exercise task assignment preview and confirmation through the executable with `--file -` and `--json`.
+- [x] Reject unknown, duplicate, and satisfied task IDs and reject confirmation after the planning HEAD changes.
+- [x] Run the normalized Codex catalog against the installed Windows CLI. Verified eight visible selectors with advertised effort choices and defaults.
+- [x] Show configured and approved task settings in task details and distinguish requested and observed models in session details. Verify both sets of labels in dashboard view tests.
 
 ### 1. Add a typed catalog and read-only Models panel
 
@@ -54,7 +72,7 @@
 
 ### 5. Verify richer discovery and document the operator workflow
 
-- [ ] Prototype Claude and Copilot CLI discovery independently. For each, verify a missing or unsupported runtime, an authenticated catalog, selector and effort compatibility, zero model requests, and clean shutdown on Windows and Linux. Keep optional integrations independent of dashboard startup and normal worker execution. Record observed runtime versions and distinguish authenticated results from fixtures. Evaluate VS Code discovery only if the profile-scoped manual workflow proves too limiting.
+- [ ] Prototype Claude discovery and complete Copilot verification for missing runtimes, Linux shutdown, and multi-model accounts. Copilot SDK 1.0.34 and CLI 1.0.112 were verified on Windows with an `auto`-only catalog. Evaluate VS Code discovery only if the profile-scoped manual workflow proves too limiting.
 - [ ] Update `docs/dashboard-guide.md` and the CLI reference with the model picker, one-off launch defaults, durable task edits, and managed approval flow. Run `pnpm test`, exercise affected commands with `--json` and `--dry-run`, and run the Ink keyboard flows at narrow and wide terminal sizes. Verify that reopening the dashboard reflects the saved plan and that attempt history distinguishes requested and observed model evidence.
 
 ## Release scope

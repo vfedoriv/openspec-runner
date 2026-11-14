@@ -61,18 +61,21 @@ export function editExecutionSettings(change: string, input: unknown, confirm?: 
     const assignments = assignmentsFrom(document.toJS(), plan.tasks);
     const adapter = getHarness(plan.agent);
     const config = plan.config.agents[plan.agent];
+    const configuredModel = config?.defaultModel ?? plan.config.defaultModel;
     const inherited = feature?.approval?.implementation ??
-      (config?.defaultModel && config.defaultModel !== "session" ? { model: config.defaultModel } : undefined);
+      (configuredModel && configuredModel !== "session" ? { model: configuredModel } : undefined);
     const changes = [...seen].filter(task => JSON.stringify(assignments[task]) !== JSON.stringify(plan.assignments[task])).map(task => {
       const after = assignments[task];
-      const effective = inherited || after.model && after.model !== "session"
+      const canResolve = inherited || after.model && after.model !== "session";
+      const effective = canResolve || plan.agent.startsWith("copilot")
         ? adapter.resolveSettings(after, inherited, config) : undefined;
       return { task, before: plan.assignments[task], after, effective };
     });
     const next = original.includes("\r\n") ? document.toString().replace(/\n/g, "\r\n") : document.toString();
     const token = createHash("sha256").update(JSON.stringify([runner.actionIdentity(change), path, original, next, changes])).digest("hex");
     if (confirm !== undefined) {
-      if (token !== confirm || readFileSync(path, "utf8") !== original) throw new Error("Assignment preview is stale; review it again");
+      if (token !== confirm || !unredirectedPath(path) || readFileSync(path, "utf8") !== original)
+        throw new Error("Assignment preview is stale; review it again");
       if (changes.length) replaceBytes(path, Buffer.from(next));
     }
     const nextSteps = changes.length ? [

@@ -90,3 +90,42 @@ test("a short terminal keeps the selected row and active search prompt visible",
     await key("/"); assert.match(output, /search:/, "text entry must retain its prompt");
   } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
 });
+
+test("Ctrl+R refreshes the model picker and displays retained choices on failure", async () => {
+  const React = await import("react");
+  const { render } = await import("ink");
+  const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const { actionsFor, projectTarget } = await import("../dist/dashboard-actions.js");
+  const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+  let output = "";
+  const stdout = new Writable({ write(chunk, encoding, done) { output += chunk.toString(); done(); } });
+  stdout.isTTY = true; stdout.columns = 140; stdout.rows = 24;
+  const lifetime = new AbortController();
+  const snapshot = { version: 1, repository: { root: "/repo" }, features: [], tasks: [], sessions: [], assignments: [], attention: [], errors: [], sources: {} };
+  const collector = { refresh() {}, close: async () => {} };
+  let requests = 0;
+  const readCatalog = async (_, harness) => {
+    assert.equal(harness, "copilot");
+    if (++requests > 1) throw new Error("offline");
+    return { harness, status: "available", entries: [{ selector: "auto", source: "discovered" }] };
+  };
+  const instance = render(React.createElement(DashboardUi, { snapshot, collector, lifetime: lifetime.signal, quit() {}, readCatalog }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
+  const key = async value => {
+    stdin.write(value);
+    await new Promise(resolve => setTimeout(resolve, 35));
+    await instance.waitUntilRenderFlush();
+  };
+  try {
+    await instance.waitUntilRenderFlush();
+    await key("g");
+    const index = actionsFor(snapshot, projectTarget).findIndex(action => action.id === "project:init:copilot");
+    for (let i = 0; i < index; i++) await key("\u001b[B");
+    await key("\r");
+    assert.equal(requests, 1);
+    assert.match(stripVTControlCharacters(output), /modelForSetup: .*auto/);
+    output = "";
+    await key("\u0012");
+    assert.equal(requests, 2);
+    assert.match(stripVTControlCharacters(output), /auto .*Cached catalog · refresh failed/);
+  } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
+});

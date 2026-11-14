@@ -481,12 +481,16 @@ their existing coordinator approval and archive requirements.
 ## Choose models and effort
 
 Open Project actions with `g` and choose **Browse models** for a harness.
-Codex lists its visible models and their advertised effort levels. Claude Code
-offers example aliases. For either Copilot surface, use a selector from its
-authenticated model picker if the dashboard has no catalog.
+Codex lists its visible models and their advertised effort levels. Copilot CLI
+queries its catalog through the optional Copilot SDK. An account that exposes
+only Copilot Fusion can return a single `auto` entry. Claude Code offers example
+aliases. Use a selector from the authenticated Copilot CLI or VS Code model
+picker when discovery is unavailable.
 
 In a model or effort field, type a value or use the arrow keys to select a
-catalog match. In unmanaged launch and retry forms, choose the harness first
+catalog match. Press Ctrl+R to refresh the choices. Recent results are reused
+within this dashboard session, and a failed refresh labels retained results
+as cached. In unmanaged launch and retry forms, choose the harness first
 or leave it blank to use the plan's harness. Preview the effective settings
 for each task before launching.
 

@@ -34,10 +34,13 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     { id: "project:doctor", label: "Check project", kind: "check", available: true, argv: ["doctor"] },
     { id: "project:models", label: "List project default models", kind: "check", available: true, argv: ["models"] },
     ...harnessIds().flatMap(agent => [
-      { id: `project:catalog:${agent}`, label: `Browse models · ${agent}`, kind: "check" as const, available: true, argv: ["models", "--agent", agent, "--catalog"] },
       { id: `project:guidance:${agent}`, label: `Planning guidance · ${agent}`, kind: "check" as const, available: true, argv: ["planning-rules", "--agent", agent] },
       { id: `project:init:${agent}`, label: `Set up project · ${agent}`, kind: "change" as const, available: true, argv: ["init", "--agent", agent] },
     ]),
+    ...harnessIds().map(agent => ({
+      id: `project:catalog:${agent}`, label: `Browse models · ${agent}`, kind: "check" as const,
+      available: true, argv: ["models", "--agent", agent, "--catalog"],
+    })),
   ];
   const assignment = snapshot.assignments.find(row => row.id === targetId);
   const task = snapshot.tasks.find(t => t.id === targetId), session = snapshot.sessions.find(s => s.id === targetId);
@@ -127,11 +130,6 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     return actions;
   }
   const change = feature.change;
-  if (!feature.missingExecution && !feature.state?.delegated) {
-    add("edit-models", task ? "Edit model and effort" : "Assign models to tasks", "change", staleExecution,
-      ["execution-settings", change, "--file", "-"]);
-    actions.at(-1)!.initialTasks = task?.task.id;
-  }
   pathActions("integration", "integration worktree");
   if (task) {
     pathActions("worktree", "latest task worktree");
@@ -229,6 +227,11 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   }
   if (!task) add("validate", "Validate change (runs OpenSpec)", "check",
     snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined, ["validate", change]);
+  if (!feature.missingExecution && !feature.state?.delegated) {
+    add("edit-models", task ? "Edit model and effort" : "Assign models to tasks", "change", staleExecution,
+      ["execution-settings", change, "--file", "-"]);
+    actions.at(-1)!.initialTasks = task?.task.id;
+  }
   return actions;
 }
 

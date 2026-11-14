@@ -78,13 +78,13 @@ export function codexArgs(
       : []),
   ];
 }
-export async function models({ includeHidden = true } = {}): Promise<unknown[]> {
+export async function models({ includeHidden = true, discover = false, cwd = process.cwd() } = {}): Promise<unknown[]> {
   const { resolveCommand } = await import("./platform-command.js");
   const { observeProcess, stopOwnedProcess } = await import("./platform-process.js");
   return new Promise((resolvePromise, reject) => {
-    const command = resolveCommand({ executable: "codex", args: ["app-server", "--stdio"], cwd: process.cwd() });
+    const command = resolveCommand({ executable: "codex", args: ["app-server", "--stdio"], cwd });
     const child = spawn(command.executable, command.args, {
-      env: command.env, windowsHide: true,
+      cwd, env: command.env, windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const lines = createInterface({ input: child.stdout });
@@ -151,6 +151,7 @@ export async function models({ includeHidden = true } = {}): Promise<unknown[]> 
               id: x.id,
               supportedReasoningEfforts: x.supportedReasoningEfforts,
               defaultReasoningEffort: x.defaultReasoningEffort,
+              ...(discover ? { displayName: x.displayName, hidden: x.hidden } : {}),
             })),
           );
           if (m.result.nextCursor) {

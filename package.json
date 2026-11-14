@@ -35,5 +35,8 @@
     "@types/node": "^22.0.0",
     "@types/react": "19.3.0",
     "typescript": "^5.9.3"
+  },
+  "optionalDependencies": {
+    "@github/copilot-sdk": "1.0.34"
   }
 }
