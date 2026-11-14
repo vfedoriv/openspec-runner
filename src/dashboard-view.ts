@@ -94,6 +94,41 @@ export function selectDashboardRows(s: DashboardSnapshot, view: DashboardView, f
   return rows.filter(r => (filters.includeCompleted || !completed(s, r.feature ?? "")) && (!filters.search || safeText(r.label).toLowerCase().includes(filters.search.toLowerCase())) && (!filters.status || r.status === filters.status) && (!filters.harness || r.harness === filters.harness) && (!filters.owner || r.owner === filters.owner)).sort((a, b) => view === "Overview" ? (a.priority ?? 9) - (b.priority ?? 9) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id) : filters.sort === "attention" ? (a.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === a.targetId || i.source === a.feature).map(i => i.priority))) - (b.priority ?? Math.min(99, ...s.attention.filter(i => i.targetId === b.targetId || i.source === b.feature).map(i => i.priority))) || a.label.localeCompare(b.label) : a.label.localeCompare(b.label)).map(r => ({ id: r.id, targetId: r.targetId, label: safeText(r.label), ...(r.primary ? { primary: r.primary } : {}), ...(r.tasks ? { tasks: r.tasks } : {}) }));
 }
 export function preserveSelection(rows: Array<{ id: string }>, selected?: string): string | undefined { return rows.some(r => r.id === selected) ? selected : rows[0]?.id; }
+export type TimelineEvent = { id: string; title: string; at?: string; targetId: string; evidence?: unknown };
+
+export function featureTimeline(snapshot: DashboardSnapshot, featureId: string): TimelineEvent[] {
+  const feature = snapshot.features.find(row => row.id === featureId && row.origin === "local");
+  if (!feature) return [];
+  const events: TimelineEvent[] = [];
+  const add = (id: string, title: string, targetId: string, evidence: unknown, at?: string) =>
+    events.push({ id, title, targetId, evidence, ...(at && Number.isFinite(Date.parse(at)) ? { at } : {}) });
+  for (const session of snapshot.sessions.filter(row => row.featureId === featureId)) {
+    const { attempt, id, role } = session;
+    const subject = "task" in attempt ? `Task ${attempt.task}` : role === "review" ? "Review" : "Repair";
+    const label = `${subject} · ${attempt.id}`;
+    add(`${id}:attempt`, `${subject} attempt recorded · ${attempt.id}`, id, undefined);
+    if (attempt.report) add(`${id}:report`, `Report accepted (${attempt.report.outcome}) · ${label}`, id, attempt.report);
+    if (attempt.worker?.exitedAt)
+      add(`${id}:exit`, `Worker exit recorded · ${label}`, id, attempt.worker, attempt.worker.exitedAt);
+    if (attempt.worker?.completion?.source === "agent-stop" || attempt.terminalEvidence?.type === "agent-stop")
+      add(`${id}:stop`, `Agent stop recorded · ${label}`, id, attempt.terminalEvidence ?? attempt.worker?.completion, attempt.worker?.completion?.source === "agent-stop" ? attempt.worker.completion.at : undefined);
+    if (attempt.phase === "integrated")
+      add(`${id}:integrated`, `Result integrated · ${label}`, id, { report: attempt.report, integration: feature.execution });
+  }
+  const approvalKey = (approval: { token: string; at: string }) => `${approval.token}:${approval.at}`;
+  const approvals = new Map((feature.state?.approvalHistory ?? []).map(approval => [approvalKey(approval), approval]));
+  if (feature.state?.approval) approvals.set(approvalKey(feature.state.approval), feature.state.approval);
+  for (const [key, approval] of approvals)
+    add(`approval:${key}`, "Plan approved", featureId, approval, approval.at);
+  const final = feature.state?.finalApproval;
+  if (final) add(`final:${final.token}`, "Final result approved", featureId, final, final.at);
+  const archive = feature.state?.archive;
+  if (archive) add(`archive:${archive.marker}`, feature.state?.completedAt ? "Feature archived" : `Archive · ${archive.phase}`,
+    featureId, archive, feature.state?.completedAt);
+  return events.sort((a, b) => a.at && b.at ? Date.parse(b.at) - Date.parse(a.at) || a.id.localeCompare(b.id) :
+    a.at ? -1 : b.at ? 1 : 0);
+}
+
 export function mergeActivity(previous: ActivityEntry[], page: ActivityPage, direction: "older" | "newer"): ActivityEntry[] {
   if (!page.reset && !page.entries.length) return previous;
   if (direction === "older" || page.reset) return page.entries.slice(-1000);

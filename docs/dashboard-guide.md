@@ -351,6 +351,12 @@ The same entries are available in the CLI's status JSON.
 
 ## Inspect actions and previews
 
+On a local feature row, choose **View timeline** from the action menu. Use the
+arrow keys to browse milestones and Enter to open the selected evidence.
+Escape returns to the timeline and then to the original view. Use `r` to
+refresh while keeping the selected milestone. The timeline includes older
+attempts and labels events whose times were never recorded as **Undated**.
+
 Press `g` for project actions, including when the dashboard has no rows. You
 can check the project, list models for the default harness, read harness
 planning guidance, or set up the project for a selected harness. Setup shows

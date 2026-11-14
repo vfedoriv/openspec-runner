@@ -34,6 +34,26 @@ test("activity reads use collector IPC and page errors leave snapshots intact", 
     await assert.rejects(collector.readActivity({ log: "/missing", identity: { attemptId: "a", harness: "codex" }, direction: "older" }, abort.signal), /cancel/i);
   } finally { await collector.close(); }
 });
+test("timeline links historical attempts and separates accepted reports from integration", async () => {
+  const { featureTimeline } = await import("../dist/dashboard-view.js");
+  const s = structuredClone(snapshot);
+  const at = "2026-11-14T08:00:00.000Z";
+  const approval = { token: "approved", at };
+  s.features[0].state = { approval, approvalHistory: [approval], jobs: [] };
+  s.sessions = [
+    { id: "old", featureId: "local:a", role: "implementation", attempt: { id: "old", task: "1.1", phase: "failed", report: { outcome: "failed" } } },
+    { id: "new", featureId: "local:a", role: "implementation", attempt: { id: "new", task: "1.1", phase: "completed", report: { outcome: "completed" }, worker: { exitedAt: at } } },
+    { id: "repair", featureId: "local:a", role: "repair", attempt: { id: "repair", phase: "integrated", report: { outcome: "completed" } } },
+  ];
+  const events = featureTimeline(s, "local:a");
+  assert.deepEqual(events.slice(0, 2).map(event => event.id), [`approval:approved:${at}`, "new:exit"]);
+  assert.equal(events.find(event => event.id === "old:report").targetId, "old");
+  assert.equal(events.find(event => event.id === "new:report").at, undefined);
+  assert.ok(!events.some(event => event.id === "new:integrated"));
+  assert.ok(events.some(event => event.id === "repair:integrated"));
+  assert.deepEqual(featureTimeline(structuredClone(s), "local:a"), events);
+});
+
 test("Overview prioritizes recovery and keeps worker waits separate", async () => {
   const { selectDashboardRows } = await import("../dist/dashboard-view.js");
   const s = structuredClone(snapshot);

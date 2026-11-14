@@ -3,7 +3,7 @@ import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
 import { runDashboardAction } from "./dashboard-action-runner.js";
-import { dashboardViews, selectDashboardRows, preserveSelection, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
+import { dashboardViews, selectDashboardRows, preserveSelection, featureTimeline, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 import { dashboardFrame, dashboardLayout, type DashboardLine } from "./dashboard-layout.js";
@@ -18,6 +18,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const [entries, setEntries] = useState<ActivityEntry[]>([]), [activityError, setActivityError] = useState(""), [activitySearch, setActivitySearch] = useState("");
   const [following, setFollowing] = useState(true), [mode, setMode] = useState<"raw" | "normalized">("normalized"), [activityOffset, setActivityOffset] = useState(0);
   const [menu, setMenu] = useState<DashboardAction[]>(), [actionIndex, setActionIndex] = useState(0), [output, setOutput] = useState(""), [busy, setBusy] = useState(false);
+  const [timeline, setTimeline] = useState<{ featureId: string; selected?: string; details?: boolean }>();
   const [preview, setPreview] = useState<{ action: DashboardAction; input: PreviewInput }>();
   const actionController = useRef<AbortController | undefined>(undefined), activityController = useRef<AbortController | undefined>(undefined), generation = useRef(0);
   const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]), activitySearchRef = useRef("");
@@ -25,10 +26,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const cursor = useRef<{ older?: string; newer?: string }>({}), loading = useRef(false);
   const view = dashboardViews[tab], list = snapshot ? selectDashboardRows(snapshot, view, filters) : [];
   const chosen = preserveSelection(list, selected), target = list.find(r => r.id === chosen)?.targetId;
+  const timelineEvents = timeline && snapshot ? featureTimeline(snapshot, timeline.featureId) : [];
+  const timelineIndex = Math.max(0, timelineEvents.findIndex(event => event.id === timeline?.selected));
+  const timelineEvent = timelineEvents[timelineIndex];
   const session = snapshot?.sessions.find(s => s.id === target);
   const visibleEntries = filterActivity(entries, activitySearch);
   const error = failure ?? snapshot?.errors.map(e => `${e.stale ? "STALE" : "ERROR"} ${e.source}: ${e.message}`).join("; ") ?? "";
-  const layout = dashboardLayout({ columns, rows: height, error, table: view === "Features" && pane === "list" && !help && !menu });
+  const layout = dashboardLayout({ columns, rows: height, error, table: !timeline && view === "Features" && pane === "list" && !help && !menu });
   useEffect(() => { setSelected(chosen); }, [chosen]);
   useEffect(() => { setOffset(0); setOutput(""); setMenu(undefined); actionController.current?.abort(); actionController.current = undefined; setBusy(false); }, [target, tab]);
   const load = async (direction: "older" | "newer", initial = false) => {
@@ -97,6 +101,11 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const overviewSelection = useRef<string | undefined>(undefined);
   const openAction = (action: DashboardAction, tasks?: string, rowId?: string) => {
     overviewSelection.current = rowId;
+    if (action.kind === "timeline" && target && snapshot) {
+      setMenu(undefined);
+      setTimeline({ featureId: target, selected: featureTimeline(snapshot, target)[0]?.id });
+      return;
+    }
     if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run)$/.test(action.id)) {
       setPreview({ action, input: {} });
       beginEdit("tasks", tasks ?? action.initialTasks);
@@ -110,6 +119,24 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   };
   useInput((input, key) => {
     if (applying.current) return;
+    if (timeline) {
+      if (input === "q" || key.ctrl && input === "c") { quit(); return; }
+      if (input === "r") collector.refresh();
+      if (key.escape) {
+        if (timeline.details) setTimeline({ ...timeline, details: false });
+        else setTimeline(undefined);
+      }
+      if (key.return && timelineEvent && !timeline.details) {
+        setOffset(0);
+        setTimeline({ ...timeline, selected: timelineEvent.id, details: true });
+      }
+      if (key.upArrow || key.downArrow) {
+        const delta = key.upArrow ? -1 : 1;
+        if (timeline.details) setOffset(value => Math.max(0, value + delta));
+        else setTimeline({ ...timeline, selected: timelineEvents[Math.max(0, Math.min(timelineEvents.length - 1, timelineIndex + delta))]?.id });
+      }
+      return;
+    }
     if (key.return && overviewSelection.current && (confirmation || edit) &&
         !list.some(row => row.id === overviewSelection.current && row.primary === (confirmation?.action.id ?? preview?.action.id))) {
       overviewSelection.current = undefined;
@@ -203,7 +230,24 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   });
   const { capacity, compact } = layout;
   let lines: DashboardLine[];
-  if (help) lines = ["←/→ views · ↑/↓ selection/scroll · Tab pane", "Enter details · Esc back/cancel · / search", "s status · h harness · o owner (empty clears)", "c completed · v older attempts · z sort", "a row actions · g project actions", "w raw · p pause · f resume · b older page", "x expand activity · r refresh · q exit", "Activity outcomes do not establish completion"];
+  if (timeline && snapshot) {
+    const feature = snapshot.features.find(row => row.id === timeline.featureId);
+    const source = snapshot.sources[timeline.featureId];
+    const heading = `Timeline · ${feature?.change ?? timeline.featureId}${source?.stale ? ` · STALE · observed ${source.collectedAt}` : ""}`;
+    const room = Math.max(1, capacity - 1);
+    if (timeline.details) {
+      const evidence = timelineEvents.find(event => event.id === timeline.selected);
+      const details = evidence ? [evidence.title, evidence.at ?? "Time not recorded",
+        ...(evidence.evidence ? JSON.stringify(evidence.evidence, null, 2).split("\n") : []),
+        ...detailLines(snapshot, evidence.targetId)] : ["Selected milestone is no longer available"];
+      lines = [heading, ...details.slice(Math.min(offset, Math.max(0, details.length - room)), Math.min(offset, Math.max(0, details.length - room)) + room)];
+    } else {
+      const start = Math.max(0, timelineIndex - room + 1);
+      lines = [heading, ...timelineEvents.slice(start, start + room).map((event, index) =>
+        `${index + start === timelineIndex ? "▸" : " "} ${event.at ?? "Undated"} · ${event.title}`)];
+      if (!timelineEvents.length) lines.push("No recorded milestones");
+    }
+  } else if (help) lines = ["←/→ views · ↑/↓ selection/scroll · Tab pane", "Enter details · Esc back/cancel · / search", "s status · h harness · o owner (empty clears)", "c completed · v older attempts · z sort", "a row actions · g project actions", "w raw · p pause · f resume · b older page", "x expand activity · r refresh · q exit", "Activity outcomes do not establish completion"];
   else if (menu) lines = menu.slice(Math.max(0, actionIndex - capacity + 1), actionIndex + capacity).map(a => `${a.id === menu[actionIndex]?.id ? "▸" : " "} ${a.label}${a.available ? "" : ` — unavailable: ${a.reason}`}`);
   else if (pane === "activity") {
     lines = activityViewport(visibleEntries, expanded, activityOffset, capacity);
@@ -232,7 +276,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     status: `Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`,
     filters: `/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`,
     lines,
-    footer: [confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · ←→ views"],
+    footer: [timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · ←→ views"],
   });
   return <Box flexDirection="column" height={height} width={columns}>
     {frame.map((line, index) => <Text key={index} wrap="truncate" color={index === 1 ? "cyan" : error && index === (compact ? 3 : 4) ? "yellow" : index === frame.length - (compact ? 2 : 3) ? "green" : undefined} dimColor={!compact && index === frame.length - 2}>{line}</Text>)}

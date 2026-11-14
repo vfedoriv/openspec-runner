@@ -5,7 +5,7 @@ import { harnessIds, hasHarness } from "./harnesses/registry.js";
 import { loadPlan } from "./plan.js";
 
 export type DashboardAction = {
-  id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview" | "check" | "change";
+  id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview" | "check" | "change" | "timeline";
   available: boolean; reason?: string; argv?: string[]; sessionId?: string;
   initialTasks?: string; fields?: DashboardField[];
 };
@@ -119,9 +119,9 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     if (feature.missingExecution) {
       add("starter-preview", "Preview starter settings", "check", stale, ["init-execution", change, "--dry-run"]);
       add("starter-create", "Create execution.yaml", "change", stale, ["init-execution", change]);
+      add("timeline", "View timeline", "timeline");
       return actions;
     }
-
   }
   const last = task?.attempts.at(-1), retry = !!last && ["failed", "blocked", "stale"].includes(last.phase);
   const suggested = feature.id === targetId && !snapshot.sources[feature.id]?.stale ? feature.nextAction?.launch : undefined;
@@ -177,6 +177,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
         delegated ?? (state.phase === "completed" ? "Feature is already archived" : !state.archive && !state.finalApproval ? "Approve the final result first" : undefined));
     }
   }
+  if (!task) add("timeline", "View timeline", "timeline");
   const launch = actions.find(action => action.id.endsWith(":launch-preview"))!;
   add("launch-run", "Launch tasks after preview", "change", staleExecution ?? launch.reason);
   actions.at(-1)!.initialTasks = launch.initialTasks;
