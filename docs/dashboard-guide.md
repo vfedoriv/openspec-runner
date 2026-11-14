@@ -478,6 +478,29 @@ and approval reruns them. After final approval, choose **Archive** separately.
 If archival was interrupted, use **Resume archive**. Delegated changes retain
 their existing coordinator approval and archive requirements.
 
+## Choose models and effort
+
+Open Project actions with `g` and choose **Browse models** for a harness.
+Codex lists its visible models and their advertised effort levels. Claude Code
+offers example aliases. For either Copilot surface, use a selector from its
+authenticated model picker if the dashboard has no catalog.
+
+In a model or effort field, type a value or use the arrow keys to select a
+catalog match. In unmanaged launch and retry forms, choose the harness first
+or leave it blank to use the plan's harness. Preview the effective settings
+for each task before launching.
+
+From a task, choose **Edit model and effort**. From a feature, choose **Assign
+models to tasks** and enter the exact task IDs. Leave a field blank to keep
+its value, or type `:inherit` to remove the override. Review the proposed
+changes before confirming. Commit the updated `execution.yaml`. If execution
+already exists, reconcile the committed plan. Reconciliation marks all
+unintegrated attempts stale. Managed features also require plan reapproval.
+
+Choose **Choose model settings for approval** on a managed feature to enter
+implementation, review, and repair settings in the dashboard. The existing
+approval check shows the resolved settings for each task before confirmation.
+
 ## Monitor shared assignments
 
 With a Store and map selected, use shared feature actions to inspect Store

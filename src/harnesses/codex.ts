@@ -103,11 +103,11 @@ export const codexHarness: HarnessAdapter = {
       };
     }
   },
-  async models(): Promise<ModelDiscovery> {
+  async models(options): Promise<ModelDiscovery> {
     return {
       harness: "codex",
       status: "available",
-      models: await codexModels(),
+      models: await codexModels(options),
       exhaustive: true,
     };
   },

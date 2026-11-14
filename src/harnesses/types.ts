@@ -108,7 +108,7 @@ export interface HarnessAdapter {
     config?: AgentConfig,
   ): HarnessSettings;
   capabilities(cwd?: string, settings?: HarnessSettings): Promise<HarnessCapabilities>;
-  models(): Promise<ModelDiscovery>;
+  models(options?: { includeHidden?: boolean }): Promise<ModelDiscovery>;
   initialInvocation(
     settings: HarnessSettings,
     cwd: string,

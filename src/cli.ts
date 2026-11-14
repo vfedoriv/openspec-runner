@@ -1,4 +1,6 @@
 import { parseArgs } from "node:util";
+import { modelCatalog } from "./model-catalog.js";
+import { editExecutionSettings } from "./execution-settings.js";
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -193,6 +195,7 @@ export async function main(args = process.argv.slice(2)) {
         "dry-run": { type: "boolean" },
         "default-model": { type: "string" },
         "default-effort": { type: "string" },
+        catalog: { type: "boolean" },
         agent: { type: "string" },
         "default-agent": { type: "string" },
         base: { type: "string" },
@@ -254,7 +257,9 @@ export async function main(args = process.argv.slice(2)) {
           if (v.final) result = v["dry-run"] ? feature.finalPreview(name) : feature.approveFinal(name, v.confirm ?? "");
           else {
             if (!v.file) throw new Error("Plan approval requires --file SETTINGS containing implementation, review, and repair settings");
-            const input = json<FeatureSettings>(v.file);
+            const bytes = readFileSync(v.file === "-" ? 0 : resolve(v.file));
+            if (bytes.length > 1024 * 1024) throw new Error("Settings input exceeds 1 MiB");
+            const input = JSON.parse(bytes.toString("utf8")) as FeatureSettings;
             result = v["dry-run"] ? feature.planPreview(name, input) : feature.approve(name, input, v.confirm ?? "");
           }
           break;
@@ -296,12 +301,21 @@ export async function main(args = process.argv.slice(2)) {
         }
       }
       const adapter = getHarness(v.agent ?? defaultAgent ?? "codex");
-      const discovered = await adapter.models();
-      result = v.agent || configuredVersion === 2
+      if (v.catalog) result = await modelCatalog(adapter.id);
+      else {
+        const discovered = await adapter.models();
+        result = v.agent || configuredVersion === 2
         ? discovered
         : adapter.id === "codex"
           ? discovered.models
           : discovered;
+      }
+    } else if (command === "execution-settings") {
+      if (!change || p.length !== 2 || !v.file || !!v["dry-run"] === !!v.confirm)
+        throw new Error("Use execution-settings <change> --file PATCH with --dry-run or --confirm TOKEN");
+      const bytes = readFileSync(v.file === "-" ? 0 : resolve(v.file));
+      if (bytes.length > 1024 * 1024) throw new Error("Settings input exceeds 1 MiB");
+      result = editExecutionSettings(change, JSON.parse(bytes.toString("utf8")), v.confirm);
     } else if (command === "planning-rules") {
       if (!v.agent || v.agent === "all") throw new Error("planning-rules requires --agent HARNESS");
       let root = process.cwd();

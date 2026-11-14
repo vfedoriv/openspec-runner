@@ -13,6 +13,12 @@ import { desktopPathCommand, savedDashboardPath, validateDashboardPath, type Das
 const sanitize = (text: string) => text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 const bounded = (value: unknown) => sanitize(JSON.stringify(value, null, 2).slice(0, 1024 * 1024));
 
+export async function readDashboardCatalog(root: string, harness: string, signal: AbortSignal) {
+  const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+  const output = await dashboardChild(process.execPath, [entry, "models", "--agent", harness, "--catalog", "--json"], root, signal);
+  return JSON.parse(output.stdout) as Awaited<ReturnType<typeof import("./model-catalog.js").modelCatalog>>;
+}
+
 /** Async child boundary: no shell, independent streams, bounded bytes and complete cleanup. */
 export function dashboardChild(command: string, argv: string[], cwd: string, signal: AbortSignal, mutation = false, stdin?: Buffer): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -84,6 +90,18 @@ export async function runDashboardAction(options: {
   const trusted = actionsFor(snapshot, target.id).find(a => a.id === action.id)!;
   if (trusted.kind !== action.kind) throw new Error("Action kind differs from allowlist");
   const suffix = trusted.id.slice(target.id.length + 1);
+  if (suffix === "edit-models") {
+    if (!trusted.available || !trusted.argv) throw new Error(trusted.reason ?? "Assignment editing is unavailable");
+    const ids = input?.taskIds ?? [];
+    const field = (value?: string) => value === ":inherit" ? null : value;
+    const patch = { tasks: ids.map(id => ({ id, model: field(input?.model), effort: field(input?.effort) })) };
+    const command = [...trusted.argv, "--json", ...(options.confirmation ? ["--confirm", options.confirmation] : ["--dry-run"])];
+    const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+    const output = await dashboardChild(process.execPath, [entry, ...command], snapshot.repository.root,
+      signal, !!options.confirmation, Buffer.from(JSON.stringify(patch)));
+    const result = JSON.parse(output.stdout);
+    return { text: bounded(result), command, confirmation: !options.confirmation && result.changes.length ? result.token : undefined };
+  }
   if (trusted.kind === "path") {
     const [, operation, type] = suffix.split("-");
     const kind = type as DashboardPathKind;
@@ -247,9 +265,14 @@ export async function runDashboardAction(options: {
     };
     const settingsFile = suffix === "managed-plan" && input?.settingsFile
       ? resolve(root, input.settingsFile) : undefined;
+    const settingsInput = suffix === "managed-plan-settings" && input?.roleSettings
+      ? Buffer.from(JSON.stringify(input.roleSettings)) : undefined;
+    if (suffix === "managed-plan-settings" && !settingsInput) throw new Error("Choose the role settings first");
     if (suffix === "managed-plan" && !settingsFile) throw new Error("Select an existing settings JSON file");
     if (settingsFile) command.push("--file", settingsFile);
+    if (settingsInput) command.push("--file", "-");
     const settingsDigest = () => {
+      if (settingsInput) return createHash("sha256").update(settingsInput).digest("hex");
       if (!settingsFile) return undefined;
       const stat = statSync(settingsFile);
       if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error("Select a settings JSON file up to 1 MiB");
@@ -265,7 +288,10 @@ export async function runDashboardAction(options: {
         command.push("--confirm", saved.token);
       }
       try {
-        const output = await cli([...command, "--expected-state", reviewed.identity], true);
+        const args = [...command, "--expected-state", reviewed.identity];
+        const output = settingsInput
+          ? await dashboardChild(process.execPath, [entry, ...args, "--json"], root, signal, true, settingsInput)
+          : await cli(args, true);
         return { text: output.stdout + (output.stderr ? `\nDiagnostics:\n${output.stderr}` : ""), command };
       } catch (error) {
         if (operation === "integrate" && feature?.execution)
@@ -276,7 +302,9 @@ export async function runDashboardAction(options: {
     let details: unknown = { integration: feature?.execution, phase: feature?.phase, job };
     let token: string | undefined;
     if (["approve", "review", "fix", "archive"].includes(operation)) {
-      const checked = await cli([...command, "--dry-run"], operation === "approve" || operation === "archive");
+      const checked = settingsInput
+        ? await dashboardChild(process.execPath, [entry, ...command, "--dry-run", "--json"], root, signal, true, settingsInput)
+        : await cli([...command, "--dry-run"], operation === "approve" || operation === "archive");
       const result = JSON.parse(checked.stdout);
       if (operation === "archive" && !result.approved && !result.recovery)
         throw new Error("Current final approval is required; run final checks and approve again");
@@ -398,6 +426,16 @@ export async function runDashboardAction(options: {
       }
     }
     const output = await dashboardChild(process.execPath, [entry, ...command], snapshot.repository.root, signal, trusted.kind === "change");
+    if (trusted.id.startsWith("project:catalog:")) {
+      const catalog = JSON.parse(output.stdout) as Awaited<ReturnType<typeof import("./model-catalog.js").modelCatalog>>;
+      const entries = catalog.entries.map(entry => [
+        entry.selector,
+        entry.source === "example" ? "Example selector" : undefined,
+        entry.efforts?.length ? `Effort ${entry.efforts.join(", ")}` : undefined,
+        entry.defaultEffort ? `Default ${entry.defaultEffort}` : undefined,
+      ].filter(Boolean).join(" · "));
+      return { text: [catalog.harness, catalog.reason, ...entries].filter(Boolean).join("\n"), command };
+    }
     return { text: output.stdout + (output.stderr ? `\nDiagnostics:\n${output.stderr}` : ""), command };
   }
   if (trusted.kind === "command") return { text: shellCommand(["openspec-runner", ...(trusted.argv ?? [])]), command: trusted.argv };

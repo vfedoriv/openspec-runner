@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
 import { harnessIds, hasHarness } from "./harnesses/registry.js";
 import { loadPlan } from "./plan.js";
+import type { FeatureSettings } from "./feature.js";
 
 export type DashboardAction = {
   id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview" | "check" | "change" | "timeline" | "path";
@@ -12,7 +13,7 @@ export type DashboardAction = {
 export const taskInputLimit = 500;
 const validTaskIds = (ids: string[]) => ids.length > 0 && new Set(ids).size === ids.length && ids.every(id => /^\d+(?:\.\d+)+$/.test(id));
 export type DashboardField = "destination" | "audience" | "inputFile" | "providerFile" | "assetsFile" | "revision" | "recordKind" | "recordId" | "outcome" | "reason";
-export type PreviewInput = Partial<Record<DashboardField, string>> & { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string; modelForSetup?: string; launchAgent?: string; launchBase?: string };
+export type PreviewInput = Partial<Record<DashboardField, string>> & { taskIds?: string[]; model?: string; effort?: string; settingsFile?: string; modelForSetup?: string; launchAgent?: string; launchBase?: string; roleSettings?: FeatureSettings };
 
 export function focusReason(session: SessionSummary): string | undefined {
   const a = session.attempt;
@@ -33,6 +34,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     { id: "project:doctor", label: "Check project", kind: "check", available: true, argv: ["doctor"] },
     { id: "project:models", label: "List project default models", kind: "check", available: true, argv: ["models"] },
     ...harnessIds().flatMap(agent => [
+      { id: `project:catalog:${agent}`, label: `Browse models · ${agent}`, kind: "check" as const, available: true, argv: ["models", "--agent", agent, "--catalog"] },
       { id: `project:guidance:${agent}`, label: `Planning guidance · ${agent}`, kind: "check" as const, available: true, argv: ["planning-rules", "--agent", agent] },
       { id: `project:init:${agent}`, label: `Set up project · ${agent}`, kind: "change" as const, available: true, argv: ["init", "--agent", agent] },
     ]),
@@ -125,6 +127,11 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     return actions;
   }
   const change = feature.change;
+  if (!feature.missingExecution && !feature.state?.delegated) {
+    add("edit-models", task ? "Edit model and effort" : "Assign models to tasks", "change", staleExecution,
+      ["execution-settings", change, "--file", "-"]);
+    actions.at(-1)!.initialTasks = task?.task.id;
+  }
   pathActions("integration", "integration worktree");
   if (task) {
     pathActions("worktree", "latest task worktree");
@@ -179,6 +186,7 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
       const closed = state.archive || state.phase === "completed" ? "Feature has entered archival" : undefined;
       const approval = state.approval ? undefined : "Approve the plan first";
       managed("plan", "Check plan for approval (runs OpenSpec)", "approve", delegated ?? closed);
+      managed("plan-settings", "Choose model settings for approval", "approve", delegated ?? closed);
       managed("review", "Start review", "review", approval ?? closed);
       managed("repair", "Start repair", "fix", approval ?? closed);
       const latest = state.jobs?.at(-1);

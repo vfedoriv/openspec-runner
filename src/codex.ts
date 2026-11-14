@@ -78,7 +78,7 @@ export function codexArgs(
       : []),
   ];
 }
-export async function models(): Promise<unknown[]> {
+export async function models({ includeHidden = true } = {}): Promise<unknown[]> {
   const { resolveCommand } = await import("./platform-command.js");
   const { observeProcess, stopOwnedProcess } = await import("./platform-process.js");
   return new Promise((resolvePromise, reject) => {
@@ -141,7 +141,7 @@ export async function models(): Promise<unknown[]> {
             JSON.stringify({ method: "initialized", params: {} }) + "\n",
           );
           request++;
-          send("model/list", { includeHidden: true });
+          send("model/list", { includeHidden });
         } else {
           if (!Array.isArray(m.result?.data))
             return finish(new Error("Unsupported Codex model/list response"));
@@ -156,7 +156,7 @@ export async function models(): Promise<unknown[]> {
           if (m.result.nextCursor) {
             request++;
             send("model/list", {
-              includeHidden: true,
+              includeHidden,
               cursor: m.result.nextCursor,
             });
           } else finish();

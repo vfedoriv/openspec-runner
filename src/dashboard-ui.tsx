@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
-import { runDashboardAction } from "./dashboard-action-runner.js";
+import { readDashboardCatalog, runDashboardAction } from "./dashboard-action-runner.js";
 import { dashboardViews, dashboardFilterChoices, defaultDashboardFilters, selectDashboardRows, preserveSelection, featureTimeline, firstRunRows, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters, type DashboardFilterKey, type DashboardView } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
@@ -28,6 +28,32 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const [menu, setMenu] = useState<DashboardAction[]>(), [actionIndex, setActionIndex] = useState(0), [output, setOutput] = useState(""), [busy, setBusy] = useState(false);
   const [timeline, setTimeline] = useState<{ featureId: string; selected?: string; details?: boolean }>();
   const [preview, setPreview] = useState<{ action: DashboardAction; input: PreviewInput }>();
+  const roles = ["implementation", "review", "repair"] as const;
+  const [roleIndex, setRoleIndex] = useState<number>();
+  const role = roleIndex === undefined ? undefined : roles[roleIndex];
+  const roleSettings = preview?.input.roleSettings;
+  const roleValue = role && roleSettings ? roleSettings[role] : undefined;
+  const [catalog, setCatalog] = useState<Awaited<ReturnType<typeof readDashboardCatalog>>>();
+  const [catalogIndex, setCatalogIndex] = useState<number>();
+  const modelField = edit === "model" || edit === "modelForSetup";
+  const effortField = edit === "effort";
+  const taskHarness = snapshot?.tasks.find(task => task.id === target || task.featureId === target)?.harness;
+  const catalogHarness = edit === "modelForSetup" ? preview?.action.id.split(":").at(-1)
+    : roleValue?.harness || preview?.input.launchAgent || taskHarness;
+  const catalogRoot = snapshot?.repository.root;
+  useEffect(() => {
+    setCatalog(undefined);
+    if (!catalogRoot || !catalogHarness || !modelField && !effortField) return;
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    lifetime.addEventListener("abort", cancel, { once: true });
+    void readDashboardCatalog(catalogRoot, catalogHarness, controller.signal)
+      .then(result => { if (!controller.signal.aborted) setCatalog(result); }, () => {});
+    return () => { controller.abort(); lifetime.removeEventListener("abort", cancel); };
+  }, [catalogRoot, catalogHarness, modelField || effortField, lifetime]);
+  const choicesForField = modelField ? catalog?.entries.map(entry => entry.selector)
+    : effortField ? catalog?.entries.find(entry => entry.selector === (roleValue?.model ?? preview?.input.model))?.efforts : undefined;
+  const matches = choicesForField?.filter(value => value.toLowerCase().includes(text.toLowerCase())) ?? [];
   const actionController = useRef<AbortController | undefined>(undefined), activityController = useRef<AbortController | undefined>(undefined), generation = useRef(0);
   const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]), activitySearchRef = useRef("");
   const changeFollowing = (value: boolean) => { followingRef.current = value; setFollowing(value); };
@@ -112,20 +138,35 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
       if (actionController.current === controller) { actionController.current = undefined; setBusy(false); }
     }
   };
-  const beginEdit = (kind: typeof edit, initial = "") => { setEdit(kind); setText(initial); };
+  const beginEdit = (kind: typeof edit, initial = "") => { setEdit(kind); setText(initial); setCatalogIndex(undefined); };
   const overviewSelection = useRef<string | undefined>(undefined);
   const openAction = (action: DashboardAction, tasks?: string, rowId?: string) => {
+    setRoleIndex(undefined);
     overviewSelection.current = rowId;
     if (action.kind === "timeline" && target && snapshot) {
       setMenu(undefined);
       setTimeline({ featureId: target, selected: featureTimeline(snapshot, target)[0]?.id });
       return;
     }
-    if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run)$/.test(action.id)) {
+    if (action.available && /:(?:(launch|retry)-(preview|run)|integrate-run|edit-models)$/.test(action.id)) {
       setPreview({ action, input: {} });
       beginEdit("tasks", tasks ?? action.initialTasks);
     } else if (action.available && action.fields?.length) {
       setMenu(undefined); setPreview({ action, input: {} }); beginEdit(action.fields[0]);
+    } else if (action.available && action.id.endsWith(":managed-plan-settings") && snapshot) {
+      const approval = snapshot.features.find(feature => feature.id === target)?.state?.approval;
+      const harness = taskHarness ?? "codex";
+      const seed = (saved?: { harness?: string; model: string; effort?: string; reasoningEffort?: string }) => ({
+        harness: saved?.harness ?? harness, model: saved?.model ?? "", effort: saved?.effort ?? saved?.reasoningEffort,
+      });
+      const roleSettings = {
+        implementation: { ...seed(approval?.implementation), harness },
+        review: seed(approval?.review),
+        repair: seed(approval?.repair),
+        maxFixRounds: approval?.maxFixRounds,
+      };
+      setMenu(undefined); setRoleIndex(0); setPreview({ action, input: { roleSettings } });
+      beginEdit("model", roleSettings.implementation.model);
     } else if (action.available && action.id.endsWith(":managed-plan")) {
       setMenu(undefined); setPreview({ action, input: {} }); beginEdit("settingsFile");
     } else if (action.kind === "change" && action.id.startsWith("project:init:copilot")) {
@@ -137,6 +178,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
   const selectedChoice = choices.findIndex(choice => choice.value === picker?.choice);
   const matchingChoice = choices.findIndex(choice => choice.label.toLowerCase().includes(picker?.query.toLowerCase() ?? ""));
   const choiceIndex = Math.max(0, selectedChoice < 0 ? matchingChoice : selectedChoice);
+  const selectionHint = matches.length ? ` · ↑↓ ${matches[catalogIndex ?? 0]}` : "";
   useInput((input, key) => {
     if (picker) {
       if (key.escape) setPicker(undefined);
@@ -186,26 +228,57 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     }
     if (confirmation && !key.upArrow && !key.downArrow) return;
     if (edit) {
-      if (key.escape) { setEdit(undefined); setPreview(undefined); return; }
+      if (key.escape) { setEdit(undefined); setPreview(undefined); setRoleIndex(undefined); return; }
+      if ((key.upArrow || key.downArrow) && matches.length) {
+        setCatalogIndex(Math.max(0, Math.min(matches.length - 1, (catalogIndex ?? (key.upArrow ? matches.length : -1)) + (key.upArrow ? -1 : 1))));
+        return;
+      }
       if (key.return) {
-        const value = text.trim();
+        const value = (catalogIndex === undefined ? text : matches[catalogIndex] ?? text).trim();
         if (edit === "activity") { activitySearchRef.current = value; setActivitySearch(value); setActivityOffset(0); }
         else if (edit === "search") setFilters(f => ({ ...f, search: value }));
         else if (preview) {
+          if (role && roleSettings && roleValue && roleIndex !== undefined) {
+            const next = { ...roleValue };
+            if (edit === "launchAgent") {
+              next.harness = value;
+              if (value !== roleValue.harness) { next.model = ""; delete next.effort; }
+            }
+            if (edit === "model") {
+              next.model = value;
+              if (value !== roleValue.model) delete next.effort;
+            }
+            if (edit === "effort") next.effort = value || undefined;
+            const updated = { ...preview, input: { roleSettings: { ...roleSettings, [role]: next } } };
+            setPreview(updated);
+            if (edit === "launchAgent") { beginEdit("model", next.model); return; }
+            if (edit === "model") { beginEdit("effort", next.effort); return; }
+            const nextRole = roles[roleIndex + 1];
+            if (nextRole) {
+              setRoleIndex(roleIndex + 1); beginEdit("launchAgent", roleSettings[nextRole].harness); return;
+            }
+            void execute(updated.action, updated.input); setRoleIndex(undefined); setPreview(undefined); setEdit(undefined); return;
+          }
           const updated = { ...preview, input: { ...preview.input, ...(edit === "tasks" ? { taskIds: value.split(",").map(t => t.trim()).filter(Boolean) } : { [edit]: value || undefined }) } };
           setPreview(updated);
           const fields = updated.action.fields;
           const nextField = fields?.[fields.indexOf(edit as DashboardField) + 1];
           if (nextField) { beginEdit(nextField); return; }
           const feature = snapshot?.features.find(f => f.id === target || f.id === snapshot.tasks.find(t => t.id === target)?.featureId);
-          if (edit === "tasks" && !updated.action.id.endsWith(":integrate-run") && !feature?.state) { beginEdit("model"); return; }
+          if (updated.action.id.endsWith(":edit-models")) {
+            if (edit === "tasks") { beginEdit("model"); return; }
+            if (edit === "model") { beginEdit("effort"); return; }
+            void execute(updated.action, updated.input); setPreview(undefined); setEdit(undefined); return;
+          }
+          if (edit === "tasks" && !updated.action.id.endsWith(":integrate-run") && !feature?.state) { beginEdit("launchAgent"); return; }
+          if (edit === "launchAgent") { beginEdit("model"); return; }
           if (edit === "model") { beginEdit("effort"); return; }
-          if (edit === "effort") { beginEdit("launchAgent"); return; }
-          if (edit === "launchAgent") { beginEdit("launchBase"); return; }
+          if (edit === "effort") { beginEdit("launchBase"); return; }
           void execute(updated.action, updated.input); setPreview(undefined);
         }
         setEdit(undefined); return;
       }
+      setCatalogIndex(undefined);
       if (edit === "tasks" && key.ctrl && input === "u") setText("");
       else if (key.backspace || key.delete) setText(t => t.slice(0, -1));
       else if (!key.ctrl && !key.meta) setText(t => (t + safeText(input)).slice(0, taskInputLimit));
@@ -335,7 +408,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime }: { 
     status: `Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`,
     filters: `/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`,
     lines,
-    footer: [picker ? "↑↓ choose · Enter apply · Esc cancel" : timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${edit}: ${text} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · 0 reset · ←→ views"],
+    footer: [picker ? "↑↓ choose · Enter apply · Esc cancel" : timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${role ? role + " " : ""}${edit}: ${text}${selectionHint} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · 0 reset · ←→ views"],
   });
   return <Box flexDirection="column" height={height} width={columns}>
     {frame.map((line, index) => <Text key={index} wrap="truncate" color={index === 1 ? "cyan" : error && index === (compact ? 3 : 4) ? "yellow" : index === frame.length - (compact ? 2 : 3) ? "green" : undefined} dimColor={!compact && index === frame.length - 2}>{line}</Text>)}
