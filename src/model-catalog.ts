@@ -19,10 +19,10 @@ export interface ModelCatalog {
   fetchedAt: string;
 }
 
-export async function modelCatalog(harness: string, cwd = process.cwd(), configured?: string): Promise<ModelCatalog> {
+export async function modelCatalog(harness: string, cwd = process.cwd(), configured?: string, includeHidden = false): Promise<ModelCatalog> {
   const adapter = getHarness(harness);
   try {
-    const result = await adapter.models({ includeHidden: false, discover: true, cwd });
+    const result = await adapter.models({ includeHidden, discover: true, cwd });
     const entries = new Map<string, CatalogEntry>();
     for (const example of result.examples ?? [])
       entries.set(example, { selector: example, source: "example" });
@@ -32,7 +32,7 @@ export async function modelCatalog(harness: string, cwd = process.cwd(), configu
       if (!model || typeof model !== "object") continue;
       const row = model as Record<string, unknown>;
       const selector = row.model ?? row.id;
-      if (typeof selector !== "string" || !selector.trim() || /[\x00-\x1f\x7f]/.test(selector) || row.hidden === true) continue;
+      if (typeof selector !== "string" || !selector.trim() || /[\x00-\x1f\x7f]/.test(selector) || !includeHidden && row.hidden === true) continue;
       const effortDisabled = harness === "copilot" || harness === "copilot-vscode";
       const efforts = !effortDisabled && Array.isArray(row.supportedReasoningEfforts)
         ? row.supportedReasoningEfforts.flatMap((value: unknown) => {
@@ -44,7 +44,9 @@ export async function modelCatalog(harness: string, cwd = process.cwd(), configu
         selector, source: "discovered", efforts: efforts && [...new Set(efforts)],
         effortSupport: effortDisabled || efforts?.length === 0 ? "unsupported" : efforts?.length ? "supported" : "unknown",
         label: typeof (row.displayName ?? row.name) === "string" ? String(row.displayName ?? row.name) : undefined,
-        defaultEffort: typeof row.defaultReasoningEffort === "string" && efforts?.includes(row.defaultReasoningEffort)
+        ...(row.hidden === true ? { hidden: true } : {}),
+        defaultEffort: !effortDisabled && typeof row.defaultReasoningEffort === "string" &&
+          (efforts === undefined || efforts.includes(row.defaultReasoningEffort))
           ? row.defaultReasoningEffort : undefined,
       });
     }

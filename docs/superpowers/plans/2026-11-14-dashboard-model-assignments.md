@@ -55,9 +55,9 @@
 
 ### 2. Use the picker for setup and unmanaged launch or retry
 
-- [ ] Extract a reusable picker from the Models panel and use it in `src/dashboard-ui.tsx` for Copilot setup and for unmanaged launch and retry. Resolve the effective harness before model and effort. Support manual selectors, keep existing configured selections visible, and rerender effort choices when model or harness changes. Use advertised defaults only where the CLI would resolve them, and require a valid explicit choice where approval requires one.
-- [ ] Move shared launch settings checks out of the dashboard-only prompts into the existing CLI resolution path in `src/cli.ts` as needed. Show the resolved settings per selected task in preview and explain when a task's explicit settings take precedence. Clear an incompatible effort on model change and surface any known incompatibility before confirmation. Where support is unknown, label it and pass through existing adapter validation. Use the existing expected launch identity so a changed resolution requires a new review.
-- [ ] Test a mixed batch of inherited and explicit task settings, clearing effort when switching models, explicit setup selectors with spaces, managed override rejection, and unchanged dependency and parallelism checks.
+- [x] Extract a reusable picker from the Models panel and use it in `src/dashboard-ui.tsx` for Copilot setup and for unmanaged launch and retry. Resolve the effective harness before model and effort. Support manual selectors, keep existing configured selections visible, and rerender effort choices when model or harness changes. Use advertised defaults only where the CLI would resolve them, and require a valid explicit choice where approval requires one.
+- [x] Move shared launch settings checks out of the dashboard-only prompts into the existing CLI resolution path in `src/cli.ts` as needed. Show the resolved settings per selected task in preview and explain when a task's explicit settings take precedence. Clear an incompatible effort on model change and surface any known incompatibility before confirmation. Where support is unknown, label it and pass through existing adapter validation. Use the existing expected launch identity so a changed resolution requires a new review.
+- [x] Test a mixed batch of inherited and explicit task settings, clearing effort when switching models, explicit setup selectors with spaces, managed override rejection, and unchanged dependency and parallelism checks.
 
 ### 3. Add durable single-task and bulk assignment edits
 

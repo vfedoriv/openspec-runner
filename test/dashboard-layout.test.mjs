@@ -194,7 +194,7 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
     const snapshot = { version: 1, repository: { root: "/repo" }, features: [feature], tasks: [task], sessions: [], assignments: [], attention: [], errors: [], sources: {} };
     const calls = [];
     const readCatalog = async (_, harness) => ({ harness, status: "available", entries:
-      harness === "copilot" ? [{ selector: "auto" }] : [
+      harness === "copilot" ? [{ selector: "Model Name (vendor)" }] : [
         { selector: "sample-a", efforts: ["low"] }, { selector: "sample-b", efforts: ["high"] },
       ] });
     const runAction = async request => { calls.push(request); return { text: "Preview completed" }; };
@@ -209,6 +209,12 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
     async function pickModelAndEffort() {
       await key(down); await key(down); await key(enter);
       assert.match(output, /effort: .*high/, flow);
+      if (flow === "launch-preview") {
+        output = "";
+        await key("low"); await key(enter);
+        assert.match(output, /Choose a supported effort/);
+        for (let i = 0; i < 3; i++) await key("\x7f");
+      }
       await key(down); await key(enter);
     }
     try {
@@ -246,7 +252,7 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
       }
       assert.equal(calls.length, 1, flow);
       const input = calls[0].input;
-      if (flow === "setup") assert.equal(input.modelForSetup, "auto");
+      if (flow === "setup") assert.equal(input.modelForSetup, "Model Name (vendor)");
       else if (managed) {
         assert.deepEqual(input.roleSettings, {
           implementation: { harness: "codex", model: "sample-b", effort: "high" },

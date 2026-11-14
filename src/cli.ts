@@ -408,7 +408,7 @@ export async function main(args = process.argv.slice(2)) {
                   throw e;
               }
             } else if (selected.some((id) => !plan.assignments[id]?.model || plan.assignments[id].model === "session")) {
-              throw new Error("Claude calling-session model inheritance is unsupported; pass --default-model or assign explicit models");
+              throw new Error(`${adapter.displayName} calling-session model inheritance is unsupported; pass --default-model or assign explicit models`);
             }
           }
           if (inherited && v["default-effort"])
@@ -424,10 +424,15 @@ export async function main(args = process.argv.slice(2)) {
             command === "retry",
             selectedAgent,
           );
-          if (selectedAgent === "codex" && preview.tasks.some((t) => !t.settings.reasoningEffort)) {
-            const discovered = await adapter.models();
-            for (const m of (discovered.models ?? []) as any[])
-              if (typeof m.defaultReasoningEffort === "string") defaults.set(m.model, m.defaultReasoningEffort);
+          if (!managed && selectedAgent === "codex") {
+            const catalog = await modelCatalog(selectedAgent, r.repo.root, undefined, true);
+            for (const entry of catalog.entries)
+              if (entry.defaultEffort) defaults.set(entry.selector, entry.defaultEffort);
+            for (const { settings } of preview.tasks) {
+              const entry = catalog.entries.find(item => item.selector === settings.model);
+              if (settings.reasoningEffort && entry?.efforts?.length && !entry.efforts.includes(settings.reasoningEffort))
+                throw new Error(`Codex model ${settings.model} does not advertise effort ${settings.reasoningEffort}; choose ${entry.efforts.join(", ")}`);
+            }
             for (const t of preview.tasks)
               if (
                 !t.settings.reasoningEffort &&
@@ -437,8 +442,13 @@ export async function main(args = process.argv.slice(2)) {
                   `No default effort advertised for ${t.settings.model}; set reasoningEffort in execution.yaml or --default-effort for inherited tasks`,
                 );
           }
+          const capabilities = await adapter.capabilities(r.repo.root, preview.tasks[0]?.settings);
+          if (selectedAgent === "claude" && capabilities.supported) {
+            const unsupported = preview.tasks.find(({ settings }) => settings.effort &&
+              (!capabilities.features.effort || capabilities.supportedEfforts?.length && !capabilities.supportedEfforts.includes(settings.effort)));
+            if (unsupported) throw new Error(`Claude CLI does not support effort ${unsupported.settings.effort}`);
+          }
           if (v["dry-run"]) {
-            const capabilities = await adapter.capabilities(r.repo.root, preview.tasks[0]?.settings);
             result = {
               ...preview,
               executionIdentity: launchIdentity(preview, defaults),
@@ -449,6 +459,9 @@ export async function main(args = process.argv.slice(2)) {
               },
               tasks: preview.tasks.map((t) => ({
                 ...t,
+                ...(!managed && { modelSource: plan.assignments[t.task].model && plan.assignments[t.task].model !== "session"
+                  ? "Explicit task assignment takes precedence"
+                  : v["default-model"] ? "Launch default" : configured === "session" ? "Calling session" : "Project default" }),
                 settings: {
                 ...t.settings,
                   reasoningEffort:
@@ -458,17 +471,8 @@ export async function main(args = process.argv.slice(2)) {
               })),
             };
           } else {
-            const capabilities = await adapter.capabilities(r.repo.root, preview.tasks[0]?.settings);
             if (!capabilities.supported)
               throw new Error(`${adapter.displayName} is not ready: ${capabilities.reasons.join("; ")}`);
-            if (selectedAgent === "claude" && preview.tasks.some((entry) => entry.settings.effort) && !capabilities.features.effort)
-              throw new Error("Claude CLI does not advertise --effort; omit effort or install a compatible CLI");
-            if (selectedAgent === "claude" && capabilities.supportedEfforts?.length) {
-              const supportedEfforts = capabilities.supportedEfforts;
-              const unsupported = preview.tasks.map((entry) => entry.settings.effort).filter((effort) => effort && !supportedEfforts.includes(effort));
-              if (unsupported.length)
-                throw new Error(`Claude CLI does not support effort ${unsupported[0]}; supported values: ${supportedEfforts.join(", ")}`);
-            }
             result = r.launch(
               change,
               selected,

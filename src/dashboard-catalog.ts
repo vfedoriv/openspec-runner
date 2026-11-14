@@ -2,6 +2,11 @@ import type { readDashboardCatalog } from "./dashboard-action-runner.js";
 import type { DashboardSnapshot } from "./dashboard-types.js";
 import type { CatalogEntry } from "./model-catalog.js";
 
+export function searchCatalog(entries: CatalogEntry[], query: string): CatalogEntry[] {
+  const filter = query.toLowerCase();
+  return entries.filter(entry => `${entry.selector} ${entry.label ?? ""}`.toLowerCase().includes(filter));
+}
+
 type Catalog = Awaited<ReturnType<typeof readDashboardCatalog>>;
 export type CatalogCache = Map<string, { result: Catalog; fetchedAt: number }>;
 const pending = new WeakMap<CatalogCache, Map<string, { promise: Promise<Catalog>; controller: AbortController; readers: number }>>();

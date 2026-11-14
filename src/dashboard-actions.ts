@@ -2,7 +2,6 @@ import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
 import { harnessIds, hasHarness } from "./harnesses/registry.js";
-import { loadPlan } from "./plan.js";
 import type { FeatureSettings } from "./feature.js";
 
 export type DashboardAction = {
@@ -265,21 +264,16 @@ export function previewCommand(snapshot: DashboardSnapshot, action: DashboardAct
     if (feature.state) {
       if (!feature.state.approval || input.model || input.effort || input.launchAgent || input.launchBase) throw new Error("Managed preview requires approved settings without overrides");
     } else {
-      let agent = "codex";
-      try { agent = loadPlan(snapshot.repository.root, feature.change).agent; } catch { /* Missing config cannot establish a different harness. */ }
       if (input.launchAgent) {
         if (!hasHarness(input.launchAgent)) throw new Error("Select a registered harness");
-        agent = input.launchAgent;
-        argv.push("--agent", agent);
+        argv.push("--agent", input.launchAgent);
       }
       if (input.launchBase) {
         if (/^[\-]|[\0\r\n]/.test(input.launchBase)) throw new Error("Enter a Git ref or commit ID");
         argv.push(`--base=${input.launchBase}`);
       }
-      const tasks = ids.map(id => snapshot.tasks.find(t => t.featureId === feature.id && t.task.id === id)!);
-      const inheritedModel = tasks.some(t => !t.assignment?.model || t.assignment.model === "session");
-      const inheritedEffort = agent === "codex" && tasks.some(t => !t.assignment?.reasoningEffort && !t.assignment?.effort);
-      if ((inheritedModel && !input.model?.trim()) || input.model === "session" || (inheritedEffort && !input.effort?.trim()) || [input.model, input.effort].some(v => v !== undefined && (!v.trim() || /[\0\r\n]/.test(v)))) throw new Error("Inherited settings require explicit model and effort (Codex); Claude effort is optional");
+      if (input.model === "session" || [input.model, input.effort].some(v => v !== undefined && (!v.trim() || /[\0\r\n]/.test(v))))
+        throw new Error("Enter a valid model selector and effort");
       if (input.model) argv.push("--default-model", input.model);
       if (input.effort) argv.push("--default-effort", input.effort);
     }

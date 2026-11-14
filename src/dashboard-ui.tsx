@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useInput, useWindowSize, useFocus } from "ink";
 import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
-import { catalogEntries, loadPickerCatalog, type CatalogCache } from "./dashboard-catalog.js";
+import { catalogEntries, loadPickerCatalog, searchCatalog, type CatalogCache } from "./dashboard-catalog.js";
 import { harnessIds } from "./harnesses/registry.js";
 import { readDashboardCatalog, runDashboardAction } from "./dashboard-action-runner.js";
 import { dashboardViews, dashboardFilterChoices, defaultDashboardFilters, selectDashboardRows, preserveSelection, featureTimeline, firstRunRows, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters, type DashboardFilterKey, type DashboardView } from "./dashboard-view.js";
@@ -54,7 +54,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   const effortField = edit === "effort";
   const taskHarness = snapshot?.tasks.find(task => task.id === target || task.featureId === target)?.harness;
   const catalogHarness = models?.harness ?? (edit === "modelForSetup" ? preview?.action.id.split(":").at(-1)
-    : roleValue?.harness || preview?.input.launchAgent || taskHarness);
+    : roleValue?.harness || preview?.input.launchAgent || taskHarness || snapshot?.repository.defaultHarness || "codex");
   const catalogOpen = !!models || modelField || effortField;
   const catalogRoot = snapshot?.repository.root;
   const catalogKey = JSON.stringify([catalogRoot, catalogHarness]);
@@ -73,9 +73,12 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   }, [catalogRoot, catalogHarness, catalogKey, catalogRefresh, catalogOpen, lifetime, readCatalog]);
   const activeCatalog = catalog?.harness === catalogHarness ? catalog : undefined;
   const modelEntries = catalogEntries(activeCatalog, snapshot, catalogHarness);
+  const effortEntry = activeCatalog?.entries.find(entry => entry.selector === (roleValue?.model ?? preview?.input.model));
   const choicesForField = modelField ? modelEntries.map(entry => entry.selector)
-    : effortField ? activeCatalog?.entries.find(entry => entry.selector === (roleValue?.model ?? preview?.input.model))?.efforts : undefined;
-  const matches = choicesForField?.filter(value => value.toLowerCase().includes(text.toLowerCase())) ?? [];
+    : effortField ? effortEntry?.efforts : edit === "launchAgent" ? harnessIds() : undefined;
+  const [fieldError, setFieldError] = useState("");
+  const matches = modelField ? searchCatalog(modelEntries, text).map(entry => entry.selector)
+    : choicesForField?.filter(value => value.toLowerCase().includes(text.toLowerCase())) ?? [];
   const actionController = useRef<AbortController | undefined>(undefined), activityController = useRef<AbortController | undefined>(undefined), generation = useRef(0);
   const followingRef = useRef(true), expandedRef = useRef(false), entriesRef = useRef<ActivityEntry[]>([]), activitySearchRef = useRef("");
   const changeFollowing = (value: boolean) => { followingRef.current = value; setFollowing(value); };
@@ -156,7 +159,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
       if (actionController.current === controller) { actionController.current = undefined; setBusy(false); }
     }
   };
-  const beginEdit = (kind: typeof edit, initial = "") => { setEdit(kind); setText(initial); setCatalogIndex(undefined); };
+  const beginEdit = (kind: typeof edit, initial = "") => { setEdit(kind); setText(initial); setCatalogIndex(undefined); setFieldError(""); };
   const overviewSelection = useRef<string | undefined>(undefined);
   const openAction = (action: DashboardAction, tasks?: string, rowId?: string) => {
     setRoleIndex(undefined);
@@ -204,6 +207,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   const selectionHint = [
     matches.length ? `↑↓ ${matches[catalogIndex ?? 0]}` : "",
     modelField || effortField ? catalogNotice : "",
+    effortField && !catalogNotice ? fieldError || (effortEntry?.effortSupport === "unsupported" ? "Effort unavailable"
+      : !effortEntry?.efforts?.length ? "Effort support unknown" : "") : fieldError,
   ].filter(Boolean).map(hint => ` · ${hint}`).join("");
   useInput((input, key) => {
     if (models) {
@@ -217,8 +222,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
         const index = harnesses.indexOf(models.harness);
         setModels({ harness: harnesses[(index + (key.leftArrow ? -1 : 1) + harnesses.length) % harnesses.length], query: "", offset: 0 });
       } else if (key.upArrow || key.downArrow) {
-        const count = modelEntries.filter(entry =>
-          `${entry.selector} ${entry.label ?? ""}`.toLowerCase().includes(models.query.toLowerCase())).length;
+        const count = searchCatalog(modelEntries, models.query).length;
         setModels({ ...models, offset: Math.max(0, Math.min(count - 1, models.offset + (key.upArrow ? -1 : 1))) });
       } else if (key.backspace || key.delete) setModels({ ...models, query: models.query.slice(0, -1), offset: 0 });
       else if (input && !key.ctrl && !key.meta && !key.return)
@@ -287,6 +291,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
       }
       if (key.return) {
         const value = (catalogIndex === undefined ? text : matches[catalogIndex] ?? text).trim();
+        if (edit === "launchAgent" && value && !harnessIds().includes(value)) {
+          setFieldError("Select a registered harness"); return;
+        }
+        if (effortField && value && value !== ":inherit" && (effortEntry?.effortSupport === "unsupported" ||
+            effortEntry?.efforts?.length && !effortEntry.efforts.includes(value))) {
+          setFieldError("Choose a supported effort or clear the field"); return;
+        }
         if (edit === "activity") { activitySearchRef.current = value; setActivitySearch(value); setActivityOffset(0); }
         else if (edit === "search") setFilters(f => ({ ...f, search: value }));
         else if (preview) {
@@ -340,6 +351,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
         setEdit(undefined); return;
       }
       setCatalogIndex(undefined);
+      setFieldError("");
       if (edit === "tasks" && key.ctrl && input === "u") setText("");
       else if (key.backspace || key.delete) setText(t => t.slice(0, -1));
       else if (!key.ctrl && !key.meta) setText(t => (t + safeText(input)).slice(0, taskInputLimit));
@@ -412,8 +424,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   const { capacity, compact } = layout;
   let lines: DashboardLine[];
   if (models) {
-    const entries = modelEntries.filter(entry =>
-      `${entry.selector} ${entry.label ?? ""}`.toLowerCase().includes(models.query.toLowerCase()));
+    const entries = searchCatalog(modelEntries, models.query);
     lines = [
       `Models · ${models.harness} · Search: ${models.query}`,
       ...(catalogNotice ? [catalogNotice] : []),

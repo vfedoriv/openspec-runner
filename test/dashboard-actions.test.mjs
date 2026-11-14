@@ -38,12 +38,20 @@ test("action runner rejects forged command execution", async () => {
 
 const snapshot = () => ({ version: 1, collectedAt: "now", repository: { root: "/tmp", common: "/tmp", stateDir: "/tmp", currentWorktree: "/tmp" }, features: [{ id: "local:change", change: "change", origin: "local", taskIds: ["local:change:task:1.1"], sessionIds: [], completed: 0, total: 1 }], tasks: [{ id: "local:change:task:1.1", featureId: "local:change", task: { id: "1.1", description: "work", completed: false, line: 0 }, ready: true, reasons: [], attempts: [] }], sessions: [], assignments: [], attention: [], errors: [], sources: {} });
 
-test("launch previews require exact selected tasks and explicit unmanaged settings", () => {
+test("launch previews require exact tasks and delegate default resolution to the CLI", () => {
   const s = snapshot(), a = actionsFor(s, s.features[0].id).find(a => a.id.endsWith(":launch-preview"));
   assert.throws(() => previewCommand(s, a, {}), /task/i);
-  assert.throws(() => previewCommand(s, a, { taskIds: ["1.1"] }), /model.*effort/i);
+  assert.deepEqual(previewCommand(s, a, { taskIds: ["1.1"] }), ["launch", "change", "--tasks", "1.1", "--dry-run", "--json"]);
   assert.throws(() => previewCommand(s, a, { taskIds: ["1.2"], model: "m", effort: "high" }), /task/i);
   assert.deepEqual(previewCommand(s, { ...a, argv: ["rm", "-rf", "/"] }, { taskIds: ["1.1"], model: "m", effort: "high" }), ["launch", "change", "--tasks", "1.1", "--default-model", "m", "--default-effort", "high", "--dry-run", "--json"]);
+});
+
+test("managed launch rejects invocation model, effort, harness, and base overrides", () => {
+  const s = snapshot();
+  s.features[0].state = { approval: { token: "approved" }, jobs: [] };
+  const action = actionsFor(s, s.features[0].id).find(a => a.id.endsWith(":launch-preview"));
+  for (const override of [{ model: "m" }, { effort: "high" }, { launchAgent: "claude" }, { launchBase: "HEAD" }])
+    assert.throws(() => previewCommand(s, action, { taskIds: ["1.1"], ...override }), /approved settings without overrides/);
 });
 
 test("feature previews prefill only fresh, valid suggestions and use the submitted IDs", () => {

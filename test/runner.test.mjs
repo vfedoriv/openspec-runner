@@ -95,7 +95,7 @@ function fixture(t, options = {}) {
         if (!m.id) return;
         let result = {};
         if (m.method === 'model/list') {
-          if (m.params.cursor === 'second') result = {data: m.params.includeHidden ? [{id:'hidden',model:'hidden',hidden:true}] : [{id:'model-b',model:'model-b',displayName:'Model B'}],nextCursor:null};
+          if (m.params.cursor === 'second') result = {data: [{id:'model-b',model:'model-b',displayName:'Model B'},...(m.params.includeHidden ? [{id:'hidden',model:'hidden',hidden:true}] : [])],nextCursor:null};
           else result = {data:[{id:'model-a',model:'model-a',defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'medium'}]}],nextCursor:'second'};
         }
         console.log(JSON.stringify({id:m.id,result}));
@@ -264,12 +264,42 @@ test("model/list paginates and preserves the legacy and normalized CLI projectio
   assert.equal((await models())[0].defaultReasoningEffort, "medium");
   const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const catalog = (...args) => JSON.parse(execFileSync(process.execPath, [cli, "models", ...args, "--json"], { cwd: root, encoding: "utf8" }));
-  assert.deepEqual(catalog().map(row => row.model), ["model-a", "hidden"]);
-  assert.deepEqual(catalog("--agent", "codex").models.map(row => row.model), ["model-a", "hidden"]);
+  assert.deepEqual(catalog().map(row => row.model), ["model-a", "model-b", "hidden"]);
+  assert.deepEqual(catalog("--agent", "codex").models.map(row => row.model), ["model-a", "model-b", "hidden"]);
   const normalized = catalog("--agent", "codex", "--catalog");
   assert.equal(normalized.scope, root);
   assert.deepEqual(normalized.entries.filter(row => row.source === "discovered").map(row => row.selector), ["model-a", "model-b"]);
   assert.equal(normalized.entries.find(row => row.selector === "model-b").label, "Model B");
+});
+
+test("launch previews resolve mixed task models, validate effort, and preserve scheduling checks", (t) => {
+  const { root } = fixture(t);
+  const path = join(root, "openspec/changes/demo/execution.yaml");
+  const manifest = JSON.parse(readFileSync(path, "utf8"));
+  manifest.tasks["1.2"].model = "model-b";
+  manifest.tasks["1.2"].reasoningEffort = "high";
+  manifest.tasks["2.1"].dependsOn = [];
+  writeFileSync(path, JSON.stringify(manifest));
+  git(root, "add", ".");
+  git(root, "commit", "-m", "Assign a task model");
+  const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
+  const launch = (ids, ...flags) => JSON.parse(execFileSync(process.execPath, [
+    cli, "launch", "demo", "--tasks", ids, "--default-model", "model-a", "--dry-run", "--json", ...flags,
+  ], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+  const preview = launch("1.1,1.2");
+  assert.deepEqual(preview.tasks.map(row => [row.settings.model, row.settings.reasoningEffort, row.modelSource]), [
+    ["model-a", "medium", "Launch default"],
+    ["model-b", "high", "Explicit task assignment takes precedence"],
+  ]);
+  assert.match(preview.executionIdentity, /^[a-f0-9]{64}$/);
+  const failsWith = pattern => error => { assert.match(error.stdout + error.stderr, pattern); return true; };
+  assert.throws(() => launch("1.1", "--default-effort", "high"), failsWith(/does not advertise effort high/));
+  assert.throws(() => launch("1.1,2.1"), failsWith(/parallel|exclusive/i));
+  manifest.tasks["2.1"].dependsOn = ["1.1"];
+  writeFileSync(path, JSON.stringify(manifest));
+  git(root, "add", ".");
+  git(root, "commit", "-m", "Restore dependency");
+  assert.throws(() => launch("2.1"), failsWith(/dependenc/i));
 });
 test("status and dashboard suggest the same batch and wait for exit before suggesting integration", (t) => {
   const { runner: r, root } = fixture(t);

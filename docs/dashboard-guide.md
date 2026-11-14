@@ -436,7 +436,8 @@ For a launch preview:
    menu shows **Preview launch**, enter the task IDs when the field is blank.
    Select a feature row for a batch or a task row to preview that task alone.
 3. For an unmanaged change, answer the model and effort prompts. If the plan
-   inherits settings, supply an explicit model and, for Codex, effort. Explicit
+   inherits settings, leave the fields blank to use the runner's available
+   defaults, or choose a model and effort. Explicit
    settings already recorded in the plan can be used without overrides.
 4. Read the preview output in details and scroll with the arrow keys.
 

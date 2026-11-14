@@ -41,9 +41,11 @@ test("render failure aborts an active preview and collector and restores termina
     await wait(() => output.includes("a actions"));
     await wait(() => output.includes("0/1 tasks satisfied"));
     const key = async value => { input.write(value); await new Promise(resolve => setTimeout(resolve, 70)); };
-    await key("a"); await key("\u001b[B"); await key("\r"); await key("1.1"); await key("\r"); await key("fixture-model"); await key("\r"); await key("high"); await key("\r");
-    await key("\r"); await key("\r"); // Use the default harness and base.
-    await wait(() => children.length === 2);
+    await key("a"); await key("\u001b[B"); await key("\r"); await key("1.1"); await key("\r");
+    await key("\r"); // Use the default harness.
+    await key("fixture-model"); await key("\r"); await key("high"); await key("\r");
+    await key("\r"); // Use the default base.
+    await wait(() => children.length >= 3 && output.includes("Working…"));
     armed = true; await key("r");
     const settled = await Promise.race([result, new Promise((_, reject) => setTimeout(() => reject(new Error("UI fault did not settle")), 4000))]);
     assert.ok(settled.error, "render fault must reject the UI operation");
