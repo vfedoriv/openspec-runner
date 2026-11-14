@@ -8,17 +8,23 @@ import type { DashboardSnapshot } from "./dashboard-types.js";
 import { shellCommand } from "./system.js";
 import { resolveCommand } from "./platform-command.js";
 import { observeProcess, stopOwnedProcess } from "./platform-process.js";
+import { desktopPathCommand, savedDashboardPath, validateDashboardPath, type DashboardPathKind } from "./dashboard-paths.js";
 
 const sanitize = (text: string) => text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 const bounded = (value: unknown) => sanitize(JSON.stringify(value, null, 2).slice(0, 1024 * 1024));
 
 /** Async child boundary: no shell, independent streams, bounded bytes and complete cleanup. */
-export function dashboardChild(command: string, argv: string[], cwd: string, signal: AbortSignal, mutation = false): Promise<{ stdout: string; stderr: string }> {
+export function dashboardChild(command: string, argv: string[], cwd: string, signal: AbortSignal, mutation = false, stdin?: Buffer): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(new Error("Action cancelled")); return; }
     const grouped = process.platform !== "win32";
     const invocation = resolveCommand({ executable: command, args: argv, cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
-    const child = spawn(invocation.executable, invocation.args, { cwd, shell: false, windowsHide: true, detached: grouped, env: invocation.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(invocation.executable, invocation.args, { cwd, shell: false, windowsHide: true, detached: grouped, env: invocation.env, stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"] });
+    if (stdin && child.stdin) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(stdin);
+    }
+    const childStdout = child.stdout!, childStderr = child.stderr!;
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     let bytes = 0, failure: Error | undefined, identity: string | undefined;
     let stopping: Promise<void> | undefined;
@@ -30,7 +36,7 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
           const stopped = child.pid && identity ? await stopOwnedProcess({ pid: child.pid, createdAt: identity, timeoutMs: 3000 }) : { stopped: false, uncertain: true };
           if (stopped.uncertain) {
             failure = new Error(`${reason}; process termination is uncertain`);
-            child.stdout.destroy(); child.stderr.destroy();
+            childStdout.destroy(); childStderr.destroy();
             cleanup(); reject(failure);
           }
         })();
@@ -48,7 +54,7 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
       if (bytes > 1024 * 1024) { if (!mutation) stop("Action output exceeded 1 MiB"); }
       else chunks.push(chunk);
     };
-    child.stdout.on("data", collect(stdout)); child.stderr.on("data", collect(stderr));
+    childStdout.on("data", collect(stdout)); childStderr.on("data", collect(stderr));
     child.once("error", error => { cleanup(); reject(error); });
     child.once("close", async code => {
       await stopping;
@@ -78,6 +84,49 @@ export async function runDashboardAction(options: {
   const trusted = actionsFor(snapshot, target.id).find(a => a.id === action.id)!;
   if (trusted.kind !== action.kind) throw new Error("Action kind differs from allowlist");
   const suffix = trusted.id.slice(target.id.length + 1);
+  if (trusted.kind === "path") {
+    const [, operation, type] = suffix.split("-");
+    const kind = type as DashboardPathKind;
+    const saved = savedDashboardPath(snapshot, target.id, kind);
+    if (!saved) throw new Error("No saved path is available");
+    const fallback = (message: string) => ({ text: `${message}\n${sanitize(saved.path)}` });
+    if (!trusted.available) return fallback(trusted.reason ?? "Path unavailable");
+    const fresh = await currentSnapshot(snapshot, signal);
+    const current = savedDashboardPath(fresh, target.id, kind);
+    if (!current || current.stale ||
+        current.identity !== saved.identity)
+      return fallback("Saved path changed or is unavailable. Refresh and inspect again.");
+    try { validateDashboardPath(current.path, current.root, kind); }
+    catch (error) { return fallback(error instanceof Error ? error.message : String(error)); }
+    const copy = operation === "copy";
+    const helper = desktopPathCommand(current.path, kind, copy);
+    if (!helper) return fallback("Desktop helper unavailable. Select the path below.");
+    try {
+      if (copy) await dashboardChild(helper.command, helper.args, fresh.repository.root, signal, false, helper.stdin);
+      else {
+        if (signal.aborted) throw new Error("Action cancelled");
+        const invocation = resolveCommand({ executable: helper.command, args: helper.args, cwd: fresh.repository.root });
+        await new Promise<void>((resolve, reject) => {
+          const child = spawn(invocation.executable, invocation.args, {
+            cwd: fresh.repository.root, env: invocation.env, detached: true, windowsHide: true, stdio: "ignore", shell: false,
+          });
+          child.once("error", reject);
+          child.once("spawn", () => {
+            child.unref();
+            const timer = setTimeout(resolve, 400);
+            child.once("exit", code => {
+              clearTimeout(timer);
+              if (code === 0 || helper.command === "explorer.exe" && code === 1) resolve();
+              else reject(new Error("Desktop opener failed"));
+            });
+          });
+        });
+      }
+      return fallback(copy ? "Path copied." : "Open requested.");
+    } catch {
+      return fallback("Desktop helper could not complete the request. Select the path below.");
+    }
+  }
   if (suffix.startsWith("handoff-")) {
     if (!trusted.available) throw new Error(trusted.reason ?? "Action unavailable");
     const root = snapshot.repository.root;

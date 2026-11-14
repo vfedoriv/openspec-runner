@@ -351,6 +351,12 @@ The same entries are available in the CLI's status JSON.
 
 ## Inspect actions and previews
 
+Use **Open integration worktree** on a feature or recovery item, or open the
+saved attempt's worktree or log from Sessions. Task rows use the latest saved
+attempt. Each path also has a **Copy** action. In a remote terminal or when a
+desktop helper is unavailable, the result shows the path for manual selection.
+The dashboard checks the current saved target before opening or copying it.
+
 On a local feature row, choose **View timeline** from the action menu. Use the
 arrow keys to browse milestones and Enter to open the selected evidence.
 Escape returns to the timeline and then to the original view. Use `r` to

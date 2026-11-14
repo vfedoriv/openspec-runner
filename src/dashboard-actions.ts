@@ -5,7 +5,7 @@ import { harnessIds, hasHarness } from "./harnesses/registry.js";
 import { loadPlan } from "./plan.js";
 
 export type DashboardAction = {
-  id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview" | "check" | "change" | "timeline";
+  id: string; label: string; kind: "inspect" | "diff" | "focus" | "command" | "preview" | "check" | "change" | "timeline" | "path";
   available: boolean; reason?: string; argv?: string[]; sessionId?: string;
   initialTasks?: string; fields?: DashboardField[];
 };
@@ -43,6 +43,14 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   if (!task && !session && !snapshot.features.some(f => f.id === targetId) && !snapshot.assignments.some(a => a.id === targetId)) return [];
   const actions: DashboardAction[] = [{ id: `${targetId}:inspect`, label: "Inspect evidence", kind: "inspect", available: true }];
   const add = (suffix: string, label: string, kind: DashboardAction["kind"], reason?: string, argv?: string[]) => actions.push({ id: `${targetId}:${suffix}`, label, kind, available: !reason, reason, argv });
+  const pathActions = (kind: DashboardPathKind, label: string) => {
+    const saved = savedDashboardPath(snapshot, targetId, kind);
+    if (!saved) return;
+    const reason = saved.stale ? "Refresh stale path evidence first" :
+      kind === "worktree" && session?.worktreeAvailable === false ? "Saved worktree is missing" : undefined;
+    add(`path-open-${kind}`, `Open ${label}`, "path", reason);
+    add(`path-copy-${kind}`, `Copy ${label} path`, "path", reason);
+  };
   const form = (suffix: string, label: string, kind: "check" | "change", argv: string[], fields: DashboardField[] = [], reason?: string) => {
     add(suffix, label, kind, reason, argv);
     actions.at(-1)!.fields = fields;
@@ -64,6 +72,9 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     add("diff", "View saved attempt diff", "diff", session.worktreeAvailable !== true ? session.worktreeAvailable === false ? "Saved worktree is missing" : "Saved worktree availability is unknown; refresh first" : !/^[a-f0-9]{40,64}$/.test(session.attempt.base) ? "Saved base is not a commit identity" : undefined);
     add("focus", "Focus saved terminal", "focus", focusReason(session));
     actions.at(-1)!.sessionId = session.id;
+    pathActions("worktree", session.role === "implementation" ? "task worktree" : `${session.role} worktree`);
+    pathActions("log", "saved log");
+    pathActions("integration", "integration worktree");
   }
   if (feature?.coordination && snapshot.storeContext) {
     const { store, map } = snapshot.storeContext;
@@ -114,6 +125,11 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
     return actions;
   }
   const change = feature.change;
+  pathActions("integration", "integration worktree");
+  if (task) {
+    pathActions("worktree", "latest task worktree");
+    pathActions("log", "latest task log");
+  }
   if (!task) {
     const stale = snapshot.sources[feature.id]?.stale ? "Refresh stale change evidence first" : undefined;
     if (feature.missingExecution) {
@@ -265,3 +281,4 @@ export function previewCommand(snapshot: DashboardSnapshot, action: DashboardAct
   } else throw new Error("Preview unavailable");
   return [...argv, "--dry-run", "--json"];
 }
+import { savedDashboardPath, type DashboardPathKind } from "./dashboard-paths.js";

@@ -16,29 +16,34 @@
 
 **Files** `src/dashboard-view.ts`, `src/dashboard-ui.tsx`, `src/dashboard-layout.ts`, and dashboard view/UI tests.
 
-- [ ] Add a pure Overview row builder that produces stable rows with a category, label, target ID, and optional existing action ID. Build candidates from recovery entries, lifecycle status, readiness, and current action availability. Treat CLI suggestions as evidence for selecting a target; dispatch only an action reconstructed by the existing allowlist.
-- [ ] Put unresolved integration and repair conflicts first, then actionable failures, approvals, and eligible integrations. Prefer a single integration item for an exact suggested selection. Show eligible launch suggestions after work that requires a decision. Rank ties by feature name and stable ID.
-- [ ] Show passive waits in **In progress**, including accepted reports awaiting exit or stop evidence. Show source failures as inspection items. Deduplicate Attention, recovery, and lifecycle signals for the same operation and target. If evidence establishes several distinct issues, keep each separately reachable.
-- [ ] Enter opens evidence for conflicts, failures, and waits. For eligible reviewable operations, Enter opens the existing form or review flow, including its exact-task selection and explicit confirmation. Recheck the current action and never silently substitute a different attempt. If there is no actionable work, show the reason or link to the first-run guidance from Phase 4.
-- [ ] Test a mixed snapshot with a conflict, final approval, ready integration, and a waiting worker. Assert ordering, deduplication, exact target selection, stale-source suppression of executable actions, and no launch or write from opening Overview. Test that changing the selected attempt during refresh invalidates an open action.
+- [x] Add a pure Overview row builder that produces stable rows with a category, label, target ID, and optional existing action ID. Build candidates from recovery entries, lifecycle status, readiness, and current action availability. Treat CLI suggestions as evidence for selecting a target; dispatch only an action reconstructed by the existing allowlist.
+- [x] Put unresolved integration and repair conflicts first, then actionable failures, approvals, and eligible integrations. Prefer a single integration item for an exact suggested selection. Show eligible launch suggestions after work that requires a decision. Rank ties by feature name and stable ID.
+- [x] Show passive waits in **In progress**, including accepted reports awaiting exit or stop evidence. Show source failures as inspection items. Deduplicate Attention, recovery, and lifecycle signals for the same operation and target. If evidence establishes several distinct issues, keep each separately reachable.
+- [x] Enter opens evidence for conflicts, failures, and waits. For eligible reviewable operations, Enter opens the existing form or review flow, including its exact-task selection and explicit confirmation. Recheck the current action and never silently substitute a different attempt. When the list is empty, point to project actions.
+- [ ] Link the Overview empty state to the guided first-run flow once Phase 4 lands.
+- [x] Verify conflict ordering, approval and wait display, and stale action suppression.
+- [ ] Extend tests for mixed snapshots with ready integration, exact target dispatch, deduplication, and selection changes during refresh.
+
 
 ## 2. Add a feature timeline
 
 **Files** `src/dashboard-types.ts`, `src/dashboard-reader.ts`, `src/dashboard-view.ts`, `src/dashboard-ui.tsx`, and dashboard reader/UI tests.
 
-- [ ] Add a **View timeline** action to local feature rows. Group the timeline by change and show task attempts and managed review/repair jobs together. Derive entries for launch, accepted report, recorded worker exit or agent stop, integrated result, plan/final approval, and archive when corresponding records exist.
-- [ ] Audit recorded timestamps for each event. Use persisted event times where available. Put undated milestones in a labeled section with their recorded identity and state. A log line or snapshot collection time cannot establish when a runner transition occurred. Preserve reported and integrated as distinct events. Keep historical attempts selectable even when hidden in Sessions by default.
-- [ ] Use stable event IDs and deterministic ordering. Start with recent events, allow scrolling to older entries, and keep the selected event anchored during refresh. Enter opens the related attempt, report, integration, or approval evidence. Display source freshness when a cached timeline is retained.
-- [ ] Test retries, equal timestamps, undated legacy records, a report followed by an exit receipt, and a review/repair cycle. Verify that a refresh does not duplicate events, move the selection, or imply that a worker report completed integration.
+- [x] Add a **View timeline** action to local feature rows. Group the timeline by change and show task attempts and managed review/repair jobs together. Derive entries for launch, accepted report, recorded worker exit or agent stop, integrated result, plan/final approval, and archive when corresponding records exist.
+- [x] Audit recorded timestamps for each event. Use persisted event times where available. Label undated milestones individually with their recorded identity and state. A log line or snapshot collection time cannot establish when a runner transition occurred. Preserve reported and integrated as distinct events. Keep historical attempts selectable even when hidden in Sessions by default.
+- [x] Use stable event IDs and deterministic ordering. Start with recent events, allow scrolling to older entries, and keep the selected event anchored during refresh. Enter opens the related attempt, report, integration, or approval evidence. Display source freshness when a cached timeline is retained.
+- [x] Test historical retries, equal timestamps, undated reports, recorded exits, and a repair integration. Verify deterministic results after refresh and that a report does not imply integration.
+- [ ] Exercise keyboard selection retention and evidence navigation during a live refresh.
 
 ## 3. Open or copy the exact worktree or log
 
 **Files** `src/dashboard-actions.ts`, `src/dashboard-action-runner.ts`, `src/platform-command.ts` or the existing platform adapter modules, and dashboard action tests.
 
-- [ ] Add **Open task worktree**, **Open integration worktree**, **Open saved log**, and context-specific **Copy path** actions. Resolve each path from the exact current session, feature, or recovery entry. Clearly label which worktree will open. Also expose the plain path in details for terminals without clipboard support.
-- [ ] Re-read saved target identity and path before invoking a platform helper. Check expected file/directory type and canonical location against the corresponding runner worktree or log root. Disable open actions for missing paths, changed attempts, or stale evidence. Retained evidence may still show the original path for reference.
-- [ ] Use native file and clipboard adapters with argument arrays or stdin. Detect unsupported desktop or remote terminal environments and provide the selectable path. Avoid launching a shell or evaluating stored paths as commands.
-- [ ] Test paths with spaces and shell metacharacters, redirected paths, missing files, stale rows, and unsupported clipboard/open helpers. Use fake adapters in automated tests. Verify manual behavior on supported Windows and POSIX desktop environments.
+- [x] Add **Open task worktree**, **Open integration worktree**, **Open saved log**, and context-specific **Copy path** actions. Resolve each path from the exact current session, feature, or recovery entry. Clearly label which worktree will open. Also expose the plain path in details for terminals without clipboard support.
+- [x] Re-read saved target identity and path before invoking a platform helper. Check expected file/directory type and canonical location against the corresponding runner worktree or log root. Reject open requests for missing paths, changed attempts, or stale evidence. Retained evidence may still show the original path for reference.
+- [x] Use native file and clipboard adapters with argument arrays or stdin. Detect unsupported desktop or remote terminal environments and provide the selectable path. Avoid launching a shell or evaluating stored paths as commands.
+- [x] Test spaces and shell metacharacters, missing paths, type and root checks, and unsupported desktop or remote environments.
+- [ ] Exercise redirected paths, stale rows, and helper invocation end to end. Verify native desktop behavior on Windows and POSIX.
 
 ## 4. Guide the first run
 
@@ -62,6 +67,8 @@
 
 Ship Overview first. Timeline and path actions can follow independently once their evidence and target identities are established. Land first-run guidance and filter improvements together if they share the same empty-state work.
 
-- [ ] Run the affected dashboard tests and `pnpm test` for each phase. Confirm that `dashboard --once` and `dashboard --json` remain read-only and compatible with existing consumers.
+- [x] Run the affected dashboard tests and `pnpm test` for phases 1–3.
+- [ ] Run the affected dashboard tests and `pnpm test` for phases 4–5. Confirm that `dashboard --once` and `dashboard --json` remain read-only and compatible with existing consumers.
 - [ ] Walk through four disposable scenarios with the keyboard in standard and narrow terminals. Use a fresh repository, a running feature with a retry, a conflicted integration with a reported worker waiting for exit, and completed work hidden by filters.
-- [ ] Update `docs/dashboard-guide.md` with shortcuts, view examples, path-opening fallbacks, and what each recovery or timeline entry represents.
+- [x] Document Overview, timeline navigation, and path-opening fallbacks in `docs/dashboard-guide.md`.
+- [ ] Document first-run and filter changes when they land.

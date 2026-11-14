@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { desktopPathCommand, validateDashboardPath } from "../dist/dashboard-paths.js";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -265,6 +266,21 @@ test("dashboard manages approval, review, repair, final approval and archive", a
   await run("archive");
   assert.equal(fixture.f.read("demo").phase, "completed");
   assert.equal(fixture.getControl().archiveCalls, 1);
+});
+
+test("desktop path helpers keep shell metacharacters literal and reject paths outside runner roots", t => {
+  const root = mkdtempSync(join(tmpdir(), "dashboard path "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const log = join(root, "say & copy.log");
+  writeFileSync(log, "saved log");
+  assert.doesNotThrow(() => validateDashboardPath(log, root, "log"));
+  assert.throws(() => validateDashboardPath(join(root, ".."), root, "worktree"), /outside/);
+  assert.throws(() => validateDashboardPath(log, root, "worktree"), /wrong file type/);
+  assert.throws(() => validateDashboardPath(join(root, "missing.log"), root, "log"), /unavailable/);
+  assert.deepEqual(desktopPathCommand(log, "log", false, "win32", {}).args, [log]);
+  assert.equal(desktopPathCommand(log, "log", true, "linux", { WAYLAND_DISPLAY: "wayland-0" }).stdin.toString(), log);
+  assert.equal(desktopPathCommand(log, "log", false, "linux", {}), undefined);
+  assert.equal(desktopPathCommand(log, "log", true, "win32", { SSH_CONNECTION: "remote" }), undefined);
 });
 
 test("action menus project known worktree availability without consulting filesystem", () => {
