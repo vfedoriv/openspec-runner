@@ -1,6 +1,6 @@
 # Dashboard Model Assignments Implementation Plan
 
-**Status** — Core dashboard workflows implemented. Checkboxes indicate completed verification for the stated scope.
+**Status** — Core dashboard workflows implemented. See the 2026-11-14 re-check for remaining implementation and coverage gaps in the checked items.
 
 **Goal** — Let operators browse models by harness, choose compatible reasoning effort, and review and save model assignments where they manage local OpenSpec work.
 
@@ -78,6 +78,25 @@
 - [x] Verify live Claude discovery with Claude Code 2.1.312 on Windows. Its control initialization returned five selectors and effort metadata without a user prompt. Missing Claude and Copilot executables were verified with CLI fixtures.
 - [ ] Verify native Linux Copilot shutdown and a live multi-model Copilot account. Copilot SDK 1.0.34 and CLI 1.0.112 returned only `auto` on the available Free account. This WSL distribution has no native Node.js or Copilot runtime. Evaluate VS Code discovery only if the profile-scoped manual workflow proves too limiting.
 - [x] Update `docs/dashboard-guide.md` and the CLI reference with the model picker, one-off launch defaults, durable task edits, and managed approval flow. Run `pnpm test`, exercise affected commands with `--json` and `--dry-run`, and run the Ink keyboard flows at narrow and wide terminal sizes. Verify that reopening the dashboard reflects the saved plan and that attempt history distinguishes requested and observed model evidence.
+
+## Remaining gaps from the 2026-11-14 re-check
+
+Follow-up work is tracked in the [implementation plan](2026-11-14-dashboard-model-implementation-gaps.md) and the [testing plan](2026-11-14-dashboard-model-testing-gaps.md).
+
+### Implementation gaps
+
+- **Pending task integration.** The assignment editor rejects recorded integration transactions and successful repairs awaiting integration. Its guard can still allow edits after an implementation attempt completes and its worker exits, before task integration starts. The runner can offer integration for that completed attempt.
+- **Effort-only edits without a resolvable model.** The editor skips adapter resolution when a Codex or Claude task inherits a model and there is no concrete project default or approved implementation model. In that case a manual effort can be saved without the adapter's effort validation, deferring validation to launch or approval.
+- **Assignment provenance and catalog context.** Task edit previews show old, new, and resolvable settings but have no dedicated source fields. Managed approval previews label model provenance only, so explicit task effort can be shown next to an inherited model without its own source. Task and session details expose underlying settings and evidence, but do not consistently summarize provenance. The Models panel omits the catalog scope and fetch time present in JSON and labels missing saved selectors as `saved` without indicating whether discovery succeeded and the selector was absent or discovery was unavailable.
+- **Approval settings reuse.** The preview displays the settings JSON for manual reuse with `--file`. There is no dedicated copy or file export action.
+
+### Verification gaps
+
+- **Live catalog parity.** The recorded Windows probes cover eight visible Codex models, Claude CLI initialization with five selectors, and Copilot Free with `auto`. Codex planning-checkout versus managed-worker provider and configuration parity remains unverified. The proposed Claude Agent SDK `Query.supportedModels()` comparison, cleanup, and live validation of advertised selectors and effort during worker startup remain unverified. The current Claude probe uses CLI control initialization.
+- **Copilot platforms and effort.** Native Linux CLI/SDK shutdown and a live account with multiple selectable models remain unverified. Copilot CLI effort is still unsupported by the runner, and startup acceptance and honoring of effort have not been established. The VS Code editor bridge remains an optional follow-up; profile identity, consent, and selector mapping have not been tested.
+- **Assignment write guards.** Existing fixtures cover active work, stale state and file bytes, completed checklist tasks, a local binding record, redirected paths, and a Windows replacement error. Dedicated editor cases are missing for YAML alias rejection, an alternate planning checkout, unacknowledged worker termination, in-progress integration, successful repair awaiting integration, and completed or archived feature state. The binding fixture uses a malformed binding record, so it does not directly assert rejection of a valid imported binding by the editor.
+- **Ink coverage.** The keyboard test drives setup, launch, retry, a single-task edit, and approval at 140 columns with an injected action handler. Separate layout tests cover narrow terminals. Direct coverage is still missing for the full picker workflow at narrow widths, switching away from a model with a selected effort and confirming it clears, and bulk task editing through the Ink form and confirmation. The fixture-based CLI and action-runner tests cover persisted task edits and managed approval separately.
+- **Fresh Windows verification.** The installed TypeScript compiler built successfully, and the catalog and Ink picker tests passed. `pnpm test` could not fetch the pinned pnpm version. Running the repository test harness directly produced failures including Git fixture setup errors. With temporary fixtures under the workspace and a process-local Git trust setting, the assignment stdin preview/apply and Windows replacement tests passed. The other three assignment tests failed on hard-link or junction permissions or because the fake OpenSpec executable ran as ESM inside this package. The earlier recorded full-suite result still needs a fresh reproduction in a suitable environment.
 
 ## Release scope
 
