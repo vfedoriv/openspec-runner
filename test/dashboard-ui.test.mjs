@@ -430,11 +430,14 @@ for (const [name, completed, total, expected] of [["shared-only", 0, 0, "0/0"], 
 test("session details distinguish requested and observed model", async () => {
   const { detailLines } = await import("../dist/dashboard-view.js");
   const session = { id: "session:model", featureId: "local:a", attempt: {
-    id: "attempt:model", settings: { model: "auto", requestedModel: "auto", observedModel: "observed-model" },
+    id: "attempt:model", settings: { model: "auto", requestedModel: "auto", observedModel: "observed-model", sources: ["task.model"] },
   } };
   const lines = detailLines({ ...snapshot, sessions: [session] }, session.id);
   assert.ok(lines.includes("Requested model: auto"));
   assert.ok(lines.includes("Observed model: observed-model"));
+  assert.ok(lines.includes("Attempt settings sources: task.model"));
+  delete session.attempt.settings.observedModel;
+  assert.ok(!detailLines({ ...snapshot, sessions: [session] }, session.id).some(line => line.startsWith("Observed model:")));
 });
 
 test("task details distinguish configured and approved model settings", async () => {

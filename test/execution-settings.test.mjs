@@ -25,6 +25,12 @@ test("assignment preview preserves bytes and rejects stale settings before apply
   const preview = editExecutionSettings("demo", patch, undefined, root);
   assert.equal(readFileSync(execution, "utf8"), before);
   assert.equal(preview.changes[0].effective.reasoningEffort, "high");
+  assert.equal(preview.changes[0].modelSource, "Task setting");
+  assert.equal(preview.changes[0].effortSource, "Task setting");
+  const unresolved = editExecutionSettings("demo", { tasks: [{ id: "1.1", effort: "high" }] }, undefined, root);
+  assert.equal(unresolved.changes[0].effective, undefined);
+  assert.match(unresolved.changes[0].validation, /after the model resolves/);
+  assert.throws(() => editExecutionSettings("demo", { tasks: [{ id: "1.1", effort: "\n" }] }, undefined, root), /Invalid effort/);
   writeFileSync(execution, before + "# concurrent edit\r\n");
   assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /stale/);
   const updated = editExecutionSettings("demo", patch, undefined, root);
@@ -79,6 +85,25 @@ test("bulk starter preview is read-only and publishes v2 assignments exclusively
   assert.match(git(root, "status", "--short"), /execution.yaml/);
 });
 
+test("Claude effort can be set and cleared before the inherited model resolves", async t => {
+  const { featureFixture } = await import("./helpers/feature-fixture.mjs");
+  const { root } = featureFixture(t, { unchecked: true });
+  const path = join(root, "openspec/changes/demo/execution.yaml");
+  writeFileSync(path, 'version: 2\nagent: claude\ntasks:\n  "1.1": {}\n');
+  const patch = { tasks: [{ id: "1.1", effort: "high" }] };
+  const preview = editExecutionSettings("demo", patch, undefined, root);
+  assert.equal(preview.changes[0].effective, undefined);
+  assert.equal(preview.changes[0].modelSource, "Unresolved");
+  assert.equal(preview.changes[0].effortSource, "Task setting");
+  assert.match(preview.changes[0].validation, /after the model resolves/);
+  editExecutionSettings("demo", patch, preview.token, root);
+  assert.match(readFileSync(path, "utf8"), /effort: high/);
+  const clear = { tasks: [{ id: "1.1", effort: null }] };
+  const reset = editExecutionSettings("demo", clear, undefined, root);
+  editExecutionSettings("demo", clear, reset.token, root);
+  assert.doesNotMatch(readFileSync(path, "utf8"), /effort:/);
+});
+
 test("committed assignment changes require reconcile and approval before a retry", async t => {
   const { featureFixture, featureSettings, git } = await import("./helpers/feature-fixture.mjs");
   const { root, r, f, approve } = featureFixture(t, { unchecked: true });
@@ -90,6 +115,18 @@ test("committed assignment changes require reconcile and approval before a retry
   state.attempts[0].phase = "failed";
   r.save(state);
   const preview = editExecutionSettings("demo", patch, undefined, root);
+  const execution = join(root, "openspec/changes/demo/execution.yaml");
+  const original = readFileSync(execution);
+  state.attempts[0].phase = "completed";
+  state.attempts[0].worker = { token: "test", exitedAt: "now", exitCode: 0, log: "test.log" };
+  state.attempts[0].report = { attempt: attempt.id, task: "1.1", session: "done", outcome: "completed", summary: "Done", verification: [] };
+  r.save(state);
+  assert.throws(() => editExecutionSettings("demo", patch, undefined, root), /Integrate completed task/);
+  assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /Integrate completed task/);
+  assert.deepEqual(readFileSync(execution), original);
+  delete state.attempts[0].worker;
+  delete state.attempts[0].report;
+  state.attempts[0].phase = "failed";
   state.attempts[0].description = "Changed after preview";
   r.save(state);
   assert.throws(() => editExecutionSettings("demo", patch, preview.token, root), /stale/);
@@ -108,6 +145,14 @@ test("committed assignment changes require reconcile and approval before a retry
   assert.equal(retry.settings.model, "replacement");
   assert.equal(retry.settings.reasoningEffort, "medium");
   assert.equal(r.read("demo").attempts[0].settings.model, attempt.settings.model);
+  const integrated = r.read("demo");
+  integrated.attempts.at(-1).phase = "integrated";
+  delete integrated.attempts.at(-1).worker;
+  r.save(integrated);
+  writeFileSync(join(root, "openspec/changes/demo/tasks.md"), "- [x] 1.1 Produce output\n- [ ] 1.2 Follow-up\n");
+  writeFileSync(execution, readFileSync(execution, "utf8") + '  "1.2": {}\n');
+  const next = editExecutionSettings("demo", { tasks: [{ id: "1.2", model: "next" }] }, undefined, root);
+  assert.equal(next.changes[0].task, "1.2");
 });
 
 test("assignment edits fail closed on redirected files and component authority", async t => {

@@ -8,7 +8,7 @@ import type { DashboardSnapshot } from "./dashboard-types.js";
 import { shellCommand } from "./system.js";
 import { resolveCommand } from "./platform-command.js";
 import { observeProcess, stopOwnedProcess } from "./platform-process.js";
-import { desktopPathCommand, savedDashboardPath, validateDashboardPath, type DashboardPathKind } from "./dashboard-paths.js";
+import { desktopClipboardCommand, desktopPathCommand, savedDashboardPath, validateDashboardPath, type DashboardPathKind } from "./dashboard-paths.js";
 
 const sanitize = (text: string) => text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 const bounded = (value: unknown) => sanitize(JSON.stringify(value, null, 2).slice(0, 1024 * 1024));
@@ -17,6 +17,12 @@ export async function readDashboardCatalog(root: string, harness: string, signal
   const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const output = await dashboardChild(process.execPath, [entry, "models", "--agent", harness, "--catalog", "--json"], root, signal);
   return JSON.parse(output.stdout) as Awaited<ReturnType<typeof import("./model-catalog.js").modelCatalog>>;
+}
+
+export async function copyDashboardSettings(json: string, root: string, signal: AbortSignal) {
+  const helper = desktopClipboardCommand(json);
+  if (!helper) throw new Error("Clipboard unavailable. Select the settings JSON in the preview.");
+  await dashboardChild(helper.command, helper.args, root, signal, false, helper.stdin);
 }
 
 /** Async child boundary: no shell, independent streams, bounded bytes and complete cleanup. */
@@ -81,7 +87,7 @@ async function currentSnapshot(snapshot: DashboardSnapshot, signal: AbortSignal)
 
 export async function runDashboardAction(options: {
   snapshot: DashboardSnapshot; action: DashboardAction; input?: PreviewInput; signal: AbortSignal; confirmation?: string;
-}): Promise<{ text: string; command?: string[]; confirmation?: string }> {
+}): Promise<{ text: string; command?: string[]; confirmation?: string; settingsJson?: string }> {
   const { snapshot, action, input, signal } = options;
   if (signal.aborted) throw new Error("Action cancelled");
   const targets = [{ id: projectTarget }, ...snapshot.features, ...snapshot.tasks, ...snapshot.sessions, ...snapshot.assignments];
@@ -318,7 +324,7 @@ export async function runDashboardAction(options: {
       if (settingsInput) {
         const before = feature?.state?.approval?.tasks;
         const assigned = new Map(current.tasks.filter(row => row.featureId === feature?.id)
-          .map(row => [row.task.id, row.assignment?.model]));
+          .map(row => [row.task.id, row.assignment]));
         const taskSettings = Object.entries(result.tasks as Record<string, import("./harnesses/types.js").HarnessSettings>)
           .map(([task, settings]) => ({
             task,
@@ -327,7 +333,11 @@ export async function runDashboardAction(options: {
             },
             model: settings.model,
             effort: settings.effort ?? settings.reasoningEffort ?? "Harness default",
-            source: assigned.get(task) && assigned.get(task) !== "session" ? "Explicit task model" : "Implementation default model",
+            modelSource: assigned.get(task)?.model && assigned.get(task)?.model !== "session"
+              ? "Explicit task model" : "Implementation default model",
+            effortSource: assigned.get(task)?.effort ?? assigned.get(task)?.reasoningEffort
+              ? "Explicit task effort" : settings.effort ?? settings.reasoningEffort
+                ? "Implementation default effort" : "Harness default",
           }));
         details = { taskSettings, ...result };
       }
@@ -343,6 +353,7 @@ export async function runDashboardAction(options: {
         bounded(details), settingsInput && "Settings JSON for CLI reuse (save as a file and pass --file)",
         settingsInput && bounded(input?.roleSettings)].filter(Boolean).join("\n"),
       confirmation: JSON.stringify({ reviewed, token }),
+      settingsJson: settingsInput?.toString("utf8"),
     };
   }
   const localOperations = ["launch-run", "retry-run", "recover-run", "integrate-run", "integrate-continue",

@@ -42,6 +42,9 @@ export function editExecutionSettings(change: string, input: unknown, confirm?: 
     if (document.errors.length) throw document.errors[0];
     visit(document, (_, node) => { if (isAlias(node)) throw new Error("Resolve YAML aliases before editing assignments"); });
     const plan = loadPlan(root, change, original);
+    if (state && plan.tasks.some(task => !task.completed && !runner.satisfied(state, task.id) &&
+        runner.latest(state, task.id)?.phase === "completed"))
+      throw new Error("Integrate completed task work before editing assignments");
     const tasks = (input as { tasks?: unknown } | null)?.tasks;
     if (!Array.isArray(tasks) || !tasks.length) throw new Error("Select at least one task");
     const effortKey = document.get("version") === 1 ? "reasoningEffort" : "effort";
@@ -78,7 +81,14 @@ export function editExecutionSettings(change: string, input: unknown, confirm?: 
       const canResolve = inherited || after.model && after.model !== "session";
       const effective = canResolve || plan.agent.startsWith("copilot")
         ? adapter.resolveSettings(after, inherited, config) : undefined;
-      return { task, before: plan.assignments[task], after, effective };
+      const effort = after.effort ?? after.reasoningEffort;
+      const modelSource = after.model && after.model !== "session" ? "Task setting"
+        : !effective ? "Unresolved" : feature?.approval ? "Approved implementation default" : "Project default";
+      const effortSource = effort ? "Task setting"
+        : !effective ? "Unresolved" : effective.effort ?? effective.reasoningEffort
+          ? "Approved implementation default" : "Harness default";
+      const validation = !effective && effort ? "Validate effort after the model resolves at launch or approval" : undefined;
+      return { task, before: plan.assignments[task], after, effective, modelSource, effortSource, validation };
     });
     const next = original.includes("\r\n") ? document.toString().replace(/\n/g, "\r\n") : document.toString();
     const diff = changes.map(({ task, before, after }) => {

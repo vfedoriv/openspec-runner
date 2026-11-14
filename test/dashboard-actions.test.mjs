@@ -278,6 +278,7 @@ test("dashboard manages approval, review, repair, final approval and archive", a
   assert.match(formPreview.text, /"maxFixRounds": 3/);
   assert.match(formPreview.text, /Implementation default model/);
   assert.match(formPreview.text, /Settings JSON for CLI reuse/);
+  assert.deepEqual(JSON.parse(formPreview.settingsJson), roleSettings);
   assert.ok(formPreview.confirmation);
   const planningPath = join(fixture.root, "openspec/changes/demo/tasks.md");
   const planningBytes = readFileSync(planningPath);

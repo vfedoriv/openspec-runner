@@ -144,7 +144,8 @@ test("Models panel searches labels and switches harnesses without running a work
   const requests = [];
   const readCatalog = async (_, harness) => {
     requests.push(harness);
-    return { harness, status: "available", entries: harness === "codex" ? [
+    if (requests.length === 2) throw new Error("offline");
+    return { harness, status: "available", scope: "/repo", fetchedAt: "2026-11-14T00:00:00.000Z", entries: harness === "codex" ? [
       { selector: "sample-a", label: "Alpha", source: "discovered" },
       { selector: "sample-b", label: "Beta", source: "discovered", efforts: ["high"], defaultEffort: "high" },
     ] : [{ selector: "sonnet", source: "example" }] };
@@ -162,6 +163,11 @@ test("Models panel searches labels and switches harnesses without running a work
     for (let i = 0; i < index; i++) await key("\u001b[B");
     await key("\r");
     assert.match(output, /sample-a/);
+    assert.match(output, /Fetched 2026-11-14T00:00:00.000Z · Scope \/repo/);
+    output = "";
+    await key("\u0012");
+    assert.match(output, /Cached catalog · refresh failed/);
+    assert.match(output, /Fetched 2026-11-14T00:00:00.000Z/);
     output = "";
     await key("Beta");
     assert.match(output, /sample-b · Beta · discovered · effort high · default high/);
@@ -170,7 +176,7 @@ test("Models panel searches labels and switches harnesses without running a work
     await key("\u001b[C");
     assert.match(output, /Models · claude/);
     assert.match(output, /sonnet · example/);
-    assert.deepEqual(requests, ["codex", "claude"]);
+    assert.deepEqual(requests, ["codex", "codex", "claude"]);
   } finally { lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy(); }
 });
 
@@ -197,9 +203,19 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
       harness === "copilot" ? [{ selector: "Model Name (vendor)" }] : [
         { selector: "sample-a", efforts: ["low"] }, { selector: "sample-b", efforts: ["high"] },
       ] });
-    const runAction = async request => { calls.push(request); return { text: "Preview completed" }; };
+    const copied = [];
+    const runAction = async request => {
+      calls.push(request);
+      return managed && !request.confirmation
+        ? { text: "Preview completed", confirmation: "reviewed", settingsJson: JSON.stringify(request.input.roleSettings) }
+        : { text: "Preview completed" };
+    };
     const instance = render(React.createElement(DashboardUi, {
       snapshot, collector: { refresh() {} }, lifetime: lifetime.signal, quit() {}, readCatalog, runAction,
+      copySettings: async json => {
+        copied.push(json);
+        if (copied.length === 1) throw new Error("Clipboard failure");
+      },
     }), { stdin, stdout, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false });
     const key = async value => {
       stdin.write(value);
@@ -260,6 +276,14 @@ test("catalog keyboard choices reach setup, launch, retry, task edit, and manage
           repair: { harness: "codex", model: "sample-b", effort: "high" },
           maxFixRounds: 2,
         });
+        await key("y");
+        assert.match(output, /Clipboard unavailable/);
+        await key("y");
+        assert.match(output, /Settings JSON copied/);
+        assert.deepEqual(copied, [JSON.stringify(input.roleSettings), JSON.stringify(input.roleSettings)]);
+        assert.equal(calls.length, 1);
+        await key(enter);
+        assert.equal(calls[1].confirmation, "reviewed");
       } else {
         assert.deepEqual(input.taskIds, ["1.1"], flow);
         assert.equal(input.model, "sample-b", flow);

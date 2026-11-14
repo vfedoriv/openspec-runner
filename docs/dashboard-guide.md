@@ -516,7 +516,8 @@ approval check shows the previous and proposed settings for each task, including
 which models come from the implementation default. Enter an explicit effort for
 Codex. Leave Claude effort blank to use its CLI default where the task has no
 effort override. The preview also displays the form JSON for reuse with
-`feature approve --file`.
+`feature approve --file`. Press `y` on the confirmation preview to copy
+the reviewed JSON. If the clipboard is unavailable, select it in the preview.
 
 ## Monitor shared assignments
 

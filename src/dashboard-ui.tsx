@@ -4,16 +4,17 @@ import { startDashboardCollector } from "./dashboard-client.js";
 import { actionsFor, projectTarget, taskInputLimit, type DashboardAction, type DashboardField, type PreviewInput } from "./dashboard-actions.js";
 import { catalogEntries, loadPickerCatalog, searchCatalog, type CatalogCache } from "./dashboard-catalog.js";
 import { harnessIds } from "./harnesses/registry.js";
-import { readDashboardCatalog, runDashboardAction } from "./dashboard-action-runner.js";
+import { copyDashboardSettings, readDashboardCatalog, runDashboardAction } from "./dashboard-action-runner.js";
 import { dashboardViews, dashboardFilterChoices, defaultDashboardFilters, selectDashboardRows, preserveSelection, featureTimeline, firstRunRows, detailLines, safeText, mergeActivity, activityLineCount, activityViewport, filterActivity, preserveActivityOffset, type DashboardFilters, type DashboardFilterKey, type DashboardView } from "./dashboard-view.js";
 import type { DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
 import type { ActivityEntry } from "./activity-types.js";
 import { dashboardFrame, dashboardLayout, type DashboardLine } from "./dashboard-layout.js";
 type Collector = ReturnType<typeof startDashboardCollector>;
-export function DashboardUi({ snapshot, collector, failure, quit, lifetime, readCatalog = readDashboardCatalog, runAction = runDashboardAction }: {
+export function DashboardUi({ snapshot, collector, failure, quit, lifetime, readCatalog = readDashboardCatalog, runAction = runDashboardAction, copySettings = copyDashboardSettings }: {
   snapshot?: DashboardSnapshot; collector: Collector; failure?: string; quit(): void; lifetime: AbortSignal;
   readCatalog?: typeof readDashboardCatalog;
   runAction?: typeof runDashboardAction;
+  copySettings?: typeof copyDashboardSettings;
 }) {
   const { columns, rows: height } = useWindowSize();
   useFocus({ autoFocus: true });
@@ -122,7 +123,8 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   }, [session?.id, session?.log, session?.activityPath, session?.attempt.id, session?.attempt.agent, mode]);
   useEffect(() => { if (!following || !session) return; const timer = setInterval(() => { void loadRef.current("newer"); }, 2000); return () => clearInterval(timer); }, [following, session?.id, session?.log, session?.activityPath, session?.attempt.id, session?.attempt.agent, mode]);
   useEffect(() => { const stop = () => { actionController.current?.abort(); activityController.current?.abort(); }; lifetime.addEventListener("abort", stop); return () => { stop(); lifetime.removeEventListener("abort", stop); }; }, [lifetime]);
-  const [confirmation, setConfirmation] = useState<{ action: DashboardAction; input?: PreviewInput; text: string }>();
+  const [confirmation, setConfirmation] = useState<{ action: DashboardAction; input?: PreviewInput; text: string; settingsJson?: string }>();
+  const [copyNotice, setCopyNotice] = useState("");
   const [launchFollowup, setLaunchFollowup] = useState<{ action: DashboardAction; input?: PreviewInput }>();
   const applying = useRef(false);
   const execute = async (action: DashboardAction, input?: PreviewInput, approved?: string) => {
@@ -140,7 +142,10 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
           const feature = snapshot.features.find(feature => action.id === `${feature.id}:validate`);
           if (feature?.planFingerprint) setValidated(previous => new Set([...previous, `${feature.id}:${feature.planFingerprint}`]));
         }
-        if (result.confirmation) setConfirmation({ action, input, text: result.confirmation });
+        if (result.confirmation) {
+          setCopyNotice("");
+          setConfirmation({ action, input, text: result.confirmation, settingsJson: result.settingsJson });
+        }
         if (target && /:(launch|retry)-preview$/.test(action.id)) {
           const next = actionsFor(snapshot, target).find(candidate => candidate.id === action.id.replace(/-preview$/, "-run"));
           if (next?.available) setLaunchFollowup({ action: next, input });
@@ -270,6 +275,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
       overviewSelection.current = undefined;
       setConfirmation(undefined); setEdit(undefined); setPreview(undefined);
       setPane("details"); setOutput("Selection changed; review the current item again"); return;
+    }
+    if (confirmation?.settingsJson && snapshot && input === "y") {
+      void copySettings(confirmation.settingsJson, snapshot.repository.root, lifetime).then(
+        () => setCopyNotice("Settings JSON copied"),
+        () => setCopyNotice("Clipboard unavailable · select the settings JSON in the preview"),
+      );
+      return;
     }
     if (confirmation && (key.return || key.escape)) {
       setConfirmation(undefined);
@@ -434,8 +446,13 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
       `Models · ${models.harness} · Search: ${models.query}`,
       ...(catalogNotice ? [catalogNotice] : []),
       ...(activeCatalog?.reason ? [activeCatalog.reason] : []),
+      ...(activeCatalog?.scope && activeCatalog.fetchedAt
+        ? [`Fetched ${activeCatalog.fetchedAt} · Scope ${activeCatalog.scope}`] : []),
       ...entries.slice(models.offset).map(entry => [
         entry.selector, entry.label === entry.selector ? undefined : entry.label, entry.source,
+        entry.source === "saved" ? activeCatalog?.status === "available"
+          ? catalogNotice ? "Absent from cached results" : "Absent from returned results"
+          : activeCatalog?.status === "partial" ? "Absent from partial results" : "Catalog presence unverified" : undefined,
         entry.efforts?.length ? `effort ${entry.efforts.join(", ")}` : undefined,
         entry.defaultEffort ? `default ${entry.defaultEffort}` : undefined,
         entry.effortSupport === "unsupported" ? "Effort unavailable" : undefined,
@@ -500,7 +517,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
     status: `Tasks ${satisfiedTasks}/${totalTasks} · slots ${slots} · attention ${snapshot?.attention.length ?? 0} · ${pane}${busy ? " · busy" : ""}`,
     filters: `/${filters.search} s:${filters.status ?? "all"} h:${filters.harness ?? "all"} o:${filters.owner ?? "all"} c:${filters.includeCompleted} v:${filters.includeOlderAttempts} z:${filters.sort}`,
     lines,
-    footer: [models ? "←→ harness · ↑↓ scroll · type to search · Ctrl+R refresh · Esc back" : picker ? "↑↓ choose · Enter apply · Esc cancel" : timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? "Enter confirm · Esc cancel" : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${role ? role + " " : ""}${edit}: ${text}${selectionHint} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · 0 reset · ←→ views"],
+    footer: [models ? "←→ harness · ↑↓ scroll · type to search · Ctrl+R refresh · Esc back" : picker ? "↑↓ choose · Enter apply · Esc cancel" : timeline ? "↑↓ browse · Enter evidence · Esc back · r refresh" : confirmation ? ["Enter confirm · Esc cancel", confirmation.settingsJson && "y Copy settings JSON", copyNotice].filter(Boolean).join(" · ") : launchFollowup && pane === "details" && output && !edit ? "l review launch/retry · Esc back" : edit ? `${role ? role + " " : ""}${edit}: ${text}${selectionHint} · Enter apply/Esc cancel` : pane === "activity" ? `${mode} · ${following ? "following" : "PAUSED — f resume"} · w raw p pause b older x expand` : "↑↓ Tab Enter / r ? q · a actions · g project", "s status h harness o owner c completed v older z sort · 0 reset · ←→ views"],
   });
   return <Box flexDirection="column" height={height} width={columns}>
     {frame.map((line, index) => <Text key={index} wrap="truncate" color={index === 1 ? "cyan" : error && index === (compact ? 3 : 4) ? "yellow" : index === frame.length - (compact ? 2 : 3) ? "green" : undefined} dimColor={!compact && index === frame.length - 2}>{line}</Text>)}

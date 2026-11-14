@@ -191,7 +191,10 @@ export function detailLines(s: DashboardSnapshot, targetId: string): string[] {
     lines.push(`Configured effort: ${safeText(task.assignment.effort ?? task.assignment.reasoningEffort ?? "Inherit")}`);
     const approval = s.features.find(feature => feature.id === task.featureId)?.state?.approval;
     const approved = approval?.tasks[task.task.id];
-    if (approved) lines.push(`Approved model: ${safeText(approved.model)} · effort ${safeText(approved.effort ?? approved.reasoningEffort ?? "Harness default")}`);
+    if (approved) {
+      lines.push(`Approved model: ${safeText(approved.model)} · effort ${safeText(approved.effort ?? approved.reasoningEffort ?? "Harness default")}`);
+      if (approved.sources?.length) lines.push(`Approved settings sources: ${safeText(approved.sources.join(", "))}`);
+    }
   }
   const walk = (value: unknown, prefix: string, depth = 0) => {
     if (lines.length >= 500 || depth > 8) return;
@@ -203,6 +206,12 @@ export function detailLines(s: DashboardSnapshot, targetId: string): string[] {
   if (target && "origin" in target) {
     const { nextAction, recovery, ...evidence } = target;
     lines.push(...nextActionLines(nextAction), ...recoveryLines(recovery));
+    if ("state" in target && target.state?.approval) {
+      const { implementation, review, repair } = target.state.approval;
+      for (const [role, settings] of Object.entries({ implementation, review, repair })) {
+        if (settings?.model) lines.push(`Approved ${role} model: ${safeText(settings.model)} · effort ${safeText(settings.effort ?? settings.reasoningEffort ?? "Harness default")}`);
+      }
+    }
     walk(evidence, "");
   } else {
     const session = s.sessions.find(row => row.id === targetId);
@@ -210,6 +219,7 @@ export function detailLines(s: DashboardSnapshot, targetId: string): string[] {
       const { settings } = session.attempt;
       lines.push(`Requested model: ${safeText(settings.requestedModel ?? settings.model)}`);
       if (settings.observedModel) lines.push(`Observed model: ${safeText(settings.observedModel)}`);
+      if (settings.sources?.length) lines.push(`Attempt settings sources: ${safeText(settings.sources.join(", "))}`);
     }
     if (session) lines.push(...recoveryLines(s.features.find(f => f.id === session.featureId)?.recovery
       ?.filter(entry => entry.attempt === session.attempt.id)));
