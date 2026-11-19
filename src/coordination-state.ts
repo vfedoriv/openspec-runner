@@ -897,6 +897,19 @@ export class CoordinationStore {
     const bytes = options.bytes === undefined ? Buffer.from(JSON.stringify(record, null, 2) + "\n") : Buffer.from(options.bytes);
     if (stableDigest({ value: decodeRecord({ value: bytes.toString("utf8") }) }) !== stableDigest({ value: record })) throw new Error("Imported receipt bytes do not match record payload");
     const companions: { path: string; bytes: Buffer }[] = [];
+    if (record.version === 2 && record.kind === "event" && record.type === "accepted") {
+      const assignment = snapshot.records.find((entry): entry is AssignmentRecord => entry.kind === "assignment" && entry.id === record.assignmentId);
+      if (assignment?.version !== 2) throw new Error("Store acceptance requires approved component source");
+      const path = `${assignment.planningSource.openspecRoot}/changes/${assignment.change}/tasks.md`;
+      const approved = assignment.planningSource.files.find(file => file.path === path);
+      if (!approved) throw new Error("Approved Store tasks are missing");
+      const source = committedBlob({ root: this.root, object: git(this.root, "rev-parse", `${snapshot.head}:${path}`) }).toString("utf8");
+      const normalize = (value: string) => value.replace(/(\[[ xX]\])/g, "[ ]").trimEnd();
+      if (normalize(source) !== normalize(approved.content)) throw new Error("Component task text drifted from approved input");
+      const lines = source.split("\n");
+      for (const task of tasksFrom(source)) lines[task.line] = lines[task.line].replace(/\[[ xX]\]/, "[x]");
+      companions.push({ path, bytes: Buffer.from(lines.join("\n")) });
+    }
     if (record.kind === "event" && (record.type === "merged" || (record.type === "reviewed" && record.stage === "final"))) {
       const approvals = snapshot.records.filter((r): r is ApprovalRecord => r.kind === "approval");
       // Current authority is explicit in reviewed evidence; merge uses its accepted assignment.
@@ -956,7 +969,9 @@ export class CoordinationStore {
     for (const companion of companions) {
       const target = this.safePath(companion.path);
       const original = committedBlob({ root: this.root, object: git(this.root, "rev-parse", `${options.expectedHead}:${companion.path}`) });
-      if (!existsSync(target) || (!readFileSync(target).equals(original) && !readFileSync(target).equals(companion.bytes))) throw new Error("Shared task checkout conflicts with pending milestone bytes");
+      const text = (bytes: Buffer) => bytes.toString("utf8").replace(/\r\n/g, "\n");
+      const actual = existsSync(target) ? readFileSync(target) : undefined;
+      if (!actual || (text(actual) !== text(original) && text(actual) !== text(companion.bytes))) throw new Error("Task checkout conflicts with pending milestone bytes");
     }
     const created = !existsSync(path);
     this.safePath(options.path, true);

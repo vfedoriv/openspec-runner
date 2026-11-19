@@ -16,6 +16,7 @@ import { assertDeclaredSnapshotEntries, assignmentContexts, componentBindingPath
 import { loadSourcePlan, pinStorePlan, unredirectedStorePath } from "./planning-source.js";
 import { resolveExecutionContext, type ExecutionContext } from "./execution-context.js";
 import { Runner } from "./runner.js";
+import { validateStoreSubmission } from "./store-submission.js";
 import { dependencyBlockers } from "./coordination-dependencies.js";
 import { assertWindowsContextHost, probeWindowsContext, sealWindowsContext, validateWindowsContextInventory, verifyWindowsContext, windowsContextRequest } from "./windows-context.js";
 export type { ComponentResources, ComponentBinding } from "./component-state.js";
@@ -271,6 +272,7 @@ export class Component {
     return binding;
   }
   submissionPreview(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string }) {
+    this.feature().runner.assertExecutionAuthority(options.change);
     assertRepositoryIdentity({ root: this.repo.root, repository: this.repository });
     const binding = this.readBinding(options);
     if (!binding || binding.phase !== "ready") throw new Error("Component requires completed assignment import");
@@ -280,7 +282,6 @@ export class Component {
     if (!["completed", "blocked", "failed"].includes(options.outcome)) throw new Error("Invalid submission outcome");
     if (options.outcome !== "completed" && !options.reason?.trim()) throw new Error("Blocked/failed submission requires concrete reason");
     const assignment = binding.assignment;
-    if (assignment.version === 2 && options.outcome === "completed") throw new Error("Store receipt export requires per-task integration evidence");
     const payload = { assignmentId: assignment.id, owner: assignment.owner, repository: assignment.repository,
       change: assignment.change, outcome: options.outcome, ...(options.reason === undefined ? {} : { reason: options.reason }),
       base: assignment.base, planFingerprint: assignment.planFingerprint, contractFingerprint: assignment.contract.fingerprint,
@@ -296,7 +297,8 @@ export class Component {
     return { ...result, ...(options.outcome === "completed" ? { summary: safeComponentSummary(this.repo.root, options.change, result.record.id) } : {}) };
   }
   private exportSubmissionCore(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
-    validateId({ value: options.id }); validateId({ value: options.operationId });
+    const version = this.readBinding(options)?.assignment.version;
+    validateId({ value: options.id, version }); validateId({ value: options.operationId, version });
     const path = resolve(this.repo.stateDir, "submissions", `${options.id}.json`);
     return this.feature().runner.lock(() => {
       if (existsSync(path)) {
@@ -328,6 +330,7 @@ export class Component {
         { path: this.repo.stateDir, identity: `${component}:runtime` }, { path: binding.resources.worktreeRoot, identity: `${component}:worktrees` },
         { path: integration, identity: component }];
       const record = decodeRecord({ value: { ...identity, ...payload, verification: checks.map(evidence => portableVerificationEvidence({ evidence, roots })) } }) as SubmissionRecord;
+      if (record.version === 2 && record.outcome === "completed") validateStoreSubmission({ root: this.repo.root, assignment: binding.assignment, receipt: record });
       const bytes = JSON.stringify(record, null, 2) + "\n";
       atomic(path, { input: options, token, record, bytes, localVerification: checks });
       return { record, bytes };

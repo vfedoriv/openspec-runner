@@ -19,7 +19,7 @@ if (process.platform === "win32" && !process.env.OPENSPEC_TEST_STANDARD_CHILD) {
     let output;
     try { output = execFileSync("pwsh.exe", ["-NoProfile", "-NonInteractive", "-File", fileURLToPath(new URL("./helpers/standard-windows-child.ps1", import.meta.url))], {
       input: JSON.stringify({ node: process.execPath, args: ["--test", fileURLToPath(import.meta.url)] }),
-      encoding: "utf8", windowsHide: true, timeout: 240000,
+      encoding: "utf8", windowsHide: true, timeout: 270000,
     }); } catch (error) { throw new Error(error.stdout || error.stderr || error.message); }
     assert.match(output, /Store execution routes planning and runtime independently/);
   });
@@ -109,6 +109,12 @@ test("Store import activates a recoverable code-only integration worktree", asyn
   const finalReview = feature.launch("demo", "review");
   assert.equal((await feature.worker("demo", finalReview.id)).exitCode, 0);
   assert.equal(feature.submissionEvidence({ change: "demo" }).tasks[0].completed, true);
+  const exporter = new Component({ root: f.code, repository: "api", execution: f.execution });
+  const submission = { change: "demo", outcome: "completed" };
+  const submissionPreview = exporter.submissionPreview(submission);
+  assert.equal(submissionPreview.tasks[0].evidence.kind, "integrated");
+  const exported = exporter.exportSubmission({ ...submission, id: "completed-receipt", operationId: "completed-receipt", token: submissionPreview.token });
+  assert.equal(exported.record.version, 2);
   const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const status = JSON.parse(execFileSync(process.execPath, [cli, "status", "demo", ...feature.runner.storeArgs(), "--json"], { cwd: f.code, encoding: "utf8" }));
   assert.equal(status.tasks[0].completed, true);

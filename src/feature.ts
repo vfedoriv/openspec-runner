@@ -14,6 +14,7 @@ import { completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCop
 import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import type { ExecutionContext } from "./execution-context.js";
+import type { StoreTaskEvidence } from "./coordination-state.js";
 import {
   readFeature, saveFeature, featurePath, featureActive, activeFeatureJobs, blocking, digest,
   approvedFeature, validateFeatureReport, settingsIdentity, type FeatureState, type FeatureJob, type FeatureReport, type FeatureApproval,
@@ -209,7 +210,17 @@ export class Feature {
       git(this.repo.root, "merge-base", "--is-ancestor", attempt.report.commit, r.head);
     }
     return { commit: r.head, branch: r.integration.branch, path: r.integration.path,
-      tasks: canonical.tasks.map(task => ({ id: task.id, completed: task.completed })),
+      tasks: canonical.tasks.map(task => {
+        if (!this.runner.execution) return { id: task.id, completed: task.completed };
+        let evidence: StoreTaskEvidence;
+        if (r.baseline.includes(task.id)) evidence = { kind: "baseline", base: s.approval!.base };
+        else {
+          const attempt = this.runner.latest(r, task.id)!;
+          if (!attempt.integrationCommit) throw new Error("Task lacks its recorded integration commit");
+          evidence = { kind: "integrated", attemptId: attempt.id, workerCommit: attempt.report!.commit!, integrationCommit: attempt.integrationCommit };
+        }
+        return { id: task.id, completed: true as const, evidence };
+      }),
       review: { commit: r.head, findings: structuredClone(review.report!.findings!) },
       verification: structuredClone(s.approval!.verifyIntegration) };
   }

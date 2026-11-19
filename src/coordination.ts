@@ -16,6 +16,7 @@ import { normalizeArchiveScope, archiveTarget, prepareApprovedArchive, inspectAr
 import { storeArchiveRoot, archivePaths } from "./archive-paths.js";
 import { loadSourcePlan, pinStorePlan, validateStorePlanReadiness } from "./planning-source.js";
 import type { OpenSpecExecutor } from "./openspec-context.js";
+import { assertStoreCodeTree, validateStoreSubmission } from "./store-submission.js";
 
 export interface ContextInput {
   repository: string;
@@ -302,11 +303,20 @@ export class Coordination {
     if (refreshed.length > 1) { contract.references = refreshed.slice(1); contract.fingerprint = contextFingerprint(contract); }
     return contract;
   }
+  private storeSubmissionPlan(assignment: AssignmentRecord, receipt: SubmissionRecord, root: string) {
+    if (assignment.version !== 2) throw new Error("Store plan requires version-2 assignment");
+    const source = assignment.planningSource;
+    const original = pinStorePlan({ ...source, storeRoot: this.store.root, execute: this.execute });
+    if (digest(original) !== digest(source)) throw new Error("Approved Store source differs from its committed revision");
+    const current = pinStorePlan({ ...source, revision: this.snapshot().head, storeRoot: this.store.root, execute: this.execute });
+    if (current.fingerprint !== source.fingerprint) throw new Error("Component Store planning drifted; renew approval");
+    const plan = validateStoreSubmission({ root, assignment, receipt });
+    return { fingerprint: plan.fingerprint, tasks: plan.tasks, setup: plan.config.setup, verification: plan.config.verifyIntegration };
+  }
   acceptancePreview(options: { submissionId: string; inputs?: ApprovalInputs }) {
     const snapshot = this.snapshot(), status = this.status(), approval = currentApproval({ store: this.store, snapshot });
     const receipt = snapshot.records.find((record): record is SubmissionRecord => record.kind === "submission" && record.id === options.submissionId);
     if (!receipt) throw new Error("Submission not present in authoritative committed history");
-    if (receipt.version === 2) throw new Error("Store receipt acceptance requires per-task integration evidence");
     const assignment = snapshot.records.find((record): record is AssignmentRecord => record.kind === "assignment" && record.id === receipt.assignmentId);
     if (!assignment || status.components[assignment.componentId]?.assignmentId !== assignment.id) throw new Error("Assignment is revoked or no longer active");
     if (!approval || approval.id !== assignment.approvalId || approval.manifestFingerprint !== digest(snapshot.manifest)) throw new Error("Assignment approval is stale; renew approval");
@@ -325,10 +335,11 @@ export class Coordination {
     const root = this.mapped(receipt.repository), commit = receipt.result.commit;
     if (attempt(() => git(root, "rev-parse", `${commit}^{commit}`)) !== commit) throw new Error(`Submitted commit ${commit} unavailable in mapped repository ${receipt.repository}; retrieve result branch ${receipt.result.branch} explicitly`);
     if (attempt(() => git(root, "merge-base", "--is-ancestor", assignment.base, commit)) === undefined) throw new Error("Assigned base is not an ancestor of submitted commit");
-    const base = committedPlan({ root, change: assignment.change, commit: assignment.base });
-    const plan = committedPlan({ root, change: assignment.change, commit });
+    const sourcePlan = assignment.version === 2 ? this.storeSubmissionPlan(assignment, receipt, root) : undefined;
+    const base = sourcePlan ?? committedPlan({ root, change: assignment.change, commit: assignment.base });
+    const plan = sourcePlan ? { ...sourcePlan, tasks: sourcePlan.tasks.map(task => ({ id: task.id, completed: true })) } : committedPlan({ root, change: assignment.change, commit });
     if (base.fingerprint !== assignment.planFingerprint || plan.fingerprint !== assignment.planFingerprint) throw new Error("Submitted planning artifacts drifted from approved plan");
-    if (digest(plan.tasks) !== digest(receipt.tasks) || !plan.tasks.every(task => task.completed) ||
+    if (digest(plan.tasks) !== digest(receipt.tasks.map(task => ({ id: task.id, completed: task.completed }))) || !plan.tasks.every(task => task.completed) ||
         digest(plan.tasks.map(task => task.id).sort()) !== digest(Object.keys(assignment.settings.tasks).sort())) throw new Error("Canonical task completion does not match receipt and approved task scope");
     if (digest(plan.verification) !== digest(assignment.settings.verifyIntegration) || digest(plan.setup) !== digest(assignment.settings.setup ?? [])) throw new Error("Approved checks/setup drifted");
     if (receipt.verification.some(check => check.exitCode !== 0) || digest(receipt.verification.map(check => check.command)) !== digest(assignment.settings.verifyIntegration)) throw new Error("Receipt required verification evidence is missing or failed");
@@ -374,7 +385,7 @@ export class Coordination {
           const repo = repository(path), identity = id === journal!.preview.receipt.repository ? component : `repository:${id}`;
           return [{ path: repo.root, identity }, { path: repo.common, identity: `${identity}:git` }, { path: repo.stateDir, identity: `${identity}:runtime` }];
         });
-        roots.push({ path: resolve(repository(this.mapped(journal!.preview.receipt.repository)).stateDir, "acceptance-checkouts", options.operationId), identity: component });
+        roots.push({ path: resolve(journal!.preview.assignment.version === 2 ? runtime : repository(this.mapped(journal!.preview.receipt.repository)).stateDir, "acceptance-checkouts", options.operationId), identity: component });
         return journal!.evidence.map(evidence => portableVerificationEvidence({ evidence, roots }));
       };
       const savedAcceptance = (record: NonNullable<ReturnType<CoordinationStore["readRecord"]>>) => {
@@ -429,7 +440,7 @@ export class Coordination {
         if (journal.stage === "failed") throw new Error(journal.reason ?? "Acceptance checks failed; use a new reviewed operation");
         if (journal.running !== undefined) throw new Error("Interrupted acceptance check has ambiguous side effects; inspect coordinator checkout and reconcile with a new operation");
         if (this.acceptancePreview(options).token !== journal.preview.token) throw new Error("Acceptance inputs drifted since durable intent");
-        const root = this.mapped(journal.preview.receipt.repository), path = resolve(repository(root).stateDir, "acceptance-checkouts", options.operationId);
+        const root = this.mapped(journal.preview.receipt.repository), path = resolve(journal.preview.assignment.version === 2 ? runtime : repository(root).stateDir, "acceptance-checkouts", options.operationId);
         if (journal.stage !== "verified") {
           exactCheckout({ root, commit: journal.preview.commit, path });
           const setup = journal.preview.assignment.settings.setup ?? [], commands = [...setup, ...journal.preview.verification];
@@ -471,8 +482,11 @@ export class Coordination {
       if (!assignment || assignment.approvalId !== approval.id) throw new Error(`Component ${id} acceptance approval is stale; renew acceptance under current approval`);
       const root = this.mapped(assignment.repository);
       if (attempt(() => git(root, "rev-parse", `${commit}^{commit}`)) !== commit) throw new Error(`Tuple commit ${commit} unavailable in ${assignment.repository}; retrieve explicitly`);
-      const plan = committedPlan({ root, change: assignment.change, commit });
-      if (plan.fingerprint !== approval.components[id].planFingerprint || !plan.tasks.every(task => task.completed)) throw new Error(`Tuple component ${id} planning/completion drifted`);
+      const receipt = snapshot.records.find((record): record is SubmissionRecord => record.kind === "submission" && record.id === acceptance.submissionId);
+      if (assignment.version === 2 && !receipt) throw new Error("Store tuple requires accepted task evidence");
+      const plan = assignment.version === 2 ? this.storeSubmissionPlan(assignment, receipt!, root) : committedPlan({ root, change: assignment.change, commit });
+      if (assignment.version === 2) assertStoreCodeTree(root, commit);
+      if (plan.fingerprint !== approval.components[id].planFingerprint || (assignment.version === 1 && !plan.tasks.every(task => task.completed))) throw new Error(`Tuple component ${id} planning/completion drifted`);
       tuple[id] = commit;
       components[id] = { repository: assignment.repository, change: assignment.change, assignmentId: assignment.id, owner: assignment.owner, setup: assignment.settings.setup ?? [] };
       const merge = snapshot.records.filter((record): record is Extract<CoordinationEvent, { type: "merged" }> => record.kind === "event" && record.type === "merged" && record.componentId === id && record.deliveryCommit === commit).sort((a, b) => b.sequence - a.sequence)[0];
@@ -491,6 +505,10 @@ export class Coordination {
     if (!definition) throw new Error("Unknown merge component");
     const root = this.mapped(definition.repository);
     const preview = deliveryEvidence({ snapshot, status, input: options, root });
+    if (preview.assignment.version === 2) {
+      if (!preview.receipt) throw new Error("Store delivery requires accepted task evidence");
+      this.storeSubmissionPlan(preview.assignment, preview.receipt, root);
+    }
     deliveredPlan({ root, preview });
     return preview;
   }

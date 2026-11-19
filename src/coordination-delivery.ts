@@ -1,4 +1,5 @@
-import { stableDigest, type CoordinationEvent, type AssignmentRecord, type CoordinationSnapshot, type CoordinationStatus, type ReviewFinding, type VerificationEvidence } from "./coordination-state.js";
+import { stableDigest, type CoordinationEvent, type AssignmentRecord, type SubmissionRecord, type CoordinationSnapshot, type CoordinationStatus, type ReviewFinding, type VerificationEvidence } from "./coordination-state.js";
+import { assertStoreCodeTree, validateStoreSubmission } from "./store-submission.js";
 import { attempt, clean, git, gitRaw, repository } from "./system.js";
 import { resolve } from "node:path";
 import { committedPlan, exactCheckout, removeExactCheckout, verificationCommand } from "./submission.js";
@@ -43,11 +44,18 @@ export function deliveryEvidence(options: { snapshot: CoordinationSnapshot; stat
   const paths = changedPaths({ root, base: assignment.base, commit: component.acceptedCommit });
   const mismatches = paths.filter(path => pathState({ root, path, commit: component.acceptedCommit! }) !== pathState({ root, path, commit: input.deliveryCommit }));
   const payload = { componentId: input.componentId, deliveryCommit: input.deliveryCommit, mergeStyle: input.mergeStyle, prUrl: input.prUrl, attestedBy: input.attestedBy, deliveryBranch, commit: component.acceptedCommit, submissionId: accepted.submissionId };
-  return { head: snapshot.head, token: stableDigest({ value: { payload, approvalId: assignment.approvalId, acceptanceId: accepted.id, paths, mismatches } }), payload, assignment, acceptanceId: accepted.id, changedPaths: paths, mismatches };
+  const receipt = snapshot.records.find((record): record is SubmissionRecord => record.kind === "submission" && record.id === accepted.submissionId);
+  return { head: snapshot.head, token: stableDigest({ value: { payload, approvalId: assignment.approvalId, acceptanceId: accepted.id, paths, mismatches } }), payload, assignment, receipt, acceptanceId: accepted.id, changedPaths: paths, mismatches };
 }
 export type MergePreview = ReturnType<typeof deliveryEvidence>;
 export function deliveredPlan(options: { root: string; preview: MergePreview }) {
   const { assignment } = options.preview;
+  if (assignment.version === 2) {
+    if (!options.preview.receipt) throw new Error("Store delivery requires accepted task evidence");
+    validateStoreSubmission({ root: options.root, assignment, receipt: options.preview.receipt });
+    assertStoreCodeTree(options.root, options.preview.payload.deliveryCommit);
+    return;
+  }
   // Rewritten history is allowed here; ordinary submission acceptance still checks ancestry.
   const plan = committedPlan({ root: options.root, change: assignment.change, commit: options.preview.payload.deliveryCommit });
   if (plan.fingerprint !== assignment.planFingerprint || !plan.tasks.every(task => task.completed) ||
@@ -78,7 +86,7 @@ export function acceptDeliveredSnapshot(options: {
     if (result) { assertVerified(); return write({ id: input.id, operationId: input.operationId, payload: result }); }
     if (data.running !== undefined || data.stage === "failed") throw new Error(data.reason ?? "Interrupted delivered snapshot check has ambiguous side effects; inspect and use a new operation");
     if (options.preview().token !== data.preview.token) throw new Error("Delivered acceptance inputs drifted since durable intent");
-    const path = resolve(repository(root).stateDir, "delivery-checkouts", input.operationId);
+    const path = resolve(repository(data.preview.assignment.version === 2 ? store.root : root).stateDir, "delivery-checkouts", input.operationId);
     if (data.stage !== "verified") {
       exactCheckout({ root, commit: input.deliveryCommit, path });
       data.stage = "checking"; save();

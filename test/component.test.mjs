@@ -662,8 +662,7 @@ nativeTest("Store assignment remains current after a peer's accepted task update
   const fakeBaseline = { ...receipt, ...metadata, tasks: [{ id: "1.1", completed: true, evidence: { kind: "baseline", base: first.base } }] };
   assert.throws(() => replayStatus({ snapshot: { ...snapshot, records: [...snapshot.records.filter(r => r.kind !== "submission"), fakeBaseline, { ...metadata, ...accepted }] } }), /evidence/i);
   write(accepted);
-  f.write("components/api/openspec/changes/demo/tasks.md", "- [x] 1.1 Deliver change\n");
-  git(f.storeRoot, "add", "."); git(f.storeRoot, "commit", "-m", "Record accepted task");
+  assert.match(git(f.storeRoot, "show", "HEAD:components/api/openspec/changes/demo/tasks.md"), /\[x\]/);
   write({ id: "deliver", operationId: "op-deliver", kind: "event", type: "merged", componentId: "api", sequence: 2,
     submissionId: "receipt", commit, deliveryCommit: commit, deliveryBranch: "main", mergeStyle: "merge", prUrl: "https://example.test/pr/1", attestedBy: "lead" });
   const next = f.coord.assignmentPreview(web);

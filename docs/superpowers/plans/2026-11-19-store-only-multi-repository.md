@@ -61,14 +61,16 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 
 **Verification:** Build passed; affected execution suites: 89 tests, 88 passed, one skipped, no failures (2026-11-19).
 
-### 4. Make acceptance the durable Store progress boundary
+### 4. Make acceptance the durable Store progress boundary — in progress
 
 **Files:** `src/component.ts`, `src/submission.ts`, `src/coordination.ts`, `src/coordination-state.ts`, `src/coordination-delivery.ts`, `src/coordination-review.ts`, `src/coordination-operation.ts`; tests in `test/coordination-acceptance.test.mjs`, `test/coordination-review.test.mjs`, `test/coordination-delivery.test.mjs`.
 
-- [ ] Export version-2 per-task integration evidence binding assignment, task, worker commit, integration commit, review, and checks. Validate exact approved task coverage and available code ancestry; do not treat submitted completion booleans alone as proof.
-- [ ] Replace v2 `committedPlan(codeCommit)` checks with pinned Store-plan validation plus independent code verification. Keep checks running in exact code checkouts; retain combined/final tuple verification and normal/squash/rebase delivery checks.
-- [ ] Commit coordinator acceptance and component task checkbox updates atomically in the Store after successful independent checks. Local integration can appear ahead of canonical acceptance; shared feature milestones still follow recorded component merges/final verification. Keep fingerprints insensitive to runner-owned checkbox updates.
-- [ ] Test forged/incomplete evidence, failed checks, Store planning drift, concurrent component submissions, expected-head conflicts, and interruption/retry without duplicate records or partial checkbox updates. Run build and affected tests.
+- [x] Export version-2 per-task integration evidence binding assignment, task, worker commit, integration commit, review, and checks. Validate exact approved task coverage and available code ancestry; do not treat submitted completion booleans alone as proof.
+- [x] Replace v2 `committedPlan(codeCommit)` checks with pinned Store-plan validation plus independent code verification. Keep checks running in exact code checkouts; retain combined/final tuple verification and normal/squash/rebase delivery checks.
+- [x] Commit coordinator acceptance and component task checkbox updates atomically in the Store after successful independent checks. Local integration can appear ahead of canonical acceptance; shared feature milestones still follow recorded component merges/final verification. Keep fingerprints insensitive to runner-owned checkbox updates.
+- [x] Test forged/incomplete evidence, failed checks, Store planning drift, concurrent component submissions, expected-head conflicts, and interruption/retry without duplicate records or partial checkbox updates. Run build and affected tests.
+
+**Verification:** Build passed; affected suites: 127 tests, 36 passed, 91 platform skips, no failures. Independent Store/code clone acceptance with CRLF checkout also passed (2026-11-19).
 
 ### 5. Archive all approved planning scopes in the Store
 
