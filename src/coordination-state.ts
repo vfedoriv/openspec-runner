@@ -356,11 +356,11 @@ function archiveBases(value: unknown) {
   if (!Object.keys(components).length && bases.store === undefined) fail("archive bases require targets");
   if (bases.store !== undefined) sha(bases.store, "Store archive base");
 }
-function archiveScope(value: unknown) {
+function archiveScope(value: unknown, version: 1 | 2 = 1) {
   const scope = obj(value, "archive scope"); keys(scope, ["componentIds", "includeStore", "storeDeliveryBranch"], "archive scope");
   const ids = array(scope.componentIds, "archive component IDs"); for (const item of ids) id(item, "archive component");
   if (new Set(ids).size !== ids.length || typeof scope.includeStore !== "boolean" || (!ids.length && !scope.includeStore)) fail("archive scope requires unique explicit targets");
-  if (scope.includeStore) branch(scope.storeDeliveryBranch, "Store canonical delivery branch");
+  if (scope.includeStore || version === 2) branch(scope.storeDeliveryBranch, "Store canonical delivery branch");
   else if (scope.storeDeliveryBranch !== undefined) fail("Store branch requires Store archive target");
 }
 export function decodeRecord(options: { value: unknown }): CoordinationRecord {
@@ -437,7 +437,7 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
       }
     } else if (r.type === "completed") {
       keys(r, [...common, "tuple", "reviewEventId", "consent", "archiveScope", "archive", "archiveToken", "archiveBases"], "completion event"); tuple(r.tuple); id(r.reviewEventId, "review event"); consent(r.consent);
-      if (r.archive !== undefined) { archiveScope(r.archive); fingerprint(r.archiveToken, "archive token"); }
+      if (r.archive !== undefined) { archiveScope(r.archive, r.version); fingerprint(r.archiveToken, "archive token"); }
       if (r.archiveBases !== undefined) archiveBases(r.archiveBases);
       if (r.archiveScope !== undefined) for (const path of array(r.archiveScope, "archiveScope")) safeContextPath(path);
     } else if (r.type === "delivery-accepted") {
@@ -446,9 +446,9 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
       text(r.reviewedBy, "delivered reviewedBy"); text(r.summary, "delivered review summary"); findings(r.findings); evidence(r.verification);
     } else if (r.type === "archive-approved") {
       keys(r, [...common, "snapshotToken", "completionEventId", "scope", "bases", "consent"], "archive approval");
-      fingerprint(r.snapshotToken, "archive snapshot token"); id(r.completionEventId, "completion event"); archiveScope(r.scope); consent(r.consent); if (r.bases !== undefined) archiveBases(r.bases);
+      fingerprint(r.snapshotToken, "archive snapshot token"); id(r.completionEventId, "completion event"); archiveScope(r.scope, r.version); consent(r.consent); if (r.bases !== undefined) archiveBases(r.bases);
     } else if (["archive-prepared", "archive-delivered"].includes(r.type)) {
-      if (r.version === 2) fail("Store archive evidence requires a Store-owned archive transaction");
+      if (r.version === 2 && (!r.base || !r.completionEventId || !r.snapshotToken || (r.type === "archive-prepared" ? !r.preparedBranch || !r.evidence : !r.preparedEventId))) fail("Store archive evidence requires a Store-owned archive transaction");
       keys(r, [...common, "componentId", "commit", "branch", "paths", "preparedBranch", "preparedEventId", "completionEventId", "snapshotToken", "base", "evidence"], "archive event");
       if (r.componentId !== undefined) component(); sha(r.commit, "archive commit"); branch(r.branch, "archive branch");
       if (r.preparedBranch !== undefined) branch(r.preparedBranch, "prepared archive branch");
@@ -592,6 +592,7 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
       if (event.stage === "final") completed = undefined;
     }
     else if (event.type === "completed") {
+      if (manifest.version === 2 && event.archive && event.archive.storeDeliveryBranch !== manifest.coordinationBranch) fail("Store archive scope requires declared coordination branch");
       const review = reviews.find(review => review.id === event.reviewEventId && review.stage === "final");
       if (!review || review !== [...reviews].reverse().find(review => review.stage === "final" && exactTuple(review.tuple, "final")) || !exactTuple(event.tuple, "final") || stableDigest({ value: event.tuple }) !== stableDigest({ value: review.tuple }) || review.findings.some(blocking) || review.verification.some(check => check.exitCode !== 0)) fail("completion requires the latest passing exact merged tuple review");
       if (review.approvalId && event.consent.token !== stableDigest({ value: { tuple: event.tuple, reviewEventId: review.id, approvalId: review.approvalId, reviewToken: review.snapshotToken, ...(event.archive ? { archive: event.archive, archiveToken: event.archiveToken, ...(event.archiveBases ? { archiveBases: event.archiveBases } : {}) } : {}) } })) fail("completion consent does not bind exact final review and tuple");
@@ -600,19 +601,26 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
       const accepted = acceptedMilestones.get(event.componentId), assignment = acceptedAssignments.get(event.componentId);
       if (!accepted || !assignment || accepted.id !== event.acceptanceId || event.findings.some(blocking) || event.verification.some(check => check.exitCode !== 0) || stableDigest({ value: event.verification.map(check => check.command) }) !== stableDigest({ value: assignment.settings.verifyIntegration })) fail("delivered acceptance requires current accepted snapshot and passing exact independent checks/review");
     } else if (event.type === "archive-approved") {
+      if (manifest.version === 2 && event.scope.storeDeliveryBranch !== manifest.coordinationBranch) fail("Store archive scope requires declared coordination branch");
       if (!completed || completed.id !== event.completionEventId || event.snapshotToken !== event.consent.token || event.scope.componentIds.some(id => !Object.hasOwn(manifest.components, id))) fail("archive scope approval requires delivery completion and explicit bound consent");
     } else if (event.type === "archive-prepared") {
       if (!completed || completed.id !== event.completionEventId || !event.base || !event.snapshotToken || !event.preparedBranch || !event.evidence?.trim()) fail("archive preparation requires current delivery completion and modern scope/base evidence");
       const approval = events.filter((candidate): candidate is Extract<CoordinationEvent, { type: "archive-approved" }> => candidate.type === "archive-approved" && candidate.sequence < event.sequence && candidate.completionEventId === event.completionEventId && candidate.snapshotToken === event.snapshotToken).at(-1);
       const scope = approval?.scope ?? (completed.archiveToken === event.snapshotToken ? completed.archive : undefined);
       const bases = approval?.bases ?? (completed.archiveToken === event.snapshotToken ? completed.archiveBases : undefined);
-      if (!scope || (event.componentId ? !scope.componentIds.includes(event.componentId) || event.branch !== manifest.components[event.componentId].deliveryBranch : !scope.includeStore || event.branch !== scope.storeDeliveryBranch)) fail("archive prepared result lacks approved exact scope and canonical branch");
-      const base = event.componentId ? bases?.components[event.componentId] : bases?.store;
+      if (!scope || (event.componentId ? !scope.componentIds.includes(event.componentId) || event.branch !== (manifest.version === 2 ? scope.storeDeliveryBranch : manifest.components[event.componentId].deliveryBranch) : !scope.includeStore || event.branch !== scope.storeDeliveryBranch)) fail("archive prepared result lacks approved exact scope and canonical branch");
+      let base = event.componentId ? bases?.components[event.componentId] : bases?.store;
+      if (manifest.version === 2) {
+        const order = [...scope.componentIds].sort().concat(scope.includeStore ? ["@store"] : []);
+        const previous = events.filter((candidate): candidate is Extract<CoordinationEvent, { type: "archive-prepared" | "archive-delivered" }> => candidate.type === "archive-prepared" && candidate.sequence < event.sequence && candidate.completionEventId === event.completionEventId && candidate.snapshotToken === event.snapshotToken);
+        if (order[previous.length] !== (event.componentId ?? "@store")) fail("Store archive preparation requires ordered cumulative project evidence");
+        base = previous.at(-1)?.commit ?? bases?.store;
+      }
       if (!base || event.base !== base) fail("archive prepared base differs from approved consent scope");
       const change = event.componentId ? manifest.components[event.componentId].change : manifest.sharedChange;
       const review = reviews.find(review => review.id === completed!.reviewEventId);
       const contract = approvalMap.get(review?.approvalId ?? status.approvalId ?? "")?.contract;
-      const root = event.componentId ? "openspec" : contract ? storeArchiveRoot(contract, change) : "openspec";
+      const root = event.componentId ? manifest.version === 2 ? manifest.components[event.componentId].planning.openspecRoot : "openspec" : contract ? storeArchiveRoot(contract, change) : "openspec";
       const { active, archived, specs } = archivePaths(root, change), folders = new Set<string>();
       if (!event.paths.length || new Set(event.paths).size !== event.paths.length) fail("archive path scope requires unique changed paths");
       for (const path of event.paths) {

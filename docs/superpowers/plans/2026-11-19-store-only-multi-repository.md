@@ -72,15 +72,17 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 
 **Verification:** Build passed; affected suites: 127 tests, 36 passed, 91 platform skips, no failures. Independent Store/code clone acceptance with CRLF checkout also passed (2026-11-19).
 
-### 5. Archive all approved planning scopes in the Store
+### 5. Archive all approved planning scopes in the Store â€” in progress
 
 **Files:** `src/coordination-archive.ts`, `src/coordination.ts`, `src/coordination-state.ts`, `src/archive-paths.ts`; tests in `test/coordination-delivery.test.mjs`, `test/archive-paths.test.mjs`.
 
-- [ ] For v2, resolve component and shared archive targets to their approved Store roots and canonical Store branch. Keep Store archive bases distinct from delivered code SHAs. Prepare one ordered Store transaction covering the approved scopes so separate component archive branches cannot lose each other's changes.
-- [ ] Retain exact path/content validation, explicit archive consent, interruption inspection/recovery, and canonical-delivery evidence. Archival may change only the selected Store changes, archives, specs, and coordination records; it never creates an archive commit in a code repository.
-- [ ] Test three component roots plus the shared root, partial recovery, unrelated Store edits, and final archive delivery with unchanged code branch heads. Keep v1 archive tests. Run build and affected tests.
+- [x] For v2, resolve component and shared archive targets to their approved Store roots and canonical Store branch. Keep Store archive bases distinct from delivered code SHAs. Prepare one ordered Store transaction covering the approved scopes so separate component archive branches cannot lose each other's changes.
+- [x] Retain exact path/content validation, explicit archive consent, interruption inspection/recovery, and canonical-delivery evidence. Archival may change only the selected Store changes, archives, specs, and coordination records; it never creates an archive commit in a code repository.
+- [x] Test three component roots plus the shared root, partial recovery, unrelated Store edits, and final archive delivery with unchanged code branch heads. Keep v1 archive tests. Run build and affected tests.
 
-### 6. Expose both workflows and prove the complete scenario
+**Verification:** Build passed; Store archival and compatibility suites: 48 tests, 27 passed, 21 platform skips, no failures (2026-11-19).
+
+### 6. Expose both workflows and prove the complete scenario — in progress
 
 **Files:** `src/cli.ts`, `src/linked-cli.ts`, `src/doctor.ts`, `src/execution-settings.ts`, `src/dashboard-reader.ts`, dashboard action/collector modules, `src/summary-evidence.ts`, `src/summary-shared.ts`, `docs/examples/linked-feature-inputs.mjs`, relevant runner skills, `README.md`, team guides; create `test/store-only-multi-repo.test.mjs` and extend existing CLI/dashboard/summary tests.
 

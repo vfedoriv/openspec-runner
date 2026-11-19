@@ -29,13 +29,14 @@ export interface ArchivePreview {
   reviewEventId: string;
   targets: Record<string, ArchiveTarget>;
 }
-export function normalizeArchiveScope(options: { scope: ArchiveScope; componentIds: string[] }): ArchiveScope {
+export function normalizeArchiveScope(options: { scope: ArchiveScope; componentIds: string[]; version?: 1 | 2 }): ArchiveScope {
   const { scope, componentIds } = options;
   if (!scope || Object.keys(scope).some(key => !["componentIds", "includeStore", "storeDeliveryBranch"].includes(key)) || !Array.isArray(scope.componentIds) || typeof scope.includeStore !== "boolean") throw new Error("Explicit archive scope is required");
   if (new Set(scope.componentIds).size !== scope.componentIds.length || scope.componentIds.some(id => !componentIds.includes(id)) || (!scope.componentIds.length && !scope.includeStore)) throw new Error("Archive scope requires unique known targets");
-  if (scope.includeStore && (!scope.storeDeliveryBranch || attempt(() => git(process.cwd(), "check-ref-format", `refs/heads/${scope.storeDeliveryBranch}`)) === undefined)) throw new Error("Store archive scope requires explicit canonical delivery branch");
-  if (!scope.includeStore && scope.storeDeliveryBranch !== undefined) throw new Error("Store canonical branch requires Store scope");
-  return { componentIds: [...scope.componentIds].sort(), includeStore: scope.includeStore, ...(scope.includeStore ? { storeDeliveryBranch: scope.storeDeliveryBranch } : {}) };
+  const storeTarget = options.version === 2 || scope.includeStore;
+  if (storeTarget && (!scope.storeDeliveryBranch || attempt(() => git(process.cwd(), "check-ref-format", `refs/heads/${scope.storeDeliveryBranch}`)) === undefined)) throw new Error("Store archive scope requires explicit canonical delivery branch");
+  if (!storeTarget && scope.storeDeliveryBranch !== undefined) throw new Error("Store canonical branch requires Store scope");
+  return { componentIds: [...scope.componentIds].sort(), includeStore: scope.includeStore, ...(storeTarget ? { storeDeliveryBranch: scope.storeDeliveryBranch } : {}) };
 }
 export function archiveTarget(options: { root: string; repository: string; change: string; branch: string; componentId?: string; deliveredCommit?: string; tasksContent?: string; pinnedBase?: string; openspecRoot?: string }): ArchiveTarget {
   const branchHead = attempt(() => git(options.root, "rev-parse", `refs/heads/${options.branch}^{commit}`));
@@ -52,6 +53,7 @@ export interface TargetReceipt {
   stage: "reserved" | "running" | "produced" | "committing" | "prepared" | "failed";
   path: string;
   branch: string;
+  base?: string;
   evidence?: string;
   reason?: string;
   paths?: string[];
@@ -60,6 +62,15 @@ export interface TargetReceipt {
   recovery?: { attestedBy: string };
 }
 export interface ArchivePreparationReceipt { preview: ArchivePreview; completionEventId: string; targets: Record<string, TargetReceipt> }
+function preparationTarget(data: ArchivePreparationReceipt, id: string, version: 1 | 2): ArchiveTarget {
+  const target = data.preview.targets[id];
+  if (!target) throw new Error("Unknown archive target");
+  const order = Object.keys(data.preview.targets), index = order.indexOf(id);
+  if (version !== 2 || index === 0) return target;
+  const previous = data.targets[order[index - 1]];
+  if (previous.stage !== "prepared" || !previous.commit) throw new Error("Store archive chain requires its preceding prepared project");
+  return { ...target, base: previous.commit };
+}
 export function archiveJournalPath(options: { store: CoordinationStore; operationId: string }) {
   validateId({ value: options.operationId, version: options.store.readManifest().version });
   return resolve(repository(options.store.root).stateDir, "archive", `${options.operationId}.json`);
@@ -105,11 +116,12 @@ function archiveScopeEvidence(options: { target: ArchiveTarget; receipt: TargetR
 }
 export function prepareApprovedArchive(options: { store: CoordinationStore; input: MutationIdentity & { scope: ArchiveScope; token: string }; roots: Record<string, string>; preview: () => ArchivePreview; completionEventId: string; authorized: (preview: ArchivePreview) => boolean }) {
   const { store, input } = options;
+  const version = store.readManifest().version;
   return coordinationOperation<ArchivePreparationReceipt, ReturnType<CoordinationStore["writeRecord"]>[]>({ store, input, action: "archive", initialize: () => {
     const preview = options.preview();
     if (preview.token !== input.token) throw new Error("Archive scope/input token is stale");
     if (!options.authorized(preview)) throw new Error("Explicit archive scope approval/consent is required");
-    const targets = Object.fromEntries(Object.keys(preview.targets).map(id => [id, { stage: "reserved" as const, path: resolve(repository(options.roots[id]).stateDir, "archive-checkouts", input.operationId, id), branch: `runner-archive/${store.featureId}/${input.operationId}/${id}` }]));
+    const targets = Object.fromEntries(Object.keys(preview.targets).map(id => [id, { stage: "reserved" as const, path: resolve(repository(options.roots[id]).stateDir, "archive-checkouts", input.operationId, id), branch: `runner-archive/${store.featureId}/${input.operationId}/${version === 2 ? "store" : id}` }]));
     return { preview, completionEventId: options.completionEventId, targets };
   }, execute: ({ journal, save, write }) => {
     const data = journal.data;
@@ -121,8 +133,11 @@ export function prepareApprovedArchive(options: { store: CoordinationStore; inpu
     if (options.preview().token !== data.preview.token || !options.authorized(data.preview)) throw new Error("Archive approved inputs drifted since durable intent");
     write({ id: `${input.id}-started`, operationId: `${input.operationId}-started`, payload: { type: "operation-started", targetOperationId: input.operationId, action: "archive", snapshotToken: input.token } });
     const results = [];
-    for (const [id, target] of Object.entries(data.preview.targets)) {
+    for (const id of Object.keys(data.preview.targets)) {
+      const target = preparationTarget(data, id, version);
       const receipt = data.targets[id], root = options.roots[id];
+      if (receipt.base && receipt.base !== target.base) throw new Error("Store archive chain base changed from reserved identity");
+      receipt.base = target.base;
       if (receipt.stage === "running" || receipt.stage === "failed") throw new Error(receipt.reason ?? "Interrupted archive command has ambiguous side effects; inspect receipt and explicitly recover");
       if (receipt.stage === "reserved") {
         exactCheckout({ root, commit: target.base, path: receipt.path });
@@ -159,8 +174,9 @@ export function prepareApprovedArchive(options: { store: CoordinationStore; inpu
         } else if (git(receipt.path, "rev-parse", `${head}^{tree}`) !== receipt.tree || !clean(receipt.path) || git(receipt.path, "show", "-s", "--format=%P", head) !== target.base || !git(receipt.path, "show", "-s", "--format=%B", head).includes(marker) || digest(changedPaths({ root, base: target.base, commit: head })) !== digest(receipt.paths)) throw new Error("Archive commit recovery requires exact operation identity and scope");
         receipt.commit = git(receipt.path, "rev-parse", "HEAD");
         const existing = attempt(() => git(root, "rev-parse", `refs/heads/${receipt.branch}`));
-        if (existing && existing !== receipt.commit) throw new Error("Prepared archive branch identity conflicts");
-        if (!existing) git(root, "update-ref", `refs/heads/${receipt.branch}`, receipt.commit, "");
+        const previousOwned = version === 2 && Object.keys(data.preview.targets).indexOf(id) > 0 && existing === target.base;
+        if (existing && existing !== receipt.commit && !previousOwned) throw new Error("Prepared archive branch identity conflicts");
+        if (!existing || previousOwned) git(root, "update-ref", `refs/heads/${receipt.branch}`, receipt.commit, existing ?? "");
         receipt.stage = "prepared"; save();
       }
       const result = write({ id: `${input.id}-${id}`, operationId: `${input.operationId}-${id}`, payload: { type: "archive-prepared", ...(target.componentId ? { componentId: target.componentId } : {}), commit: receipt.commit!, preparedBranch: receipt.branch, base: target.base, branch: target.branch, paths: receipt.paths!, completionEventId: data.completionEventId, snapshotToken: data.preview.token, evidence: receipt.evidence?.trim() || "OpenSpec archive scope verified" } });
@@ -180,7 +196,7 @@ export function recoverArchivePreparation(options: { store: CoordinationStore; o
   if (!options.attestedBy?.trim()) throw new Error("Explicit operator attestation required for ambiguous archive recovery");
   const runtime = repository(options.store.root).stateDir;
   return locked(runtime, () => {
-    const path = archiveJournalPath(options), journal = json<OperationJournal<ArchivePreparationReceipt>>(path), receipt = journal.data.targets[options.targetId], target = journal.data.preview.targets[options.targetId];
+    const path = archiveJournalPath(options), journal = json<OperationJournal<ArchivePreparationReceipt>>(path), receipt = journal.data.targets[options.targetId], target = preparationTarget(journal.data, options.targetId, options.store.readManifest().version);
     if (!receipt || !target || !["running", "failed"].includes(receipt.stage)) throw new Error("Archive recovery requires an interrupted target receipt");
     if (options.store.readSnapshot().head !== journal.expectedHead) throw new Error("Coordination head changed since archive intent; reconcile history");
     receipt.paths = archiveScopeEvidence({ target, receipt });
@@ -201,7 +217,7 @@ export function archiveDeliveryEvidence(options: { store: CoordinationStore; roo
   const completion = snapshot.records.find(r => r.kind === "event" && r.type === "completed" && r.id === prepared.completionEventId);
   const review = completion?.kind === "event" && completion.type === "completed" ? snapshot.records.find(r => r.kind === "event" && r.type === "reviewed" && r.id === completion.reviewEventId) : undefined;
   const approval = review?.kind === "event" && review.type === "reviewed" ? snapshot.records.find(r => r.kind === "approval" && r.id === review.approvalId) : undefined;
-  const openspecRoot = prepared.componentId ? "openspec" : approval?.kind === "approval" ? storeArchiveRoot(approval.contract, change) : "openspec";
+  const openspecRoot = prepared.componentId ? snapshot.manifest.version === 2 ? snapshot.manifest.components[prepared.componentId].planning.openspecRoot : "openspec" : approval?.kind === "approval" ? storeArchiveRoot(approval.contract, change) : "openspec";
   const { active } = archivePaths(openspecRoot, change);
   if (git(options.root, "ls-tree", "-r", "--name-only", options.deliveryCommit, "--", active)) throw new Error("Canonical archive delivery still contains an active change");
   const mismatches = prepared.paths.filter(path => pathState({ root: options.root, commit: prepared.commit, path }) !== pathState({ root: options.root, commit: options.deliveryCommit, path }));

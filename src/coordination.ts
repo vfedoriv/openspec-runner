@@ -564,23 +564,28 @@ export class Coordination {
     return event;
   }
   private archiveBases(preview: ArchivePreview): ArchiveBases {
+    if (this.snapshot().manifest.version === 2) return { components: {}, store: Object.values(preview.targets)[0].base };
     return { components: Object.fromEntries(Object.values(preview.targets).filter(target => target.componentId).map(target => [target.componentId!, target.base])), ...(preview.targets._store ? { store: preview.targets._store.base } : {}) };
   }
   private archiveInputs(options: { scope: ArchiveScope; tuple: Record<string, string>; reviewEventId: string }): ArchivePreview {
     const snapshot = this.snapshot(), approval = currentApproval({ store: this.store, snapshot });
-    if (snapshot.manifest.version === 2) throw new Error("Store archive preparation requires a Store-owned archive transaction");
+    const storeMode = snapshot.manifest.version === 2;
     if (!approval || this.status().phase === "awaiting-approval") throw new Error("Current approved archive inputs required");
-    const scope = normalizeArchiveScope({ scope: options.scope, componentIds: Object.keys(snapshot.manifest.components) });
+    const scope = normalizeArchiveScope({ scope: options.scope, componentIds: Object.keys(snapshot.manifest.components), version: snapshot.manifest.version });
+    if (storeMode && scope.storeDeliveryBranch !== snapshot.manifest.coordinationBranch) throw new Error("Store archive delivery requires the declared coordination branch");
     const completed = snapshot.records.filter((r): r is Extract<CoordinationEvent, { type: "completed" }> => r.kind === "event" && r.type === "completed" && r.reviewEventId === options.reviewEventId && digest(r.tuple) === digest(options.tuple)).sort((a, b) => b.sequence - a.sequence)[0];
     const scopeApproval = snapshot.records.filter((r): r is Extract<CoordinationEvent, { type: "archive-approved" }> => r.kind === "event" && r.type === "archive-approved" && r.completionEventId === completed?.id && digest(r.scope) === digest(scope)).sort((a, b) => b.sequence - a.sequence)[0];
     const bases = scopeApproval?.bases ?? (completed?.archive && digest(completed.archive) === digest(scope) ? completed.archiveBases : undefined);
     const targets: ArchivePreview["targets"] = {};
     for (const id of scope.componentIds) {
-      const component = snapshot.manifest.components[id], root = this.mapped(component.repository);
-      const target = archiveTarget({ root, repository: component.repository, change: component.change, branch: component.deliveryBranch, componentId: id, deliveredCommit: options.tuple[id], pinnedBase: bases?.components[id] });
+      const component = snapshot.manifest.components[id], root = this.mapped(storeMode ? approval.contract.repository : component.repository);
+      const openspecRoot = snapshot.manifest.version === 2 ? snapshot.manifest.components[id].planning.openspecRoot : "openspec";
+      const target = archiveTarget({ root, repository: storeMode ? approval.contract.repository : component.repository, change: component.change,
+        branch: storeMode ? scope.storeDeliveryBranch! : component.deliveryBranch, componentId: id,
+        ...(storeMode ? { openspecRoot, pinnedBase: bases?.store } : { deliveredCommit: options.tuple[id], pinnedBase: bases?.components[id] }) });
       const branchHead = git(root, "rev-parse", `refs/heads/${target.branch}^{commit}`);
-      if (bases?.components[id] && changedPaths({ root, base: target.base, commit: branchHead }).some(path => path.startsWith("openspec/") && pathState({ root, commit: target.base, path }) !== pathState({ root, commit: branchHead, path }))) throw new Error("Approved archive component scope drifted on canonical branch");
-      const plan = committedPlan({ root, change: component.change, commit: target.base });
+      if ((storeMode ? bases?.store : bases?.components[id]) && changedPaths({ root, base: target.base, commit: branchHead }).some(path => path.startsWith(`${openspecRoot}/`) && pathState({ root, commit: target.base, path }) !== pathState({ root, commit: branchHead, path }))) throw new Error("Approved archive component scope drifted on canonical branch");
+      const plan = storeMode ? loadSourcePlan(pinStorePlan({ storeRoot: root, repository: approval.contract.repository, openspecRoot, change: component.change, revision: target.base, execute: this.execute })) : committedPlan({ root, change: component.change, commit: target.base });
       if (plan.fingerprint !== approval.components[id].planFingerprint || !plan.tasks.every(task => task.completed)) throw new Error("Post-merge archive component planning inputs changed");
       targets[id] = target;
     }
@@ -591,7 +596,7 @@ export class Coordination {
       const tasksContent = committedBlob({ root, object: git(root, "rev-parse", `${snapshot.head}:${file.path}`) }).toString("utf8");
       const target = archiveTarget({ root, repository: approval.contract.repository, change: snapshot.manifest.sharedChange, branch: scope.storeDeliveryBranch!, tasksContent, pinnedBase: bases?.store, ...(openspecRoot !== "openspec" ? { openspecRoot } : {}) });
       const branchHead = git(root, "rev-parse", `refs/heads/${target.branch}^{commit}`);
-      if (bases?.store && changedPaths({ root, base: target.base, commit: branchHead }).some(path => path !== file.path && !path.startsWith(`${this.store.directory}/`))) throw new Error("Store archive base may advance only across coordination records and approved task milestones");
+      if (bases?.store && changedPaths({ root, base: target.base, commit: branchHead }).some(path => path !== file.path && (storeMode ? path.startsWith(`${openspecRoot}/`) : !path.startsWith(`${this.store.directory}/`)))) throw new Error("Store archive base may advance only across coordination records and approved task milestones");
       const canonical = repinContext({ root, context: approval.contract, revision: branchHead });
       if (canonical.fingerprint !== approval.contract.fingerprint) throw new Error("Store canonical archive inputs differ from approved contract");
       targets._store = target;
@@ -613,7 +618,7 @@ export class Coordination {
   }
   prepareArchive(options: MutationIdentity & { scope: ArchiveScope; token: string }) {
     const completed = this.completedEvent(), manifest = this.snapshot().manifest, approval = currentApproval({ store: this.store, snapshot: this.snapshot() })!;
-    const roots = Object.fromEntries(Object.entries(manifest.components).map(([id, component]) => [id, this.mapped(component.repository)]));
+    const roots = Object.fromEntries(Object.entries(manifest.components).map(([id, component]) => [id, this.mapped(manifest.version === 2 ? approval.contract.repository : component.repository)]));
     roots._store = this.mapped(approval.contract.repository);
     return prepareApprovedArchive({ store: this.store, input: options, roots, completionEventId: completed.id, preview: () => this.archivePreview(options), authorized: preview => {
       if (completed.archiveToken === preview.token && digest(completed.archive) === digest(preview.scope)) return true;
@@ -626,7 +631,7 @@ export class Coordination {
     const prepared = this.snapshot().records.find((r): r is Extract<CoordinationEvent, { type: "archive-prepared" | "archive-delivered" }> => r.kind === "event" && r.type === "archive-prepared" && r.id === options.preparedEventId);
     if (!prepared) throw new Error("Prepared archive event required");
     const manifest = this.snapshot().manifest, approval = currentApproval({ store: this.store, snapshot: this.snapshot() })!;
-    const root = this.mapped(prepared.componentId ? manifest.components[prepared.componentId].repository : approval.contract.repository);
+    const root = this.mapped(manifest.version === 2 || !prepared.componentId ? approval.contract.repository : manifest.components[prepared.componentId].repository);
     return archiveDeliveryEvidence({ store: this.store, root, ...options });
   }
   recordArchiveDelivery(options: MutationIdentity & { preparedEventId: string; deliveryCommit: string; token: string }) {
