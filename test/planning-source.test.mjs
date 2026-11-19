@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, symlinkSync, renameSync, readFileSync, readdirSync } from "node:fs";
+import fs, { existsSync, symlinkSync, renameSync, readFileSync, readdirSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { join, relative, sep } from "node:path";
 import { git, storePlanningFixture } from "./helpers/store-planning-fixture.mjs";
 import { loadPlan } from "../dist/plan.js";
@@ -158,4 +159,28 @@ test("a committed component can be pinned after its live directory has moved", t
   const source = pinStorePlan(f.input());
   assert.equal(loadSourcePlan(source).config.defaultModel, "api");
   assert.equal(existsSync(join(f.storeRoot, "components/api")), false);
+});
+
+test("pinning retries when a finishing preview removes the runtime before scratch acquisition", t => {
+  const f = storePlanningFixture(t), runtime = join(f.storeRoot, ".openspec-runner");
+  fs.mkdirSync(runtime);
+  const originalMkdtemp = fs.mkdtempSync;
+  let peerFinished = false;
+  const hook = t.mock.method(fs, "mkdtempSync", (prefix, ...args) => {
+    if (!peerFinished && prefix === join(runtime, "validate-")) {
+      fs.rmdirSync(runtime);
+      peerFinished = true;
+    }
+    return originalMkdtemp(prefix, ...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const source = pinStorePlan(f.input());
+    assert.equal(loadSourcePlan(source).config.defaultModel, "api");
+    assert.equal(peerFinished, true);
+    assert.equal(existsSync(runtime), false);
+  } finally {
+    hook.mock.restore();
+    syncBuiltinESMExports();
+  }
 });

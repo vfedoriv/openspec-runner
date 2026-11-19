@@ -159,12 +159,20 @@ function withCommittedProject<T>(options: PinOptions, inspect: (root: string, cw
     if (!entry.path.startsWith(`${project}/`) || entry.type !== "blob" || !["100644", "100755"].includes(entry.mode))
       throw new Error(`Committed Store project cannot contain a symlink or non-file: ${entry.path}`);
   }
-  const runtime = unredirectedStorePath(store.root, ".openspec-runner");
+  const runtime = resolve(store.root, ".openspec-runner");
   let createdRuntime = false, scratch: string | undefined;
   try {
-    try { mkdirSync(runtime, { mode: 0o700 }); createdRuntime = true; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-    scratch = mkdtempSync(resolve(runtime, "validate-"));
+    while (!scratch) {
+      unredirectedStorePath(store.root, runtime);
+      try { mkdirSync(runtime, { mode: 0o700 }); createdRuntime = true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      try { scratch = mkdtempSync(unredirectedStorePath(runtime, "validate-")); }
+      catch (error) {
+        // A finishing preview can remove its empty parent between mkdir and mkdtemp.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        createdRuntime = false;
+      }
+    }
     for (const entry of entries) {
       const path = unredirectedStorePath(scratch, entry.path);
       mkdirSync(dirname(path), { recursive: true });
