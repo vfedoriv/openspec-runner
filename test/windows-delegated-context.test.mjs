@@ -140,3 +140,29 @@ test("Windows context rejects a named stream on an assignment directory", native
   assert.throws(() => sealWindowsContext({ stateDir, journalPath, roots: [{ path: root, files: [] }] }), /alternate data stream/);
   assert.equal(existsSync(journalPath), false);
 });
+
+test("Windows protected context inventory covers the Store planning project with the shared contract and references", async t => {
+  const { expectedContextPaths } = await import("../dist/component-state.js");
+  const { windowsContextRequest, validateWindowsContextInventory, sealWindowsContext, verifyWindowsContext, restoreWindowsContext } = await import("../dist/windows-context.js");
+  const store = mkdtempSync(join(tmpdir(), "runner-store-acl-"));
+  const stateDir = join(store, ".openspec-runner", "clone", "runtime");
+  const files = [{ path: "components/api/openspec/runner.yaml", content: "approved configuration" }];
+  const assignment = { version: 2, featureId: "feature", id: "issue", contract: { files: [{ path: "contract", content: "shared" }],
+    references: [{ files: [{ path: "reference", content: "reference" }] }] }, planningSource: { kind: "store", files } };
+  const contextPaths = expectedContextPaths({ stateDir, assignment });
+  const request = windowsContextRequest(stateDir, { assignment, contextPaths });
+  t.after(() => { if (process.platform === "win32") restoreWindowsContext(request); rmSync(store, { recursive: true, force: true }); });
+  assert.deepEqual(request.roots.map(root => root.files), [assignment.contract.files, assignment.contract.references[0].files, files]);
+  assert.equal(request.roots[2].path, join(stateDir, "component-context", "feature", "issue", "2"));
+  validateWindowsContextInventory(request);
+  if (process.platform === "win32") {
+    mkdirSync(stateDir, { recursive: true });
+    // The native fixture applies and inspects ACLs without starting a delegated worker.
+    const inventory = { ...request, requireStandard: false };
+    sealWindowsContext(inventory);
+    verifyWindowsContext(inventory);
+    const config = join(request.roots[2].path, files[0].path);
+    assert.equal(readFileSync(config, "utf8"), "approved configuration");
+    assert.throws(() => writeFileSync(config, "tampered"), { code: /EACCES|EPERM/ });
+  }
+});

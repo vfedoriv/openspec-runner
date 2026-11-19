@@ -14,6 +14,8 @@ import { deliveryEvidence, changedPaths, pathState, deliveredPlan, acceptDeliver
 import { coordinationOperation } from "./coordination-operation.js";
 import { normalizeArchiveScope, archiveTarget, prepareApprovedArchive, inspectArchivePreparation, recoverArchivePreparation, archiveDeliveryEvidence, type ArchivePreview } from "./coordination-archive.js";
 import { storeArchiveRoot, archivePaths } from "./archive-paths.js";
+import { loadSourcePlan, pinStorePlan, validateStorePlanReadiness } from "./planning-source.js";
+import type { OpenSpecExecutor } from "./openspec-context.js";
 
 export interface ContextInput {
   repository: string;
@@ -52,9 +54,11 @@ function label(value: string, name: string) { if (!value?.trim()) throw new Erro
 export class Coordination {
   readonly store: CoordinationStore;
   readonly repositories: Record<string, string>;
-  constructor(options: { root: string; featureId: string; repositories: Record<string, string> }) {
+  private readonly execute?: OpenSpecExecutor;
+  constructor(options: { root: string; featureId: string; repositories: Record<string, string>; execute?: OpenSpecExecutor }) {
     this.store = new CoordinationStore(options);
     this.repositories = { ...options.repositories };
+    this.execute = options.execute;
   }
   private mapped(repository: string, root?: string) {
     const mapped = this.repositories[repository];
@@ -66,6 +70,14 @@ export class Coordination {
     const contractRoot = this.mapped(inputs.contract.repository, inputs.contract.context.planningRoot);
     if (realpathSync(contractRoot) !== realpathSync(this.store.root) || inputs.contract.context.change !== manifest.sharedChange || inputs.contract.context.storeId !== manifest.storeId)
       throw new Error("Contract Store/change identity mismatch");
+    if (manifest.version === 2) {
+      if (resolve(inputs.contract.context.changeRoot) !== resolve(contractRoot, "openspec", "changes", manifest.sharedChange))
+        throw new Error("Shared Store change must use the Store OpenSpec root");
+      for (const component of Object.values(manifest.components)) {
+        if (component.planning.repository !== inputs.contract.repository) throw new Error("Component planning repository must identify the primary Store");
+        if (repository(this.mapped(component.repository)).common === repository(contractRoot).common) throw new Error("Implementation requires a separate repository from the Store");
+      }
+    }
     const pin = (input: ReferenceInput) => {
       const root = this.mapped(input.repository, "context" in input ? input.context.planningRoot : input.root);
       const revision = input.revision ?? git(root, "rev-parse", "HEAD");
@@ -163,12 +175,16 @@ export class Coordination {
     decodeManifest({ value: manifest, sharedTasks: this.sharedTasks(contract) });
     const components: Record<string, ComponentSnapshot> = {};
     for (const [componentId, definition] of Object.entries(manifest.components)) {
-      const root = this.mapped(definition.repository), plan = loadPlan(root, definition.change);
-      assertCommitted(root, plan); readiness(root, definition.change); run("openspec", ["validate", definition.change, "--strict", "--json"], root);
+      const root = this.mapped(definition.repository);
+      const planningSource = manifest.version === 2 ? pinStorePlan({ ...manifest.components[componentId].planning,
+        storeRoot: this.store.root, change: definition.change, revision: snapshot.head, execute: this.execute }) : undefined;
+      const plan = planningSource ? loadSourcePlan(planningSource) : loadPlan(root, definition.change);
+      if (planningSource) validateStorePlanReadiness({ storeRoot: this.store.root, source: planningSource, execute: this.execute });
+      else { assertCommitted(root, plan); readiness(root, definition.change); run("openspec", ["validate", definition.change, "--strict", "--json"], root); }
       const { implementation, tasks, review, repair } = resolveFeatureApprovalSettings({ plan, input: definition.settings });
       if (digest(definition.settings.verifyIntegration) !== digest(plan.config.verifyIntegration) ||
           (definition.settings.setup && digest(definition.settings.setup) !== digest(plan.config.setup))) throw new Error("Manifest checks/setup differ from committed component plan");
-      components[componentId] = { repository: definition.repository, change: definition.change, base: git(root, "rev-parse", "HEAD"), planFingerprint: plan.fingerprint,
+      components[componentId] = { repository: definition.repository, change: definition.change, base: git(root, "rev-parse", "HEAD"), planFingerprint: plan.fingerprint, ...(planningSource ? { planningSource } : {}),
         settings: { implementation, tasks, review, repair, maxFixRounds: definition.settings.maxFixRounds,
           verifyIntegration: structuredClone(plan.config.verifyIntegration), setup: structuredClone(plan.config.setup) } };
     }
@@ -185,23 +201,36 @@ export class Coordination {
     const preview = this.approvalPreview(options);
     if (!options.token || options.token !== preview.token) throw new Error("Approval token is stale; inspect current committed inputs");
     const { token, head, ...payload } = preview;
-    const record: ApprovalRecord = { ...this.identity(options), kind: "approval", ...payload, consent: { token, approvedBy: options.approvedBy } };
+    const record = decodeRecord({ value: { ...this.identity(options), kind: "approval", ...payload, consent: { token, approvedBy: options.approvedBy } } });
     return this.store.writeRecord({ record, expectedHead: options.expectedHead });
   }
   private identity(options: MutationIdentity) {
-    return { version: 1 as const, id: options.id, featureId: this.store.featureId, operationId: options.operationId, createdAt: options.createdAt ?? new Date().toISOString() };
+    return { version: this.store.readManifest().version, id: options.id, featureId: this.store.featureId, operationId: options.operationId, createdAt: options.createdAt ?? new Date().toISOString() };
   }
   assignmentPreview(options: ApprovalInputs & { componentId: string; owner: string }) {
     label(options.owner, "owner");
     const snapshot = this.snapshot(), approval = currentApproval({ store: this.store, snapshot });
     if (!approval) throw new Error("Approve the committed inputs before assignment");
     const preview = this.approvalPreview(options);
+    const status = this.status({});
     // Revisions record provenance; only relevant content drift invalidates approval.
-    const inputIdentity = (value: typeof preview) => ({ manifestFingerprint: value.manifestFingerprint, contractFingerprint: value.contract.fingerprint, components: value.components, verification: value.verification });
+    const inputIdentity = (value: typeof preview) => ({
+      manifestFingerprint: value.manifestFingerprint, contractFingerprint: value.contract.fingerprint, verification: value.verification,
+      components: Object.fromEntries(Object.entries(value.components).map(([id, component]) => {
+        const { planningSource, ...code } = component;
+        if (!planningSource) return [id, code];
+        const progress = status.components[id];
+        // A completed peer's authoritative code milestone may have advanced its checkout.
+        const assignment = snapshot.records.find((record): record is AssignmentRecord => record.kind === "assignment" && record.id === progress.assignmentId);
+        if (id !== options.componentId && assignment?.approvalId === approval.id && !progress.requiresReapproval && !progress.dependencyStale &&
+            (code.base === progress.acceptedCommit || code.base === progress.deliveryCommit)) code.base = approval.components[id].base;
+        return [id, { ...code, planning: { repository: planningSource.repository, openspecRoot: planningSource.openspecRoot, fingerprint: planningSource.fingerprint } }];
+      })),
+    });
     if (digest(inputIdentity(preview)) !== digest(inputIdentity({ ...approval, token: approval.consent.token, head: snapshot.head }))) throw new Error("Approved inputs drifted; renew approval");
     const component = approval.components[options.componentId];
     if (!component) throw new Error("Unknown component");
-    const status = this.status({});
+    if (snapshot.manifest.version === 2 && status.phase === "awaiting-approval") throw new Error(status.blocker ?? "Approved contract drifted; renew approval");
     if (status.components[options.componentId].assignmentId) throw new Error("Component already has an active assignment");
       const historical = status.components[options.componentId].mergedHistory?.at(-1);
       if (historical && (historical.approvalId === approval.id || historical.planFingerprint === component.planFingerprint)) throw new Error("Further implementation of a merged component requires a revised plan and renewed approval");
@@ -225,7 +254,7 @@ export class Coordination {
     const preview = this.assignmentPreview(options);
     if (!options.token || options.token !== preview.token) throw new Error("Assignment token is stale");
     const { token, head, ...payload } = preview;
-    const record: AssignmentRecord = { ...this.identity(options), kind: "assignment", ...payload };
+    const record = decodeRecord({ value: { ...this.identity(options), kind: "assignment", ...payload } });
     return this.store.writeRecord({ record, expectedHead: options.expectedHead });
   }
   importSubmission(options: { bytes: Buffer | string; expectedHead: string }) {
@@ -277,6 +306,7 @@ export class Coordination {
     const snapshot = this.snapshot(), status = this.status(), approval = currentApproval({ store: this.store, snapshot });
     const receipt = snapshot.records.find((record): record is SubmissionRecord => record.kind === "submission" && record.id === options.submissionId);
     if (!receipt) throw new Error("Submission not present in authoritative committed history");
+    if (receipt.version === 2) throw new Error("Store receipt acceptance requires per-task integration evidence");
     const assignment = snapshot.records.find((record): record is AssignmentRecord => record.kind === "assignment" && record.id === receipt.assignmentId);
     if (!assignment || status.components[assignment.componentId]?.assignmentId !== assignment.id) throw new Error("Assignment is revoked or no longer active");
     if (!approval || approval.id !== assignment.approvalId || approval.manifestFingerprint !== digest(snapshot.manifest)) throw new Error("Assignment approval is stale; renew approval");
@@ -349,7 +379,7 @@ export class Coordination {
       const savedAcceptance = (record: NonNullable<ReturnType<CoordinationStore["readRecord"]>>) => {
         assertVerified();
         if (record.kind !== "event" || record.type !== "accepted") throw new Error("Immutable coordinator event identity differs");
-        const expected = { version: 1, kind: "event", featureId: this.store.featureId, id: options.id, operationId: options.operationId,
+        const expected = { version: snapshot.manifest.version, kind: "event", featureId: this.store.featureId, id: options.id, operationId: options.operationId,
           createdAt: journal!.createdAt, sequence: record.sequence, type: "accepted", componentId: journal!.preview.componentId,
           assignmentId: journal!.preview.assignment.id, submissionId: options.submissionId, commit: journal!.preview.commit, verification: record.verification };
         if (digest(record) !== digest(expected) || (options.createdAt !== undefined && record.createdAt !== options.createdAt) ||
@@ -368,7 +398,7 @@ export class Coordination {
         if (pending.id === options.id) savedAcceptance(pending);
         else {
           const phase = pending.id === `${options.id}-started` ? "started" : pending.id === `${options.id}-finished` ? "finished" : undefined;
-          const expected = { version: 1, kind: "event", featureId: this.store.featureId, id: `${options.id}-${phase}`,
+          const expected = { version: snapshot.manifest.version, kind: "event", featureId: this.store.featureId, id: `${options.id}-${phase}`,
             operationId: `${options.operationId}-${phase}`, createdAt: journal.createdAt, sequence: pending.sequence,
             type: `operation-${phase}`, targetOperationId: options.operationId, action: "acceptance", snapshotToken: options.token };
           if (!phase || digest(pending) !== digest(expected) || (options.createdAt !== undefined && pending.createdAt !== options.createdAt))
@@ -379,7 +409,7 @@ export class Coordination {
       }
       if (this.snapshot().head !== journal.expectedHead) throw new Error("Coordination head changed since acceptance intent; reconcile history");
       const sequence = () => Math.max(0, ...this.snapshot().records.filter((record): record is CoordinationEvent => record.kind === "event").map(record => record.sequence)) + 1;
-      const event = (id: string, operationId: string, payload: object) => ({ version: 1, kind: "event", featureId: this.store.featureId,
+      const event = (id: string, operationId: string, payload: object) => ({ version: snapshot.manifest.version, kind: "event", featureId: this.store.featureId,
         id, operationId, createdAt: journal!.createdAt, sequence: sequence(), ...payload }) as CoordinationEvent;
       const write = (record: CoordinationEvent) => {
         const existing = this.store.readRecord({ kind: "event", id: record.id });
@@ -519,6 +549,7 @@ export class Coordination {
   }
   private archiveInputs(options: { scope: ArchiveScope; tuple: Record<string, string>; reviewEventId: string }): ArchivePreview {
     const snapshot = this.snapshot(), approval = currentApproval({ store: this.store, snapshot });
+    if (snapshot.manifest.version === 2) throw new Error("Store archive preparation requires a Store-owned archive transaction");
     if (!approval || this.status().phase === "awaiting-approval") throw new Error("Current approved archive inputs required");
     const scope = normalizeArchiveScope({ scope: options.scope, componentIds: Object.keys(snapshot.manifest.components) });
     const completed = snapshot.records.filter((r): r is Extract<CoordinationEvent, { type: "completed" }> => r.kind === "event" && r.type === "completed" && r.reviewEventId === options.reviewEventId && digest(r.tuple) === digest(options.tuple)).sort((a, b) => b.sequence - a.sequence)[0];

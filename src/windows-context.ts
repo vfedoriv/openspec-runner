@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ComponentBinding } from "./component-state.js";
+import { assignmentContexts, type ComponentBinding } from "./component-state.js";
 import type { ContextFile } from "./openspec-context.js";
 import { resolveCommand } from "./platform-command.js";
 import { atomic, json } from "./system.js";
@@ -43,7 +43,7 @@ export function assertWindowsContextHost(stateDir: string) {
 
 export function windowsContextRequest(stateDir: string, binding: Pick<ComponentBinding, "assignment" | "contextPaths">): ContextRequest {
   const { assignment, contextPaths } = binding;
-  const contexts = [assignment.contract, ...(assignment.contract.references ?? [])];
+  const contexts = assignmentContexts(assignment);
   return { stateDir, requireStandard: true, journalPath: resolve(stateDir, "component-protection", assignment.featureId, `${assignment.id}.json`),
     roots: contexts.map((context, index) => ({ path: contextPaths[index], files: context.files })) };
 }

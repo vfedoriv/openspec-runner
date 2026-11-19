@@ -7,7 +7,7 @@ import type { TaskAttempt } from "./runner.js";
 import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import { loadPlan, type Plan } from "./plan.js";
 import { decodeRecord, stableDigest, type AssignmentRecord } from "./coordination-state.js";
-import { componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
+import { assignmentContexts, componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
 import { verifyWindowsContext, windowsContextRequest } from "./windows-context.js";
 
 export type FeaturePhase = "planning" | "awaiting-plan-approval" | "implementing" |
@@ -98,7 +98,9 @@ export function pinnedPrompt(stateDir: string, change: string): string {
   const runtime = readComponentBinding({ stateDir, change }), delegated = readFeature(stateDir, change)?.delegated;
   if (runtime && (runtime.phase !== "ready" || !delegated)) throw new Error("Delegated component binding requires completed import and matching feature state");
   if (!delegated) return "";
-  validateDelegatedBinding(delegated);
+  const assignment = validateDelegatedBinding(delegated);
+  if (assignment.version === 2)
+    return `\nDelegated assignment: ${delegated.featureId}/${delegated.assignmentId}. Read the approved shared contract, references and component project from the protected Store snapshots:\n${delegated.contextPaths.join("\n")}\nUse the final snapshot's ${assignment.planningSource.openspecRoot} for component planning inputs. Keep planning files out of the implementation checkout. Do not re-fetch planning inputs, approve, archive, or complete this shared feature.`;
   return `\nDelegated assignment: ${delegated.featureId}/${delegated.assignmentId}. Read only the pinned Store context at:\n${delegated.contextPaths.join("\n")}\nThese pinned paths are the authoritative shared contracts and linked specifications. Never re-fetch or substitute a registered Store checkout, including through openspec instructions or context commands. OpenSpec commands may inspect repository-local component artifacts only. Do not approve, archive, or complete this shared feature.`;
 }
 export function validateDelegatedBinding(binding: DelegatedBinding) {
@@ -112,7 +114,7 @@ export function validateDelegatedBinding(binding: DelegatedBinding) {
     verifyWindowsContext(windowsContextRequest(stateDir, runtime));
     return assignment;
   }
-  const contexts = [assignment.contract, ...(assignment.contract.references ?? [])];
+  const contexts = assignmentContexts(assignment);
   if (contexts.length !== binding.contextPaths.length) throw new Error("Pinned context inventory mismatch");
   contexts.forEach((context, index) => {
     const root = binding.contextPaths[index];

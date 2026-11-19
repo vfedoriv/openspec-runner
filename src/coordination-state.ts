@@ -15,6 +15,7 @@ import { publishExclusive } from "./platform-files.js";
 import { resolveCommand } from "./platform-command.js";
 import { archivePaths, storeArchiveRoot } from "./archive-paths.js";
 import { gitHooksPath } from "./platform-paths.js";
+import { loadSourcePlan, storeId, type StorePlanningSource } from "./planning-source.js";
 
 export interface ComponentSettings {
   implementation: HarnessSettings;
@@ -35,47 +36,49 @@ export interface ComponentDefinition {
 }
 export type SharedTaskMilestone = { type: "merged"; componentId: string } | { type: "final-verification" };
 export interface VerificationCommand { componentId: string; command: string[] }
-export interface FeatureManifest {
-  version: 1;
+type Version = 1 | 2;
+export type StoreComponentDefinition = ComponentDefinition & { planning: Pick<StorePlanningSource, "repository" | "openspecRoot"> };
+export type FeatureManifest = {
   featureId: string;
   storeId: string;
   sharedChange: string;
   coordinationBranch: string;
-  components: Record<string, ComponentDefinition>;
   taskMapping: Record<string, SharedTaskMilestone[]>;
   verification: VerificationCommand[];
   completion: { requireAllMerged: true };
-}
+} & ({ version: 1; components: Record<string, ComponentDefinition> } |
+     { version: 2; components: Record<string, StoreComponentDefinition> });
 export interface RecordIdentity {
-  version: 1;
+  version: Version;
   id: string;
   featureId: string;
   operationId: string;
   createdAt: string;
 }
-export interface ComponentSnapshot {
+export interface CodeSnapshot {
   repository: string;
   change: string;
   base: string;
   planFingerprint: string;
   settings: ComponentSettings;
 }
-export interface ApprovalRecord extends RecordIdentity {
+export type ComponentSnapshot = CodeSnapshot & ({ planningSource?: never } | { planningSource: StorePlanningSource });
+export type ApprovalRecord = RecordIdentity & {
   kind: "approval";
   manifestFingerprint: string;
   contract: PinnedContext;
-  components: Record<string, ComponentSnapshot>;
   verification: VerificationCommand[];
   consent: { token: string; approvedBy: string };
-}
-export interface AssignmentRecord extends RecordIdentity, ComponentSnapshot {
+} & ({ version: 1; components: Record<string, CodeSnapshot & { planningSource?: never }> } |
+     { version: 2; components: Record<string, CodeSnapshot & { planningSource: StorePlanningSource }> });
+export type AssignmentRecord = RecordIdentity & CodeSnapshot & {
   kind: "assignment";
   approvalId: string;
   componentId: string;
   owner: string;
   contract: PinnedContext;
   dependencies: (ComponentDependency & { commit: string })[];
-}
+} & ({ version: 1; planningSource?: never } | { version: 2; planningSource: StorePlanningSource });
 export interface ReviewFinding {
   id: string;
   category: "correctness" | "security" | "spec" | "verification" | "style" | "improvement";
@@ -86,7 +89,9 @@ export interface ReviewFinding {
   owner?: string;
 }
 export interface VerificationEvidence { command: string[]; exitCode: number; evidence: string }
-export interface SubmissionRecord extends RecordIdentity {
+export type StoreTaskEvidence = { kind: "baseline"; base: string } |
+  { kind: "integrated"; attemptId: string; workerCommit: string; integrationCommit: string };
+export type SubmissionRecord = RecordIdentity & {
   kind: "submission";
   assignmentId: string;
   owner: string;
@@ -98,10 +103,10 @@ export interface SubmissionRecord extends RecordIdentity {
   planFingerprint: string;
   contractFingerprint: string;
   result?: { branch: string; commit: string };
-  tasks: { id: string; completed: boolean }[];
   review?: { commit: string; findings: ReviewFinding[] };
   verification: VerificationEvidence[];
-}
+} & ({ version: 1; tasks: { id: string; completed: boolean }[] } |
+     { version: 2; planningRevision: string; tasks: { id: string; completed: true; evidence: StoreTaskEvidence }[] });
 export interface ArchiveBases { components: CommitTuple; store?: string }
 export interface ArchiveScope { componentIds: string[]; includeStore: boolean; storeDeliveryBranch?: string }
 export type CommitTuple = Record<string, string>;
@@ -270,12 +275,23 @@ export function decodeManifest(options: { value: unknown; sharedTasks?: { id: st
   const value = typeof options.value === "string" ? parse(options.value) : options.value;
   const m = obj(value, "manifest");
   keys(m, ["version", "featureId", "storeId", "sharedChange", "coordinationBranch", "components", "taskMapping", "verification", "completion"], "manifest");
-  if (m.version !== 1) fail("unsupported manifest version");
+  if (m.version !== 1 && m.version !== 2) fail("unsupported manifest version");
   id(m.featureId, "feature"); id(m.storeId, "Store"); id(m.sharedChange, "shared change"); branch(m.coordinationBranch, "coordination branch");
   const components = obj(m.components, "components");
+  const projects = new Set<string>();
   if (!Object.keys(components).length) fail("manifest requires components");
   for (const [componentId, value] of Object.entries(components)) {
-    id(componentId, "component"); const c = obj(value, "component"); keys(c, ["repository", "change", "deliveryBranch", "settings", "dependencies"], "component");
+    id(componentId, "component"); const c = obj(value, "component"); keys(c, ["repository", "change", "deliveryBranch", "settings", "dependencies", ...(m.version === 2 ? ["planning"] : [])], "component");
+    if (m.version === 2) {
+      const planning = obj(c.planning, "version 2 Store planning selection");
+      keys(planning, ["repository", "openspecRoot"], "Store planning");
+      repo(planning.repository, "planning repository");
+      storeId(m.featureId); storeId(c.change);
+      if (planning.openspecRoot !== `components/${storeId(componentId)}/openspec`) fail("Store planning root must match component ID");
+      const key = componentId.toUpperCase();
+      if (projects.has(key)) fail("Store planning roots have a portable path alias");
+      projects.add(key);
+    }
     repo(c.repository, "component repository"); id(c.change, "component change"); branch(c.deliveryBranch, "delivery branch"); execution(c.settings);
     const seen = new Set<string>();
     for (const d of array(c.dependencies, "dependencies")) {
@@ -314,8 +330,15 @@ export function decodeManifest(options: { value: unknown; sharedTasks?: { id: st
 }
 
 const identityKeys = ["version", "id", "featureId", "operationId", "createdAt", "kind"];
-function snapshot(c: Record<string, any>) {
+function snapshot(c: Record<string, any>, version: Version, componentId: string, contract: PinnedContext) {
   repo(c.repository, "repository"); id(c.change, "change"); sha(c.base, "base"); fingerprint(c.planFingerprint, "plan fingerprint"); execution(c.settings);
+  if (version === 2) {
+    const source = c.planningSource;
+    if (source?.kind !== "store") fail("version 2 requires a Store planning source");
+    const plan = loadSourcePlan(source);
+    if (source.repository !== contract.repository || source.change !== c.change || source.openspecRoot !== `components/${componentId}/openspec` ||
+        plan.fingerprint !== c.planFingerprint) fail("Store component planning source differs from approved selection");
+  }
 }
 function consent(value: unknown) {
   const c = obj(value, "consent"); keys(c, ["token", "approvedBy"], "consent"); fingerprint(c.token, "consent token"); text(c.approvedBy, "consent approvedBy");
@@ -341,7 +364,8 @@ function archiveScope(value: unknown) {
 export function decodeRecord(options: { value: unknown }): CoordinationRecord {
   const value = typeof options.value === "string" ? JSON.parse(options.value) : options.value;
   const r = obj(value, "record");
-  if (r.version !== 1) fail("unsupported record version");
+  if (r.version !== 1 && r.version !== 2) fail("unsupported record version");
+  const planningKeys = r.version === 2 ? ["planningSource"] : [];
   for (const key of ["id", "featureId", "operationId"]) id(r[key], key);
   text(r.createdAt, "createdAt"); if (!/^\d{4}-\d\d-\d\dT/.test(r.createdAt) || !Number.isFinite(Date.parse(r.createdAt))) fail("createdAt requires an ISO timestamp");
   if (r.kind === "approval") {
@@ -349,15 +373,16 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
     fingerprint(r.manifestFingerprint, "manifest fingerprint"); decodePinnedContext({ value: r.contract }); id(r.contract.change, "primary contract change"); consent(r.consent);
     const components = obj(r.components, "approval components"); if (!Object.keys(components).length) fail("approval requires components");
     for (const [componentId, value] of Object.entries(components)) {
-      id(componentId, "component"); const c = obj(value, "component snapshot"); keys(c, ["repository", "change", "base", "planFingerprint", "settings"], "component snapshot"); snapshot(c);
+      id(componentId, "component"); const c = obj(value, "component snapshot"); keys(c, ["repository", "change", "base", "planFingerprint", "settings", ...planningKeys], "component snapshot"); snapshot(c, r.version, componentId, r.contract);
     }
     verificationCommands(r.verification, components);
   } else if (r.kind === "assignment") {
-    keys(r, [...identityKeys, "approvalId", "componentId", "owner", "repository", "change", "base", "planFingerprint", "contract", "settings", "dependencies"], "assignment");
-    id(r.approvalId, "approval"); id(r.componentId, "component"); text(r.owner, "owner"); snapshot(r); decodePinnedContext({ value: r.contract }); id(r.contract.change, "primary contract change");
+    keys(r, [...identityKeys, "approvalId", "componentId", "owner", "repository", "change", "base", "planFingerprint", "contract", "settings", "dependencies", ...planningKeys], "assignment");
+    id(r.approvalId, "approval"); id(r.componentId, "component"); text(r.owner, "owner"); decodePinnedContext({ value: r.contract }); id(r.contract.change, "primary contract change"); snapshot(r, r.version, r.componentId, r.contract);
     for (const d of array(r.dependencies, "dependencies")) dependency(d, true);
   } else if (r.kind === "submission") {
-    keys(r, [...identityKeys, "assignmentId", "owner", "repository", "change", "outcome", "reason", "base", "planFingerprint", "contractFingerprint", "result", "tasks", "review", "verification"], "submission");
+    keys(r, [...identityKeys, "assignmentId", "owner", "repository", "change", "outcome", "reason", "base", "planFingerprint", "contractFingerprint", "result", "tasks", "review", "verification", ...(r.version === 2 ? ["planningRevision"] : [])], "submission");
+    if (r.version === 2) sha(r.planningRevision, "planning revision");
     id(r.assignmentId, "assignment"); text(r.owner, "owner"); repo(r.repository, "repository"); id(r.change, "change"); sha(r.base, "base"); fingerprint(r.planFingerprint, "plan fingerprint"); fingerprint(r.contractFingerprint, "contract fingerprint");
     if (!["completed", "blocked", "failed"].includes(r.outcome)) fail("invalid submission outcome");
     if (r.outcome !== "completed") text(r.reason, "blocked/failed reason"); else if (!r.result || !r.review) fail("completed submission requires result and review");
@@ -365,9 +390,19 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
     if (r.result !== undefined) { const result = obj(r.result, "result"); keys(result, ["branch", "commit"], "result"); branch(result.branch, "result branch"); sha(result.commit, "result commit"); }
     const tasks = new Set<string>();
     for (const entry of array(r.tasks, "tasks")) {
-      const task = obj(entry, "task"); keys(task, ["id", "completed"], "task"); text(task.id, "task ID");
+      const task = obj(entry, "task"); keys(task, ["id", "completed", ...(r.version === 2 ? ["evidence"] : [])], "task"); text(task.id, "task ID");
       if (tasks.has(task.id)) fail("duplicate task ID"); tasks.add(task.id);
       if (typeof task.completed !== "boolean") fail("task completed must be boolean");
+      if (r.version === 2) {
+        if (!task.completed) fail("Store task evidence requires a completed task");
+        const proof = obj(task.evidence, "Store task evidence");
+        if (proof.kind === "baseline") {
+          keys(proof, ["kind", "base"], "baseline task evidence"); sha(proof.base, "baseline base");
+        } else if (proof.kind === "integrated") {
+          keys(proof, ["kind", "attemptId", "workerCommit", "integrationCommit"], "integrated task evidence");
+          id(proof.attemptId, "integration attempt"); sha(proof.workerCommit, "worker commit"); sha(proof.integrationCommit, "integration commit");
+        } else fail("unknown Store task evidence kind");
+      }
     }
     if (r.review !== undefined) { const review = obj(r.review, "review"); keys(review, ["commit", "findings"], "review"); sha(review.commit, "review commit"); findings(review.findings); }
     evidence(r.verification);
@@ -390,7 +425,7 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
     } else if (r.type === "reviewed") {
       keys(r, [...common, "stage", "tuple", "verification", "findings", "approvalId", "snapshotToken", "reviewedBy", "summary"], "review event");
       if (!["combined", "final"].includes(r.stage)) fail("invalid review stage"); tuple(r.tuple); evidence(r.verification); findings(r.findings);
-      if ([r.approvalId, r.snapshotToken, r.reviewedBy, r.summary].some(value => value !== undefined)) {
+      if (r.version === 2 || [r.approvalId, r.snapshotToken, r.reviewedBy, r.summary].some(value => value !== undefined)) {
         id(r.approvalId, "review approval"); fingerprint(r.snapshotToken, "review snapshot token"); text(r.reviewedBy, "reviewedBy"); text(r.summary, "review summary");
       }
     } else if (r.type === "completed") {
@@ -406,6 +441,7 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
       keys(r, [...common, "snapshotToken", "completionEventId", "scope", "bases", "consent"], "archive approval");
       fingerprint(r.snapshotToken, "archive snapshot token"); id(r.completionEventId, "completion event"); archiveScope(r.scope); consent(r.consent); if (r.bases !== undefined) archiveBases(r.bases);
     } else if (["archive-prepared", "archive-delivered"].includes(r.type)) {
+      if (r.version === 2) fail("Store archive evidence requires a Store-owned archive transaction");
       keys(r, [...common, "componentId", "commit", "branch", "paths", "preparedBranch", "preparedEventId", "completionEventId", "snapshotToken", "base", "evidence"], "archive event");
       if (r.componentId !== undefined) component(); sha(r.commit, "archive commit"); branch(r.branch, "archive branch");
       if (r.preparedBranch !== undefined) branch(r.preparedBranch, "prepared archive branch");
@@ -460,6 +496,7 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
   const submissionMap = new Map(submissions.map(record => [record.id, record]));
   const identities = new Set<string>(), operations = new Set<string>();
   for (const record of records) {
+    if (record.version !== manifest.version) fail("record version differs from manifest version");
     if (record.featureId !== manifest.featureId) fail("record feature identity mismatch");
     const key = `${record.kind}/${record.id}`;
     if (identities.has(key)) fail("duplicate record identity"); identities.add(key);
@@ -487,6 +524,7 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
     const approved = approvalMap.get(assignment.approvalId), component = status.components[assignment.componentId];
     if (!approved || !Object.hasOwn(approved.components, assignment.componentId) || !component) fail("assignment references unknown approval or component");
     const original = approved.components[assignment.componentId];
+    if (assignment.version === 2 && stableDigest({ value: assignment.planningSource }) !== stableDigest({ value: original.planningSource })) fail("Store assignment does not match approval snapshot");
     if (assignment.repository !== original.repository || assignment.change !== original.change || assignment.base !== original.base || assignment.planFingerprint !== original.planFingerprint || stableDigest({ value: assignment.settings }) !== stableDigest({ value: original.settings }) || stableDigest({ value: assignment.contract }) !== stableDigest({ value: approved.contract })) fail("assignment does not match approval snapshot");
     if (!revoked.has(assignment.id)) {
       if (component.assignmentId) fail(`component ${assignment.componentId} has more than one active assignment`);
@@ -497,7 +535,8 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
     const assignment = assignmentMap.get(submission.assignmentId);
     if (!assignment) fail("submission references unknown assignment");
     const component = status.components[assignment.componentId];
-    const stale = revoked.has(assignment.id) || component.assignmentId !== assignment.id || submission.owner !== assignment.owner || submission.repository !== assignment.repository || submission.change !== assignment.change || submission.base !== assignment.base || submission.planFingerprint !== assignment.planFingerprint || submission.contractFingerprint !== assignment.contract.fingerprint;
+    const stale = revoked.has(assignment.id) || component.assignmentId !== assignment.id || submission.owner !== assignment.owner || submission.repository !== assignment.repository || submission.change !== assignment.change || submission.base !== assignment.base || submission.planFingerprint !== assignment.planFingerprint || submission.contractFingerprint !== assignment.contract.fingerprint ||
+      (submission.version === 2 && submission.planningRevision !== assignment.planningSource?.revision);
     status.submissions[submission.id] = { assignmentId: assignment.id, disposition: stale ? "stale" : "pending", ...(stale ? { reason: "Assignment revoked or approved input identity mismatch" } : {}) };
     if (!stale) {
       component.submissionId = submission.id; component.phase = submission.outcome === "completed" ? "submitted" : submission.outcome;
@@ -605,6 +644,14 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
         if (revokedSoFar.has(event.assignmentId) || receipt.owner !== assignment.owner || receipt.repository !== assignment.repository || receipt.change !== assignment.change || receipt.base !== assignment.base || receipt.planFingerprint !== assignment.planFingerprint || receipt.contractFingerprint !== assignment.contract.fingerprint) continue;
         if (staleAcceptanceAssignments.has(assignment.id) || dependencyBlockers({ manifest, componentId: event.componentId, components: status.components, assignment, historical: true }).length) fail("acceptance requires exact current dependency commits; assignment is stale");
         if (receipt.outcome !== "completed" || receipt.result?.commit !== event.commit || receipt.review?.commit !== event.commit || receipt.review.findings.some(blocking) || receipt.tasks.some(task => !task.completed) || receipt.verification.some(check => check.exitCode !== 0)) fail("acceptance requires a completed exact-commit passing receipt");
+        if (receipt.version === 2 && assignment.version === 2) {
+          const approved = loadSourcePlan(assignment.planningSource).tasks;
+          const reported = new Map(receipt.tasks.map(task => [task.id, task.evidence]));
+          if (receipt.planningRevision !== assignment.planningSource.revision || approved.length !== reported.size || approved.some(task => {
+            const evidence = reported.get(task.id);
+            return task.completed ? evidence?.kind !== "baseline" || evidence.base !== assignment.base : evidence?.kind !== "integrated";
+          })) fail("Store acceptance requires exact approved task evidence and planning revision");
+        }
         if (component.acceptedCommit !== event.commit || component.submissionId !== event.submissionId || acceptedAssignments.get(event.componentId)?.id !== event.assignmentId) {
           if (component.acceptedCommit) invalidateDependents(event.componentId);
           reviews.length = 0; completed = undefined;
@@ -780,6 +827,7 @@ export class CoordinationStore {
     if (manifest.featureId !== this.featureId) throw new Error("Manifest feature identity mismatch");
     const records = entries.filter(e => e !== manifestEntry).map(entry => {
       const record = decodeRecord({ value: committedBlob({ root: this.root, object: entry.object }).toString("utf8") });
+      if (record.version !== manifest.version) fail("record version differs from manifest version");
       if (entry.path !== this.recordPath(record.kind, record.id)) throw new Error("Record filename or kind does not match its immutable identity");
       return record;
     });
@@ -789,6 +837,7 @@ export class CoordinationStore {
   /** Approval authority follows introduction on first-parent history, never user timestamps. */
   authoritativeApproval(options: { snapshot?: CoordinationSnapshot } = {}): ApprovalRecord | undefined {
     const snapshot = options.snapshot ?? this.readSnapshot();
+    if (snapshot.records.some(record => record.version !== snapshot.manifest.version)) fail("record version differs from manifest version");
     const approvals = snapshot.records.filter((r): r is ApprovalRecord => r.kind === "approval");
     const key = JSON.stringify([snapshot.head, approvals.map(record => record.id).sort()]);
     if (this.cachedApproval?.key === key) return approvals.find(record => record.id === this.cachedApproval!.id);

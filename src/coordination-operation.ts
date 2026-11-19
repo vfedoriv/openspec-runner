@@ -21,7 +21,8 @@ export function coordinationOperation<T, R>(options: {
   return locked(runtime, () => {
     let journal = existsSync(path) ? json<OperationJournal<T>>(path) : undefined;
     if (journal && digest(journal.input) !== digest(input)) throw new Error("Immutable operation identity differs");
-    if (git(store.root, "branch", "--show-current") !== store.readManifest().coordinationBranch) throw new Error("Mutation requires declared coordination branch");
+    const manifest = store.readManifest();
+    if (git(store.root, "branch", "--show-current") !== manifest.coordinationBranch) throw new Error("Mutation requires declared coordination branch");
     if (!journal) {
       if (store.readSnapshot().head !== input.expectedHead || !clean(store.root)) throw new Error("Mutation requires expected head and clean Store checkout");
       journal = { input: structuredClone(input), createdAt: input.createdAt ?? new Date().toISOString(), expectedHead: input.expectedHead, data: options.initialize() };
@@ -33,7 +34,7 @@ export function coordinationOperation<T, R>(options: {
     if (store.readSnapshot().head !== tx.expectedHead) throw new Error("Coordination head changed since durable intent; reconcile history");
     const write = (entry: { id: string; operationId: string; payload: object }) => {
       const previous = store.readRecord({ kind: "event", id: entry.id });
-      const record = { version: 1, kind: "event", featureId: store.featureId, createdAt: tx.createdAt,
+      const record = { version: manifest.version, kind: "event", featureId: store.featureId, createdAt: tx.createdAt,
         sequence: previous?.kind === "event" ? previous.sequence : Math.max(0, ...store.readSnapshot().records.filter((r): r is CoordinationEvent => r.kind === "event").map(r => r.sequence)) + 1, ...entry.payload,
         id: entry.id, operationId: entry.operationId } as CoordinationEvent;
       if (previous) {

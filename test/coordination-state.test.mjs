@@ -213,3 +213,39 @@ test("replay rejects simultaneous active assignments and event references to unk
   assert.throws(() => write(event("bad", "accepted", 1, { assignmentId: "missing", submissionId: "missing", componentId: "api", commit: sha })), /unknown|missing/i);
   assert.equal(store.status().components.api.assignmentId, "assignment");
 });
+
+test("v2 manifest requires one portable project per component and retains v1 boundaries", () => {
+  const value = manifest();
+  value.version = 2;
+  value.components.api = { ...component, planning: { repository: "contracts", openspecRoot: "components/api/openspec" } };
+  assert.deepEqual(decodeManifest({ value }), value);
+  for (const planning of [{ repository: "contracts", openspecRoot: "../openspec" }, { repository: "C:/source", openspecRoot: "components/api/openspec" }, { ...value.components.api.planning, root: "/tmp" }]) {
+    assert.throws(() => decodeManifest({ value: { ...value, components: { api: { ...component, planning } } } }));
+  }
+  const aliased = { ...value.components.api, planning: { repository: "contracts", openspecRoot: "components/Api/openspec" } };
+  assert.throws(() => decodeManifest({ value: { ...value, components: { ...value.components, Api: aliased } } }), /portable|alias|duplicate/i);
+  assert.throws(() => decodeManifest({ value: { ...value, version: 1 } }), /field/i);
+});
+
+test("v2 completed receipts require explicit planning revision and typed per-task evidence", () => {
+  const base = { ...submission(), version: 2, planningRevision: sha };
+  const integrated = { id: "1.1", completed: true, evidence: { kind: "integrated", attemptId: "task-1", workerCommit: sha, integrationCommit: sha } };
+  const baseline = { id: "1.1", completed: true, evidence: { kind: "baseline", base: sha } };
+  for (const task of [integrated, baseline]) {
+    const value = { ...base, tasks: [task] };
+    assert.deepEqual(decodeRecord({ value }), value);
+    assert.throws(() => decodeRecord({ value: { ...value, version: 1 } }), /unknown field/i);
+  }
+  assert.throws(() => decodeRecord({ value: { ...base, planningRevision: undefined } }), /revision/i);
+  assert.throws(() => decodeRecord({ value: base }), /evidence/i);
+  assert.throws(() => decodeRecord({ value: { ...base, tasks: [{ ...integrated, evidence: { ...integrated.evidence, cwd: "/machine" } }] } }), /unknown field/i);
+});
+
+test("Store events require current consent and reject legacy code-repository archive evidence", () => {
+  const reviewed = { ...event("review", "reviewed", 1, { stage: "combined", tuple: { api: sha }, verification: [], findings: [] }), version: 2 };
+  assert.throws(() => decodeRecord({ value: reviewed }), /approval|review/i);
+  assert.equal(decodeRecord({ value: { ...reviewed, version: 1 } }).type, "reviewed");
+  const archive = { ...event("archive", "archive-prepared", 2, { componentId: "api", commit: sha, branch: "main",
+    paths: ["openspec/changes/api-change/tasks.md"] }), version: 2 };
+  assert.throws(() => decodeRecord({ value: archive }), /Store archive/i);
+});

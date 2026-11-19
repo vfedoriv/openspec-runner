@@ -64,7 +64,7 @@ export function recordTupleReview(options: {
       if (snapshot.records.some(record => record.kind === "event" && record.id === input.id)) throw new Error("Review identity already exists without coordinator journal");
       const preview = options.preview();
       if (input.token !== preview.token || input.review.token !== preview.token || digest(input.review.tuple) !== digest(preview.tuple)) throw new Error("Review token or attested tuple is stale; preview again");
-      const sample: Reviewed = { version: 1, kind: "event", featureId: store.featureId, id: input.id, operationId: input.operationId,
+      const sample: Reviewed = { version: snapshot.manifest.version, kind: "event", featureId: store.featureId, id: input.id, operationId: input.operationId,
         sequence: 1, createdAt: input.createdAt ?? new Date().toISOString(), type: "reviewed", stage: input.stage, tuple: preview.tuple,
         approvalId: preview.approvalId, snapshotToken: preview.token, reviewedBy: input.review.reviewedBy, summary: input.review.summary,
         findings: input.review.findings, verification: [] };
@@ -80,7 +80,7 @@ export function recordTupleReview(options: {
       journal.expectedHead = recovered.head; delete journal.pendingEvent; save();
     }
     if (store.readSnapshot().head !== journal.expectedHead) throw new Error("Coordination head changed since review intent; reconcile history");
-    const event = (id: string, operationId: string, payload: object) => ({ version: 1, kind: "event", featureId: store.featureId,
+    const event = (id: string, operationId: string, payload: object) => ({ version: snapshot.manifest.version, kind: "event", featureId: store.featureId,
       id, operationId, createdAt: journal!.createdAt, sequence: Math.max(0, ...store.readSnapshot().records.filter((record): record is CoordinationEvent => record.kind === "event").map(record => record.sequence)) + 1, ...payload }) as CoordinationEvent;
     const write = (record: CoordinationEvent) => {
       const existing = store.readRecord({ kind: "event", id: record.id });

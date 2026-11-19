@@ -1,8 +1,9 @@
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { decodeRecord, stableDigest, validateId, type AssignmentRecord } from "./coordination-state.js";
 import { json } from "./system.js";
 import type { Config } from "./plan.js";
+import { unredirectedStorePath } from "./planning-source.js";
 
 export interface ComponentResources {
   terminal: Config["terminal"];
@@ -40,7 +41,25 @@ export function decodeResources(options: { value: unknown; defaults?: ComponentR
   return { terminal: value.terminal, worktrees: value.worktrees, worktreeRoot: resolve(value.worktreeRoot) };
 }
 export function expectedContextPaths(options: { stateDir: string; assignment: AssignmentRecord }) {
-  return [options.assignment.contract, ...(options.assignment.contract.references ?? [])].map((_, index) => resolve(options.stateDir, "component-context", options.assignment.featureId, options.assignment.id, String(index)));
+  return assignmentContexts(options.assignment).map((_, index) => resolve(options.stateDir, "component-context", options.assignment.featureId, options.assignment.id, String(index)));
+}
+export function assignmentContexts(assignment: AssignmentRecord) {
+  return [assignment.contract, ...(assignment.contract.references ?? []), ...(assignment.version === 2 ? [assignment.planningSource] : [])];
+}
+/** A replacement shares the code clone/component scope, including when its OpenSpec change ID differs. */
+export function storeReservation(stateDir: string, assignment: Extract<AssignmentRecord, { version: 2 }>) {
+  const directory = unredirectedStorePath(stateDir, "components");
+  if (!existsSync(directory)) return undefined;
+  let current: ComponentBinding | undefined;
+  for (const name of readdirSync(directory).filter(name => name.endsWith(".json"))) {
+    const binding = readComponentBinding({ stateDir, change: name.slice(0, -5) });
+    if (!binding) throw new Error("Store import reservation changed during inspection");
+    if (binding.phase === "retired" && binding.assignmentId !== assignment.id) continue;
+    if (binding.phase === "retired" || binding.phase === "retiring") throw new Error("Store assignment is retiring or retired");
+    if (stableDigest({ value: binding.assignment }) !== stableDigest({ value: assignment })) throw new Error("A different assignment reserves this Store runtime; retire it before replacement");
+    current = binding;
+  }
+  return current;
 }
 export function readComponentBinding(options: { stateDir: string; change: string }): ComponentBinding | undefined {
   const path = componentBindingPath(options);
