@@ -138,8 +138,9 @@ function keys(value: Record<string, any>, allowed: string[], label: string) {
 function text(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || !value.trim() || value.includes("\0")) fail(`${label} must be nonempty text`);
 }
-export function validateId(options: { value: unknown; label?: string }): asserts options is { value: string; label?: string } {
+export function validateId(options: { value: unknown; label?: string; version?: Version }): asserts options is { value: string; label?: string; version?: Version } {
   if (typeof options.value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(options.value) || ["__proto__", "prototype", "constructor"].includes(options.value)) fail(`${options.label ?? "record"} ID is unsafe`);
+  if (options.version === 2) storeId(options.value);
 }
 function id(value: unknown, label: string) { validateId({ value, label }); }
 function sha(value: unknown, label: string) {
@@ -277,6 +278,7 @@ export function decodeManifest(options: { value: unknown; sharedTasks?: { id: st
   keys(m, ["version", "featureId", "storeId", "sharedChange", "coordinationBranch", "components", "taskMapping", "verification", "completion"], "manifest");
   if (m.version !== 1 && m.version !== 2) fail("unsupported manifest version");
   id(m.featureId, "feature"); id(m.storeId, "Store"); id(m.sharedChange, "shared change"); branch(m.coordinationBranch, "coordination branch");
+  if (m.version === 2) { storeId(m.featureId); storeId(m.sharedChange); }
   const components = obj(m.components, "components");
   const projects = new Set<string>();
   if (!Object.keys(components).length) fail("manifest requires components");
@@ -286,7 +288,7 @@ export function decodeManifest(options: { value: unknown; sharedTasks?: { id: st
       const planning = obj(c.planning, "version 2 Store planning selection");
       keys(planning, ["repository", "openspecRoot"], "Store planning");
       repo(planning.repository, "planning repository");
-      storeId(m.featureId); storeId(c.change);
+      storeId(c.change);
       if (planning.openspecRoot !== `components/${storeId(componentId)}/openspec`) fail("Store planning root must match component ID");
       const key = componentId.toUpperCase();
       if (projects.has(key)) fail("Store planning roots have a portable path alias");
@@ -366,7 +368,12 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
   const r = obj(value, "record");
   if (r.version !== 1 && r.version !== 2) fail("unsupported record version");
   const planningKeys = r.version === 2 ? ["planningSource"] : [];
-  for (const key of ["id", "featureId", "operationId"]) id(r[key], key);
+  for (const key of ["id", "featureId", "operationId"]) validateId({ value: r[key], label: key, version: r.version });
+  if (r.version === 2) {
+    for (const key of ["assignmentId", "submissionId", "componentId", "approvalId", "acceptanceId", "preparedEventId", "completionEventId", "reviewEventId", "targetOperationId", "change"])
+      if (r[key] !== undefined) storeId(r[key]);
+    if (r.contract?.change !== undefined) storeId(r.contract.change);
+  }
   text(r.createdAt, "createdAt"); if (!/^\d{4}-\d\d-\d\dT/.test(r.createdAt) || !Number.isFinite(Date.parse(r.createdAt))) fail("createdAt requires an ISO timestamp");
   if (r.kind === "approval") {
     keys(r, [...identityKeys, "manifestFingerprint", "contract", "components", "verification", "consent"], "approval");
@@ -400,7 +407,7 @@ export function decodeRecord(options: { value: unknown }): CoordinationRecord {
           keys(proof, ["kind", "base"], "baseline task evidence"); sha(proof.base, "baseline base");
         } else if (proof.kind === "integrated") {
           keys(proof, ["kind", "attemptId", "workerCommit", "integrationCommit"], "integrated task evidence");
-          id(proof.attemptId, "integration attempt"); sha(proof.workerCommit, "worker commit"); sha(proof.integrationCommit, "integration commit");
+          storeId(proof.attemptId); sha(proof.workerCommit, "worker commit"); sha(proof.integrationCommit, "integration commit");
         } else fail("unknown Store task evidence kind");
       }
     }
@@ -645,6 +652,11 @@ export function replayStatus(options: { snapshot: CoordinationSnapshot; approval
         if (staleAcceptanceAssignments.has(assignment.id) || dependencyBlockers({ manifest, componentId: event.componentId, components: status.components, assignment, historical: true }).length) fail("acceptance requires exact current dependency commits; assignment is stale");
         if (receipt.outcome !== "completed" || receipt.result?.commit !== event.commit || receipt.review?.commit !== event.commit || receipt.review.findings.some(blocking) || receipt.tasks.some(task => !task.completed) || receipt.verification.some(check => check.exitCode !== 0)) fail("acceptance requires a completed exact-commit passing receipt");
         if (receipt.version === 2 && assignment.version === 2) {
+          const commands = stableDigest({ value: assignment.settings.verifyIntegration });
+          for (const checks of [receipt.verification, event.verification]) {
+            if (!checks || checks.some(check => check.exitCode !== 0) || stableDigest({ value: checks.map(check => check.command) }) !== commands)
+              fail("Store acceptance requires exact passing approved verification on the receipt and acceptance event");
+          }
           const approved = loadSourcePlan(assignment.planningSource).tasks;
           const reported = new Map(receipt.tasks.map(task => [task.id, task.evidence]));
           if (receipt.planningRevision !== assignment.planningSource.revision || approved.length !== reported.size || approved.some(task => {
@@ -868,6 +880,7 @@ export class CoordinationStore {
   }
   writeManifest(options: { manifest: FeatureManifest; sharedTasks: { id: string; completed: boolean }[]; expectedHead: string; operationId: string }): RecordWriteResult {
     const manifest = decodeManifest({ value: options.manifest, sharedTasks: options.sharedTasks });
+    validateId({ value: options.operationId, label: "operation", version: manifest.version });
     if (manifest.featureId !== this.featureId) throw new Error("Manifest feature identity mismatch");
     return this.persist({ path: `${this.directory}/manifest.yaml`, bytes: Buffer.from(stringify(manifest)), branch: manifest.coordinationBranch, expectedHead: options.expectedHead, operationId: options.operationId });
   }

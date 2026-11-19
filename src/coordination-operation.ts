@@ -16,12 +16,12 @@ export function coordinationOperation<T, R>(options: {
   }) => R;
 }): R {
   const { store, input } = options, runtime = repository(store.root).stateDir;
-  validateId({ value: input.id }); validateId({ value: input.operationId });
-  const path = resolve(runtime, options.action, `${input.operationId}.json`), digest = (value: unknown) => stableDigest({ value: JSON.parse(JSON.stringify(value)) });
   return locked(runtime, () => {
+    const manifest = store.readManifest();
+    validateId({ value: input.id, version: manifest.version }); validateId({ value: input.operationId, version: manifest.version });
+    const path = resolve(runtime, options.action, `${input.operationId}.json`), digest = (value: unknown) => stableDigest({ value: JSON.parse(JSON.stringify(value)) });
     let journal = existsSync(path) ? json<OperationJournal<T>>(path) : undefined;
     if (journal && digest(journal.input) !== digest(input)) throw new Error("Immutable operation identity differs");
-    const manifest = store.readManifest();
     if (git(store.root, "branch", "--show-current") !== manifest.coordinationBranch) throw new Error("Mutation requires declared coordination branch");
     if (!journal) {
       if (store.readSnapshot().head !== input.expectedHead || !clean(store.root)) throw new Error("Mutation requires expected head and clean Store checkout");

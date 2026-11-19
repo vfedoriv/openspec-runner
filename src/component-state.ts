@@ -4,6 +4,7 @@ import { decodeRecord, stableDigest, validateId, type AssignmentRecord } from ".
 import { json } from "./system.js";
 import type { Config } from "./plan.js";
 import { unredirectedStorePath } from "./planning-source.js";
+import type { ContextFile } from "./openspec-context.js";
 
 export interface ComponentResources {
   terminal: Config["terminal"];
@@ -45,6 +46,28 @@ export function expectedContextPaths(options: { stateDir: string; assignment: As
 }
 export function assignmentContexts(assignment: AssignmentRecord) {
   return [assignment.contract, ...(assignment.contract.references ?? []), ...(assignment.version === 2 ? [assignment.planningSource] : [])];
+}
+/** A partial import may lack approved entries, but must never contribute extra planning inputs. */
+export function assertDeclaredSnapshotEntries(root: string, files: ContextFile[], partial = false) {
+  const expected = new Map<string, "directory" | "file">();
+  for (const file of files) {
+    const parts = file.path.split("/");
+    for (let count = 1; count < parts.length; count++) expected.set(parts.slice(0, count).join("/"), "directory");
+    expected.set(file.path, "file");
+  }
+  const stat = lstatSync(root, { throwIfNoEntry: false });
+  if (!stat && partial) return;
+  if (!stat?.isDirectory() || stat.isSymbolicLink()) throw new Error("Pinned snapshot root is missing or redirected");
+  const walk = (directory: string, prefix: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = prefix + entry.name, type = expected.get(path);
+      if (!type || (type === "directory" ? !entry.isDirectory() : !entry.isFile())) throw new Error(`Unexpected pinned snapshot entry: ${path}`);
+      expected.delete(path);
+      if (type === "directory") walk(resolve(directory, entry.name), path + "/");
+    }
+  };
+  walk(root, "");
+  if (!partial && expected.size) throw new Error("Pinned snapshot is missing approved entries");
 }
 /** A replacement shares the code clone/component scope, including when its OpenSpec change ID differs. */
 export function storeReservation(stateDir: string, assignment: Extract<AssignmentRecord, { version: 2 }>) {

@@ -249,3 +249,13 @@ test("Store events require current consent and reject legacy code-repository arc
     paths: ["openspec/changes/api-change/tasks.md"] }), version: 2 };
   assert.throws(() => decodeRecord({ value: archive }), /Store archive/i);
 });
+
+test("Store record and project path IDs reject portable reserved filenames while v1 retains its encoding", () => {
+  const e = { ...event("event", "invalidated", 1, { componentId: "api", reason: "Renew plan" }), version: 2 };
+  for (const key of ["featureId", "operationId", "id"]) {
+    for (const name of ["LPT1", "COM0"]) assert.throws(() => decodeRecord({ value: { ...e, [key]: name } }), /unsafe Store path ID/i);
+    assert.equal(decodeRecord({ value: { ...e, version: 1, [key]: "LPT1" } })[key], "LPT1");
+  }
+  const m = { ...manifest(), version: 2, components: { api: { ...component, planning: { repository: "contracts", openspecRoot: "components/api/openspec" } } } };
+  assert.throws(() => decodeManifest({ value: { ...m, sharedChange: "CON" } }), /unsafe Store path ID/i);
+});

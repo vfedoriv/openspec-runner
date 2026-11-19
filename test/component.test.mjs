@@ -538,11 +538,15 @@ test("resource overrides apply to delegated review and bounded repair without mo
   assert.equal(f.f.read("demo").fixRounds, 1); assert.equal(f.f.read("demo").approval.maxFixRounds, 2);
 });
 
-async function approvedStoreAssignment(t, withWeb = false) {
+async function approvedStoreAssignment(t, withWeb = false, verifyIntegration = []) {
   const { storePlanningFixture } = await import("./helpers/store-planning-fixture.mjs");
   const { dir, code, storeRoot, write, input } = storePlanningFixture(t);
   git(code, "config", "openspec-runner.repository", "api");
   write("openspec/changes/shared/tasks.md", "- [ ] 1.1 Deliver API\n");
+  if (verifyIntegration.length) {
+    const config = "components/api/openspec/runner.yaml";
+    write(config, JSON.stringify({ ...JSON.parse(readFileSync(join(storeRoot, config), "utf8")), verifyIntegration }));
+  }
   git(storeRoot, "add", "."); git(storeRoot, "commit", "-m", "Shared contract");
   const featureId = "product", execute = input().execute;
   const repositories = { contracts: storeRoot, api: code };
@@ -554,7 +558,7 @@ async function approvedStoreAssignment(t, withWeb = false) {
   const coord = new Coordination({ root: storeRoot, featureId, repositories, execute });
   const contract = { repository: "contracts", context: { implementationRoot: code, planningRoot: storeRoot, changeRoot: join(storeRoot, "openspec/changes/shared"),
     source: "store", storeId: "team", change: "shared", artifactPaths: [], references: [] } };
-  const spec = { repository: "api", change: "demo", deliveryBranch: "main", dependencies: [], settings: { ...featureSettings, tasks: {}, verifyIntegration: [], setup: [] },
+  const spec = { repository: "api", change: "demo", deliveryBranch: "main", dependencies: [], settings: { ...featureSettings, tasks: {}, verifyIntegration, setup: [] },
     planning: { repository: "contracts", openspecRoot: "components/api/openspec" } };
   const manifest = { version: 2, featureId, storeId: "team", sharedChange: "shared", coordinationBranch: "main", components: { api: spec },
     taskMapping: { "1.1": [{ type: "merged", componentId: "api" }] }, verification: [], completion: { requireAllMerged: true } };
@@ -698,6 +702,13 @@ nativeTest("Store import reserves the protected project in its clone scope and r
     await assert.rejects(worker.import({ ...selection, token: inspect.token }), /differ|content|bytes/i);
     assert.equal(readComponentBinding({ stateDir, change: "demo" }).phase, "reserved");
     unlinkSync(tasks);
+    if (process.platform !== "win32") {
+      writeFileSync(tasks, "- [ ] 1.1 Deliver change\n");
+      const extra = join(tasks, "..", "unapproved.yaml");
+      writeFileSync(extra, "left over from another plan\n");
+      await assert.rejects(worker.import({ ...selection, token: inspect.token }), /unexpected pinned snapshot entry/i);
+      unlinkSync(extra);
+    }
     const resumed = await worker.import({ ...selection, token: inspect.token });
     assert.equal(resumed.phase, "reserved");
     assert.equal(readFileSync(tasks, "utf8"), "- [ ] 1.1 Deliver change\n");
@@ -716,4 +727,97 @@ nativeTest("Store import reserves the protected project in its clone scope and r
       unlock(stateDir);
     }
   }
+});
+
+nativeTest("historical Store import refuses a revoked assignment before reserving or resuming", async t => {
+  const f = await approvedStoreAssignment(t);
+  const p = f.coord.assignmentPreview(f.request);
+  f.coord.assign({ ...f.request, id: "issue", operationId: "assign", token: p.token, expectedHead: f.head() });
+  const worker = new Component({ root: f.code, repository: "api", execute: f.execute });
+  const options = { storeRoot: f.storeRoot, featureId: f.featureId, assignmentId: "issue", owner: "alice", historyRevision: f.head() };
+  const { assignment, execution, historyRevision } = worker.assignmentContext(options);
+  const { stableDigest } = await import("../dist/coordination-state.js");
+  const { componentBindingPath, expectedContextPaths } = await import("../dist/component-state.js");
+  const stateDir = execution.runtimeDir, resources = { terminal: "manual", worktrees: "git", worktreeRoot: execution.worktreeRoot };
+  const token = stableDigest({ value: { assignment, historyRevision, resources } });
+  // Isolate mutation authorization from machine capabilities, including privileged Windows hosts.
+  t.mock.method(worker, "inspect", async () => ({ assignment, historyRevision, resources, token }));
+  f.coord.revoke({ assignmentId: "issue", reason: "Superseded", id: "stop", operationId: "stop-issue", expectedHead: f.head() });
+  git(f.storeRoot, "switch", "--detach", `${f.approved.components.api.planningSource.revision}^`);
+  assert.equal(worker.assignmentContext(options).assignment.id, "issue");
+  const file = componentBindingPath({ stateDir, change: "demo" });
+  await assert.rejects(worker.import({ ...options, token }), /revoked|no longer active/i);
+  assert.equal(existsSync(file), false);
+  mkdirSync(join(file, ".."), { recursive: true });
+  const saved = JSON.stringify({ version: 1, phase: "reserved", repository: "api", change: "demo", assignmentId: assignment.id,
+    featureId: assignment.featureId, historyRevision, token, assignment, resources, contextPaths: expectedContextPaths({ stateDir, assignment }) });
+  writeFileSync(file, saved);
+  await assert.rejects(worker.import({ ...options, token }), /revoked|no longer active/i);
+  assert.equal(readFileSync(file, "utf8"), saved);
+  assert.equal(existsSync(join(stateDir, "component-context")), false);
+});
+
+nativeTest("Store preflight accepts shared checkbox progress and rejects changed primary contract selections", async t => {
+  const f = await approvedStoreAssignment(t);
+  const p = f.coord.assignmentPreview(f.request);
+  f.coord.assign({ ...f.request, id: "issue", operationId: "assign", token: p.token, expectedHead: f.head() });
+  const worker = new Component({ root: f.code, repository: "api", execute: f.execute });
+  const options = { storeRoot: f.storeRoot, featureId: f.featureId, assignmentId: "issue", owner: "alice" };
+  f.write("openspec/changes/shared/tasks.md", "- [x] 1.1 Deliver API\n");
+  f.write("unrelated.txt", "Other work\n");
+  git(f.storeRoot, "add", "."); git(f.storeRoot, "commit", "-m", "Advance shared progress");
+  const clean = worker.assignmentContext(options);
+  assert.equal(clean.assignment.contract.files.find(file => file.path.endsWith("/tasks.md")).content, "- [ ] 1.1 Deliver API\n");
+  f.write("openspec/specs/api/spec.md", "Different public contract\n");
+  git(f.storeRoot, "add", "."); git(f.storeRoot, "commit", "-m", "Add selected API spec");
+  assert.throws(() => worker.assignmentContext(options), /shared contract|primary contract/i);
+  assert.deepEqual(worker.assignmentContext({ ...options, historyRevision: clean.historyRevision }).assignment.contract, clean.assignment.contract);
+});
+
+nativeTest("Store replay requires exact passing verification evidence on receipt and acceptance", async t => {
+  const checks = [["node", "--test"]], passing = [{ command: checks[0], exitCode: 0, evidence: "Passed" }];
+  const f = await approvedStoreAssignment(t, false, checks);
+  const p = f.coord.assignmentPreview(f.request);
+  f.coord.assign({ ...f.request, id: "issue", operationId: "assign", token: p.token, expectedHead: f.head() });
+  const { replayStatus } = await import("../dist/coordination-state.js");
+  const snapshot = f.coord.snapshot(), commit = git(f.code, "rev-parse", "HEAD");
+  const metadata = { version: 2, featureId: f.featureId, createdAt: new Date().toISOString() };
+  const receipt = { ...metadata, id: "receipt", operationId: "op-receipt", kind: "submission", assignmentId: "issue", owner: p.owner,
+    repository: p.repository, change: p.change, outcome: "completed", base: p.base, planFingerprint: p.planFingerprint, planningRevision: p.planningSource.revision,
+    contractFingerprint: p.contract.fingerprint, result: { commit, branch: "main" }, review: { commit, findings: [] },
+    tasks: [{ id: "1.1", completed: true, evidence: { kind: "integrated", attemptId: "a", workerCommit: commit, integrationCommit: commit } }], verification: passing };
+  const event = { ...metadata, id: "accept", operationId: "op-accept", kind: "event", type: "accepted", sequence: 1, assignmentId: "issue",
+    componentId: "api", submissionId: "receipt", commit, verification: passing };
+  const replay = (r, e) => replayStatus({ snapshot: { ...snapshot, records: [...snapshot.records, r, e] } });
+  assert.equal(replay(receipt, event).components.api.acceptedCommit, commit);
+  for (const invalid of [[], [{ ...passing[0], command: ["node", "--version"] }], [{ ...passing[0], exitCode: 1 }]]) {
+    assert.throws(() => replay({ ...receipt, verification: invalid }, event));
+    assert.throws(() => replay(receipt, { ...event, verification: invalid }));
+  }
+  assert.throws(() => replay(receipt, { ...event, verification: undefined }));
+});
+
+nativeTest("Store snapshot retry rejects undeclared entries beside approved files", async t => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const root = mkdtempSync(join(tmpdir(), "runner-snapshot-inventory-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { assertDeclaredSnapshotEntries } = await import("../dist/component-state.js");
+  const files = [{ path: "project/openspec/tasks.md", content: "Approved\n" }];
+  const dir = join(root, "project/openspec");
+  mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, "tasks.md"), files[0].content);
+  writeFileSync(join(dir, "added.yaml"), "unapproved\n");
+  assert.throws(() => assertDeclaredSnapshotEntries(root, files), /undeclared|unexpected/i);
+  unlinkSync(join(dir, "added.yaml")); mkdirSync(join(root, "extra"));
+  assert.throws(() => assertDeclaredSnapshotEntries(root, files), /undeclared|unexpected/i);
+  rmdirSync(join(root, "extra"));
+  assertDeclaredSnapshotEntries(root, files);
+});
+
+nativeTest("Store rejects unsafe assignment filenames before publication", async t => {
+  const f = await approvedStoreAssignment(t);
+  const p = f.coord.assignmentPreview(f.request);
+  const before = f.head();
+  assert.throws(() => f.coord.assign({ ...f.request, id: "AUX", operationId: "issue", token: p.token, expectedHead: before }), /unsafe Store path ID/i);
+  assert.equal(f.head(), before);
 });

@@ -7,7 +7,7 @@ import type { TaskAttempt } from "./runner.js";
 import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import { loadPlan, type Plan } from "./plan.js";
 import { decodeRecord, stableDigest, type AssignmentRecord } from "./coordination-state.js";
-import { assignmentContexts, componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
+import { assertDeclaredSnapshotEntries, assignmentContexts, componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
 import { verifyWindowsContext, windowsContextRequest } from "./windows-context.js";
 
 export type FeaturePhase = "planning" | "awaiting-plan-approval" | "implementing" |
@@ -118,6 +118,7 @@ export function validateDelegatedBinding(binding: DelegatedBinding) {
   if (contexts.length !== binding.contextPaths.length) throw new Error("Pinned context inventory mismatch");
   contexts.forEach((context, index) => {
     const root = binding.contextPaths[index];
+    if (assignment.version === 2) assertDeclaredSnapshotEntries(root, context.files);
     if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink() || (lstatSync(root).mode & 0o222)) throw new Error("Pinned context directory is unsafe or writable");
     for (const file of context.files) {
       let path = root;

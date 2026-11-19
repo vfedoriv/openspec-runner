@@ -61,7 +61,7 @@ export interface TargetReceipt {
 }
 export interface ArchivePreparationReceipt { preview: ArchivePreview; completionEventId: string; targets: Record<string, TargetReceipt> }
 export function archiveJournalPath(options: { store: CoordinationStore; operationId: string }) {
-  validateId({ value: options.operationId });
+  validateId({ value: options.operationId, version: options.store.readManifest().version });
   return resolve(repository(options.store.root).stateDir, "archive", `${options.operationId}.json`);
 }
 function archiveScopeEvidence(options: { target: ArchiveTarget; receipt: TargetReceipt }) {

@@ -340,7 +340,8 @@ export class Coordination {
     return { ...payload, head: snapshot.head, token: digest(payload) };
   }
   accept(options: MutationIdentity & { submissionId: string; token: string; inputs?: ApprovalInputs }) {
-    validateId({ value: options.id }); validateId({ value: options.operationId });
+    const { version } = this.store.readManifest();
+    validateId({ value: options.id, version }); validateId({ value: options.operationId, version });
     const runtime = repository(this.store.root).stateDir, journalPath = resolve(runtime, "acceptance", `${options.operationId}.json`);
     return locked(runtime, () => {
       type Journal = { input: { id: string; operationId: string; submissionId: string; token: string; expectedHead: string; createdAt?: string };

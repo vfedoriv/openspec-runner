@@ -10,8 +10,8 @@ import { Feature } from "./feature.js";
 import { readFeature, featurePath, validateDelegatedBinding, delegationForBinding, type FeatureApproval } from "./feature-state.js";
 import { retirementPath, retirementPreview, retireComponent, type RetirementInput } from "./component-retirement.js";
 import { getHarness } from "./harnesses/registry.js";
-import { safeContextPath, type ContextFile, type OpenSpecExecutor } from "./openspec-context.js";
-import { assignmentContexts, componentBindingPath, readComponentBinding, decodeResources, expectedContextPaths, storeReservation, type ComponentResources, type ComponentBinding } from "./component-state.js";
+import { contextFingerprint, repinContext, safeContextPath, type ContextFile, type OpenSpecExecutor } from "./openspec-context.js";
+import { assertDeclaredSnapshotEntries, assignmentContexts, componentBindingPath, readComponentBinding, decodeResources, expectedContextPaths, storeReservation, type ComponentResources, type ComponentBinding } from "./component-state.js";
 import { loadSourcePlan, pinStorePlan, unredirectedStorePath } from "./planning-source.js";
 import { resolveExecutionContext } from "./execution-context.js";
 import { dependencyBlockers } from "./coordination-dependencies.js";
@@ -71,6 +71,9 @@ export class Component {
     const plan = loadSourcePlan(execution.planningSource);
     if (assignment.version === 2) {
       storeReservation(execution.runtimeDir, assignment);
+      const primary = repinContext({ root: store.root, context: assignment.contract, revision: historyRevision });
+      if (contextFingerprint({ ...primary, references: assignment.contract.references }) !== assignment.contract.fingerprint)
+        throw new Error("Shared contract drifted in inspected Store history; renew approval");
       const blockers = dependencyBlockers({ manifest: snapshot.manifest, componentId: assignment.componentId, components: status.components, assignment });
       if (status.components[assignment.componentId].dependencyStale || blockers.length) throw new Error(`Stale assignment dependencies: ${blockers.join("; ")}`);
       const source = assignment.planningSource;
@@ -89,7 +92,7 @@ export class Component {
     if (plan.fingerprint !== assignment.planFingerprint) throw new Error("Committed component plan differs from assignment fingerprint");
     if (digest(plan.config.setup) !== digest(assignment.settings.setup ?? []) || digest(plan.config.verifyIntegration) !== digest(assignment.settings.verifyIntegration) ||
         digest(plan.tasks.map(task => task.id).sort()) !== digest(Object.keys(assignment.settings.tasks).sort())) throw new Error("Assignment task scope/setup/checks differ from committed component plan");
-    return { assignment, historyRevision, execution, plan };
+    return { assignment, historyRevision, coordinationBranch: snapshot.manifest.coordinationBranch, execution, plan };
   }
   async inspect(options: ComponentInspection) {
     const { assignment, historyRevision, execution, plan } = this.assignmentContext(options);
@@ -153,15 +156,23 @@ export class Component {
     if (!token || token !== preview.token) throw new Error("Import token is stale; inspect assignment again");
     const assignment = preview.assignment;
     if (assignment.version === 2) {
-      const { execution, historyRevision } = this.assignmentContext(inspection);
-      if (historyRevision !== preview.historyRevision) throw new Error("Store history changed during inspection");
+      const { historyRevision } = preview;
+      const execution = resolveExecutionContext({ implementationRoot: this.repo.root, change: assignment.change,
+        store: { storeRoot: inspection.storeRoot, featureId: assignment.featureId, componentId: assignment.componentId,
+          assignmentId: assignment.id, source: assignment.planningSource } });
       const stateDir = execution.runtimeDir, path = componentBindingPath({ stateDir, change: assignment.change });
       const store = repository(inspection.storeRoot);
       const exclude = unredirectedStorePath(store.common, "info", "exclude");
       if (git(store.root, "ls-files", "--", ".openspec-runner")) throw new Error("Store runtime must be untracked");
-      const excludes = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-      if (!excludes.split(/\r?\n/).includes("/.openspec-runner/")) appendFileSync(exclude, "\n/.openspec-runner/\n");
       return locked(stateDir, () => {
+        const authority = new CoordinationStore({ root: store.root, featureId: assignment.featureId });
+        const branch = authority.readManifest({ revision: historyRevision }).coordinationBranch;
+        const currentRef = `refs/heads/${branch}^{commit}`;
+        const current = this.assignmentContext({ ...inspection, historyRevision: git(store.root, "rev-parse", currentRef) });
+        if (digest(current.assignment) !== digest(assignment) || (!inspection.historyRevision && current.historyRevision !== historyRevision))
+          throw new Error("Assignment or Store history changed during inspection");
+        if (current.coordinationBranch !== branch) throw new Error("Declared coordination branch changed since inspection");
+        if (inspection.historyRevision) git(store.root, "merge-base", "--is-ancestor", historyRevision, current.historyRevision);
         unredirectedStorePath(stateDir, path);
         if (existsSync(retirementPath(stateDir, assignment.featureId, assignment.id))) throw new Error("Assignment is retired");
         const old = storeReservation(stateDir, assignment);
@@ -170,11 +181,19 @@ export class Component {
         const binding: ComponentBinding = { version: 1, phase: "reserved", repository: this.repository, change: assignment.change,
           assignmentId: assignment.id, featureId: assignment.featureId, historyRevision, token, assignment,
           contextPaths: expectedContextPaths({ stateDir, assignment }), resources: preview.resources };
+        if (git(store.root, "rev-parse", currentRef) !== current.historyRevision)
+          throw new Error("Store authority changed during import; inspect again");
+        const excludes = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+        if (!excludes.split(/\r?\n/).includes("/.openspec-runner/")) appendFileSync(exclude, "\n/.openspec-runner/\n");
         if (!old) atomic(path, binding);
         if (process.platform === "win32") sealWindowsContext(windowsContextRequest(stateDir, binding));
         else {
           mkdirSync(unredirectedStorePath(stateDir, dirname(binding.contextPaths[0])), { recursive: true });
-          assignmentContexts(assignment).forEach((context, index) => this.materialize(context, binding.contextPaths[index]));
+          assignmentContexts(assignment).forEach((context, index) => {
+            const root = binding.contextPaths[index];
+            assertDeclaredSnapshotEntries(root, context.files, true);
+            this.materialize(context, root);
+          });
         }
         validateDelegatedBinding(delegationForBinding({ stateDir, binding }));
         return binding;

@@ -52,7 +52,8 @@ export function recordTupleReview(options: {
   preview: () => TupleReviewPreview;
 }) {
   const { store, input } = options;
-  validateId({ value: input.id }); validateId({ value: input.operationId });
+  const { version } = store.readManifest();
+  validateId({ value: input.id, version }); validateId({ value: input.operationId, version });
   const runtime = repository(store.root).stateDir, journalPath = resolve(runtime, "review", `${input.operationId}.json`);
   return locked(runtime, () => {
     let journal = existsSync(journalPath) ? json<Journal>(journalPath) : undefined;

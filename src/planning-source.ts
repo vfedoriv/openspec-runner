@@ -28,7 +28,7 @@ export type PlanningSource = { kind: "local"; root: string; change: string } | S
 
 export function storeId(value: string): string {
   if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value) ||
-      ["__proto__", "constructor", "prototype"].includes(value) || /^(?:aux|con|prn|nul|com[1-9]|lpt[1-9])$/i.test(value))
+      ["__proto__", "constructor", "prototype"].includes(value) || /^(?:aux|con|prn|nul|com[0-9]|lpt[0-9])$/i.test(value))
     throw new Error(`Unsafe Store path ID: ${value}`);
   return value;
 }
