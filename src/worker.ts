@@ -8,6 +8,7 @@ import { ClaudeStreamDecoder } from "./harnesses/claude-stream.js";
 import { superviseCopilot } from "./harnesses/copilot-supervisor.js";
 import { resolveCommand } from "./platform-command.js";
 import { observeProcess, stopOwnedProcess, windowsTreeIsGone } from "./platform-process.js";
+import type { StoreInvocationScope } from "./harnesses/types.js";
 
 // Exec exits after its turn and preserves session rollouts by default. The parent
 // observes close only after the child and its report command have returned.
@@ -20,6 +21,7 @@ export async function superviseWorker(
   prompt: string,
   started: (pid: number) => void,
   evidence?: (update: (current: SupervisedSession) => void) => void,
+  store?: StoreInvocationScope,
 ): Promise<number | null> {
   const harness = getHarness(a.agent ?? "codex");
   const capabilities = await harness.capabilities(a.path, a.settings);
@@ -42,15 +44,16 @@ export async function superviseWorker(
     common,
     prompt,
     session,
+    store,
   );
   if (harness.managedInvocation && a.gitDir && a.branch)
-    invocation = harness.managedInvocation(invocation, { common, gitDir: a.gitDir, branch: a.branch });
+    invocation = harness.managedInvocation(invocation, { common, gitDir: a.gitDir, branch: a.branch, ...(store ? { store } : {}) });
   if (a.id && capabilities.features.structuredActivity && harness.activityInvocation) {
     try { invocation = harness.activityInvocation(invocation, capabilities); } catch { /* Optional capture hook. */ }
   }
   for (const directory of invocation.prepareDirectories ?? []) mkdirSync(directory, { recursive: true });
   if (a.gitDir && a.branch)
-    harness.validateManagedInvocation?.(invocation, { common, gitDir: a.gitDir, branch: a.branch });
+    harness.validateManagedInvocation?.(invocation, { common, gitDir: a.gitDir, branch: a.branch, ...(store ? { store } : {}) });
   mkdirSync(dirname(a.worker!.log), { recursive: true });
   const fd = openSync(a.worker!.log, "ax", 0o600);
   let activity: ActivityWriter | undefined;

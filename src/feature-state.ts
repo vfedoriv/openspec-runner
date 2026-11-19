@@ -6,6 +6,7 @@ import type { HarnessSettings } from "./harnesses/types.js";
 import type { TaskAttempt } from "./runner.js";
 import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import { loadPlan, type Plan } from "./plan.js";
+import { loadSourcePlan } from "./planning-source.js";
 import { decodeRecord, stableDigest, type AssignmentRecord } from "./coordination-state.js";
 import { assertDeclaredSnapshotEntries, assignmentContexts, componentBindingPath, readComponentBinding, type ComponentBinding, type ComponentResources } from "./component-state.js";
 import { verifyWindowsContext, windowsContextRequest } from "./windows-context.js";
@@ -196,7 +197,7 @@ export function approvedFeature(stateDir: string, plan: Plan) {
       throw new Error("Delegated approval settings differ from imported assignment binding");
   }
   if (!s.approval || s.invalidated || s.approval.fingerprint !== plan.fingerprint ||
-      loadPlan(s.planningRoot, plan.change).fingerprint !== s.approval.fingerprint)
+      (runtime?.assignment.version === 2 ? loadSourcePlan(runtime.assignment.planningSource) : loadPlan(s.planningRoot, plan.change)).fingerprint !== s.approval.fingerprint)
     throw new Error("Managed feature requires approval of the current plan; reconcile changed artifacts and run feature approve");
   return s;
 }

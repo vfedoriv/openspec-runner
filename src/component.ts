@@ -9,11 +9,13 @@ import { portableVerificationEvidence, verificationCommand } from "./submission.
 import { Feature } from "./feature.js";
 import { readFeature, featurePath, validateDelegatedBinding, delegationForBinding, type FeatureApproval } from "./feature-state.js";
 import { retirementPath, retirementPreview, retireComponent, type RetirementInput } from "./component-retirement.js";
+import { withStoreOwnership } from "./store-ownership.js";
 import { getHarness } from "./harnesses/registry.js";
 import { contextFingerprint, repinContext, safeContextPath, type ContextFile, type OpenSpecExecutor } from "./openspec-context.js";
 import { assertDeclaredSnapshotEntries, assignmentContexts, componentBindingPath, readComponentBinding, decodeResources, expectedContextPaths, storeReservation, type ComponentResources, type ComponentBinding } from "./component-state.js";
 import { loadSourcePlan, pinStorePlan, unredirectedStorePath } from "./planning-source.js";
-import { resolveExecutionContext } from "./execution-context.js";
+import { resolveExecutionContext, type ExecutionContext } from "./execution-context.js";
+import { Runner } from "./runner.js";
 import { dependencyBlockers } from "./coordination-dependencies.js";
 import { assertWindowsContextHost, probeWindowsContext, sealWindowsContext, validateWindowsContextInventory, verifyWindowsContext, windowsContextRequest } from "./windows-context.js";
 export type { ComponentResources, ComponentBinding } from "./component-state.js";
@@ -35,19 +37,23 @@ export class Component {
   readonly repo: ReturnType<typeof repository>;
   readonly repository: string;
   private readonly execute?: OpenSpecExecutor;
-  constructor(options: { root: string; repository: string; execute?: OpenSpecExecutor }) {
-    this.repo = repository(options.root);
+  readonly execution?: ExecutionContext;
+  constructor(options: { root: string; repository: string; execute?: OpenSpecExecutor; execution?: ExecutionContext }) {
+    const runner = new Runner(options.root, undefined, options.execution);
+    this.repo = runner.repo;
+    this.execution = runner.execution;
     this.repository = options.repository;
     this.execute = options.execute;
   }
+  private feature() { return new Feature(this.repo.root, undefined, this.execution); }
   private bindingPath(change: string) { return componentBindingPath({ stateDir: this.repo.stateDir, change }); }
   readBinding(options: { change: string }): ComponentBinding | undefined {
     const binding = readComponentBinding({ stateDir: this.repo.stateDir, change: options.change });
     if (binding && binding.repository !== this.repository) throw new Error("Component runtime binding repository identity mismatch");
     return binding;
   }
-  retirementPreview(input: RetirementInput) { return retirementPreview(this.repo.root, this.repository, input); }
-  retire({ token, ...input }: RetirementInput & { token: string }) { return retireComponent(this.repo.root, this.repository, input, token); }
+  retirementPreview(input: RetirementInput) { return retirementPreview(this.repo.root, this.repository, input, this.execution); }
+  retire({ token, ...input }: RetirementInput & { token: string }) { return retireComponent(this.repo.root, this.repository, input, token, this.execution); }
   assignmentContext(options: ComponentInspection) {
     known(options); assertRepositoryIdentity({ root: this.repo.root, repository: this.repository });
     const store = new CoordinationStore({ root: options.storeRoot, featureId: options.featureId });
@@ -164,7 +170,7 @@ export class Component {
       const store = repository(inspection.storeRoot);
       const exclude = unredirectedStorePath(store.common, "info", "exclude");
       if (git(store.root, "ls-files", "--", ".openspec-runner")) throw new Error("Store runtime must be untracked");
-      return locked(stateDir, () => {
+      const binding = locked(stateDir, () => {
         const authority = new CoordinationStore({ root: store.root, featureId: assignment.featureId });
         const branch = authority.readManifest({ revision: historyRevision }).coordinationBranch;
         const currentRef = `refs/heads/${branch}^{commit}`;
@@ -176,8 +182,9 @@ export class Component {
         unredirectedStorePath(stateDir, path);
         if (existsSync(retirementPath(stateDir, assignment.featureId, assignment.id))) throw new Error("Assignment is retired");
         const old = storeReservation(stateDir, assignment);
-        if (old && (old.token !== token || old.phase !== "reserved")) throw new Error("Store import reservation differs; reconcile existing execution");
-        if (existsSync(featurePath(stateDir, assignment.change)) || existsSync(resolve(stateDir, `${assignment.change}.json`))) throw new Error("Existing managed execution cannot be replaced by assignment import");
+        if (old && (old.token !== token || !["reserved", "ready"].includes(old.phase))) throw new Error("Store import reservation differs; reconcile existing execution");
+        if (!old && (existsSync(featurePath(stateDir, assignment.change)) || existsSync(resolve(stateDir, `${assignment.change}.json`))))
+          throw new Error("Existing managed execution cannot be replaced by assignment import");
         const binding: ComponentBinding = { version: 1, phase: "reserved", repository: this.repository, change: assignment.change,
           assignmentId: assignment.id, featureId: assignment.featureId, historyRevision, token, assignment,
           contextPaths: expectedContextPaths({ stateDir, assignment }), resources: preview.resources };
@@ -185,7 +192,7 @@ export class Component {
           throw new Error("Store authority changed during import; inspect again");
         const excludes = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
         if (!excludes.split(/\r?\n/).includes("/.openspec-runner/")) appendFileSync(exclude, "\n/.openspec-runner/\n");
-        if (!old) atomic(path, binding);
+        withStoreOwnership(execution, assignment.base, () => { if (!old) atomic(path, binding); });
         if (process.platform === "win32") sealWindowsContext(windowsContextRequest(stateDir, binding));
         else {
           mkdirSync(unredirectedStorePath(stateDir, dirname(binding.contextPaths[0])), { recursive: true });
@@ -196,10 +203,25 @@ export class Component {
           });
         }
         validateDelegatedBinding(delegationForBinding({ stateDir, binding }));
-        return binding;
+        return old ?? binding;
+      });
+      const feature = new Feature(this.repo.root, undefined, execution);
+      const delegated = delegationForBinding({ stateDir, binding });
+      const approval: FeatureApproval = { token: digest(assignment), fingerprint: assignment.planFingerprint, base: assignment.base,
+        ...structuredClone(assignment.settings), at: assignment.createdAt };
+      feature.bindAssignment({ change: assignment.change, approval, delegated });
+      return feature.runner.lock(() => {
+        const current = this.assignmentContext({ ...inspection, historyRevision: undefined });
+        if (digest(current.assignment) !== digest(assignment)) throw new Error("Store assignment changed during activation");
+        const saved = readComponentBinding({ stateDir, change: assignment.change });
+        if (!saved || saved.token !== token || !["reserved", "ready"].includes(saved.phase)) throw new Error("Store reservation changed during activation");
+        validateDelegatedBinding(delegated);
+        saved.phase = "ready";
+        atomic(path, saved);
+        return saved;
       });
     }
-    const feature = new Feature(this.repo.root), path = this.bindingPath(assignment.change);
+    const feature = this.feature(), path = this.bindingPath(assignment.change);
     const windows = process.platform === "win32";
     const binding = feature.runner.lock(() => {
       if (existsSync(retirementPath(this.repo.stateDir, assignment.featureId, assignment.id)))
@@ -252,7 +274,7 @@ export class Component {
     assertRepositoryIdentity({ root: this.repo.root, repository: this.repository });
     const binding = this.readBinding(options);
     if (!binding || binding.phase !== "ready") throw new Error("Component requires completed assignment import");
-    const feature = new Feature(this.repo.root), state = feature.read(options.change);
+    const feature = this.feature(), state = feature.read(options.change);
     if (!state.delegated) throw new Error("Missing delegated assignment binding");
     validateDelegatedBinding(state.delegated);
     if (!["completed", "blocked", "failed"].includes(options.outcome)) throw new Error("Invalid submission outcome");
@@ -276,7 +298,7 @@ export class Component {
   private exportSubmissionCore(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
     validateId({ value: options.id }); validateId({ value: options.operationId });
     const path = resolve(this.repo.stateDir, "submissions", `${options.id}.json`);
-    return new Feature(this.repo.root).runner.lock(() => {
+    return this.feature().runner.lock(() => {
       if (existsSync(path)) {
         const saved = json<{ input: object; token: string; record: SubmissionRecord; bytes: string }>(path);
         if (digest(saved.input) !== digest(options)) throw new Error("Immutable submission export identity differs");
@@ -297,11 +319,11 @@ export class Component {
         featureId: binding.featureId, createdAt: options.createdAt ?? new Date().toISOString() };
       decodeRecord({ value: { ...identity, ...payload, verification: [] } });
       const checks = options.outcome === "completed" ? binding.assignment.settings.verifyIntegration.map(command =>
-        verificationCommand({ root: new Feature(this.repo.root).runner.read(options.change)!.integration.path, commit: "result" in preview ? preview.result.commit : "", command })) : [];
+        verificationCommand({ root: this.feature().runner.read(options.change)!.integration.path, commit: "result" in preview ? preview.result.commit : "", command })) : [];
       if (checks.some(check => check.exitCode !== 0)) throw new Error("Required submission verification failed");
       // Revalidate after checks so they cannot mutate the reviewed snapshot.
       if (this.submissionPreview(options).token !== preview.token) throw new Error("Submission changed during verification");
-      const component = `component:${binding.assignment.componentId}`, integration = new Feature(this.repo.root).runner.read(options.change)!.integration.path;
+      const component = `component:${binding.assignment.componentId}`, integration = this.feature().runner.read(options.change)!.integration.path;
       const roots = [{ path: this.repo.root, identity: component }, { path: this.repo.common, identity: `${component}:git` },
         { path: this.repo.stateDir, identity: `${component}:runtime` }, { path: binding.resources.worktreeRoot, identity: `${component}:worktrees` },
         { path: integration, identity: component }];

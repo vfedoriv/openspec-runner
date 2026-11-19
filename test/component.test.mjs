@@ -710,7 +710,7 @@ nativeTest("Store import reserves the protected project in its clone scope and r
       unlinkSync(extra);
     }
     const resumed = await worker.import({ ...selection, token: inspect.token });
-    assert.equal(resumed.phase, "reserved");
+    assert.equal(resumed.phase, "ready");
     assert.equal(readFileSync(tasks, "utf8"), "- [ ] 1.1 Deliver change\n");
     assert.equal(existsSync(join(f.code, "openspec")), false);
     assert.equal(existsSync(join(f.code, ".git/openspec-runner")), false);

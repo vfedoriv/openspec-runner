@@ -34,30 +34,32 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 
 ## Implementation sequence
 
-### 1. Introduce planning and execution contexts
+### 1. Introduce planning and execution contexts — completed
 
 **Files:** Create `src/planning-source.ts`, `src/execution-context.ts`, `test/planning-source.test.mjs`, `test/execution-context.test.mjs`; modify `src/plan.ts`, `src/system.ts`.
 
-- [ ] Define `PlanningSource` as a discriminated local/Store source. A Store source binds repository identity, full revision, relative OpenSpec root, change, selected file bytes, and fingerprint; machine checkout paths are resolved separately. Add `loadSourcePlan(source: PlanningSource): Plan` and `resolveExecutionContext(input: ExecutionContextInput): ExecutionContext`. Input contains `implementationRoot` and optional Store mode selection `{ storeRoot, featureId, componentId, assignmentId }`; output separates implementation repository, planning source, runtime directory, and worktree root.
-- [ ] Reuse existing parsing/fingerprint rules for local mode. Read Store bytes from the approved Git revision through the existing context adapter; validate nested roots, configuration, supplements, path containment, and symlink rejection. OpenSpec validation runs from the selected planning project, never the code checkout.
-- [ ] Test local output parity, Store plans with no code `openspec/`, different component configurations, invalid/redirected roots, and missing capabilities. Test that independent clones have separate runtimes while linked worktrees share the proper ownership scope. Run build and these tests.
+- [x] Define `PlanningSource` as a discriminated local/Store source. A Store source binds repository identity, full revision, relative OpenSpec root, change, selected file bytes, and fingerprint; machine checkout paths are resolved separately. Add `loadSourcePlan(source: PlanningSource): Plan` and `resolveExecutionContext(input: ExecutionContextInput): ExecutionContext`. Input contains `implementationRoot` and optional Store mode selection `{ storeRoot, featureId, componentId, assignmentId }`; output separates implementation repository, planning source, runtime directory, and worktree root.
+- [x] Reuse existing parsing/fingerprint rules for local mode. Read Store bytes from the approved Git revision through the existing context adapter; validate nested roots, configuration, supplements, path containment, and symlink rejection. OpenSpec validation runs from the selected planning project, never the code checkout.
+- [x] Test local output parity, Store plans with no code `openspec/`, different component configurations, invalid/redirected roots, and missing capabilities. Test that independent clones have separate runtimes while linked worktrees share the proper ownership scope. Run build and these tests.
 
-### 2. Version shared planning contracts and imports
+### 2. Version shared planning contracts and imports — completed
 
 **Files:** `src/coordination-state.ts`, `src/coordination.ts`, `src/component.ts`, `src/component-state.ts`, `src/feature-state.ts`, `src/windows-context.ts`; tests in `test/coordination-state.test.mjs`, `test/component.test.mjs`, `test/windows-delegated-context.test.mjs`.
 
-- [ ] Add strict version-2 manifest, approval, assignment, submission, and event validation/replay alongside existing version-1 decoders. Bind each approved component plan and its selected Store files separately from the code base SHA; bind every behavior-setting/configuration input, not just model settings.
-- [ ] Approve committed component plans from their Store roots. Import checks code repository identity/base and approved Store bytes independently; reserve runtime and protected snapshots in the Store execution context. Preserve exact-history, revocation, dependency, consent, and retirement checks.
-- [ ] Test v1 compatibility, v2 round trips, no absolute paths in portable records, plan/config drift, wrong Store/code identity, stale approval, mixed-version authority rejection, and interrupted import/retirement. Extend Windows protection inventory tests for the new snapshot location. Run build and affected tests.
+- [x] Add strict version-2 manifest, approval, assignment, submission, and event validation/replay alongside existing version-1 decoders. Bind each approved component plan and its selected Store files separately from the code base SHA; bind every behavior-setting/configuration input, not just model settings.
+- [x] Approve committed component plans from their Store roots. Import checks code repository identity/base and approved Store bytes independently; reserve runtime and protected snapshots in the Store execution context. Preserve exact-history, revocation, dependency, consent, and retirement checks.
+- [x] Test v1 compatibility, v2 round trips, no absolute paths in portable records, plan/config drift, wrong Store/code identity, stale approval, mixed-version authority rejection, and interrupted import/retirement. Extend Windows protection inventory tests for the new snapshot location. Run build and affected tests.
 
-### 3. Execute and recover without code-local planning files
+### 3. Execute and recover without code-local planning files — completed
 
 **Files:** `src/runner.ts`, `src/feature.ts`, `src/worker.ts`, `src/feature-state.ts`, `src/component-retirement.ts`, `src/harnesses/types.ts`, harness adapters and permission helpers; tests in `test/runner.test.mjs`, `test/feature.test.mjs`, `test/worker-startup.test.mjs`, `test/codex-windows-permissions.test.mjs`.
 
-- [ ] Thread execution context through launch, worker/begin/report commands, status, retry, review, repair, cleanup, retirement, and expected-state checks. Preserve existing command behavior when no Store context is provided. Keep implementation Git operations on the code repository and planning reads on pinned Store bytes. Bind action/worker identities and locking to both the selected Store assignment and actual code clone; reject conflicting Store authorities for the same active code clone.
-- [ ] Give workers explicit read-only planning locations and bundled skill instructions; do not depend on skills installed in code repositories. Update harness permissions for narrowly scoped Store runtime/report writes and immutable planning reads, including Windows protection and Claude's restrictions on `.git` paths.
-- [ ] In Store mode, integrate and verify code without editing `tasks.md`; record successful integration and per-task evidence in Store-owned runtime. Derive dependency satisfaction and submission readiness from integrated evidence. Recover a committed integration from its marker, ancestry, clean tree, and journal, rather than a checkbox in the code commit.
-- [ ] Test implementation/review/repair, dependency scheduling, task/repair recovery, process ownership, context tampering, and late reports after replacement with no `openspec/` or `.openspec-runner/` created in any code checkout. Preserve existing local merge-plus-checkbox tests. Run build and affected tests.
+- [x] Thread execution context through launch, worker/begin/report commands, status, retry, review, repair, cleanup, retirement, and expected-state checks. Preserve existing command behavior when no Store context is provided. Keep implementation Git operations on the code repository and planning reads on pinned Store bytes. Bind action/worker identities and locking to both the selected Store assignment and actual code clone; reject conflicting Store authorities for the same active code clone.
+- [x] Give workers explicit read-only planning locations and bundled skill instructions; do not depend on skills installed in code repositories. Update harness permissions for narrowly scoped Store runtime/report writes and immutable planning reads, including Windows protection and Claude's restrictions on `.git` paths.
+- [x] In Store mode, integrate and verify code without editing `tasks.md`; record successful integration and per-task evidence in Store-owned runtime. Derive dependency satisfaction and submission readiness from integrated evidence. Recover a committed integration from its marker, ancestry, clean tree, and journal, rather than a checkbox in the code commit.
+- [x] Test implementation/review/repair, dependency scheduling, task/repair recovery, process ownership, context tampering, and late reports after replacement with no `openspec/` or `.openspec-runner/` created in any code checkout. Preserve existing local merge-plus-checkbox tests. Run build and affected tests.
+
+**Verification:** Build passed; affected execution suites: 89 tests, 88 passed, one skipped, no failures (2026-11-19).
 
 ### 4. Make acceptance the durable Store progress boundary
 

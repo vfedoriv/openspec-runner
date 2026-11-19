@@ -13,6 +13,7 @@ import { getHarness } from "./harnesses/registry.js";
 import { completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
 import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
+import type { ExecutionContext } from "./execution-context.js";
 import {
   readFeature, saveFeature, featurePath, featureActive, activeFeatureJobs, blocking, digest,
   approvedFeature, validateFeatureReport, settingsIdentity, type FeatureState, type FeatureJob, type FeatureReport, type FeatureApproval,
@@ -63,7 +64,7 @@ export function resolveFeatureApprovalSettings(options: { plan: Plan; input: { i
 
 export class Feature {
   runner: Runner;
-  constructor(cwd = process.cwd(), expectedState?: string) { this.runner = new Runner(cwd, expectedState); }
+  constructor(cwd = process.cwd(), expectedState?: string, execution?: ExecutionContext) { this.runner = new Runner(cwd, expectedState, execution); }
   get repo() { return this.runner.repo; }
   read(change: string) {
     const s = readFeature(this.repo.stateDir, change);
@@ -78,11 +79,11 @@ export class Feature {
         throw new Error("Existing managed feature differs from delegated assignment; reconcile before import");
       if (old) return old;
       if (this.runner.read(options.change)) throw new Error("Existing local execution cannot be replaced by assignment import");
-      const plan = loadPlan(this.repo.root, options.change);
-      assertCommitted(this.repo.root, plan, options.approval.base);
+      const plan = this.runner.plan(options.change);
+      if (!this.runner.execution) assertCommitted(this.repo.root, plan, options.approval.base);
       if (git(this.repo.root, "rev-parse", "HEAD") !== options.approval.base || plan.fingerprint !== options.approval.fingerprint)
         throw new Error("Component plan/base differs from delegated assignment");
-      const state: FeatureState = { version: 1, change: options.change, planningRoot: this.repo.root,
+      const state: FeatureState = { version: 1, change: options.change, planningRoot: this.runner.execution?.planningProjectRoot ?? this.repo.root,
         phase: "implementing", jobs: [], fixRounds: 0, approval: structuredClone(options.approval),
         approvalHistory: [structuredClone(options.approval)], delegated: structuredClone(options.delegated) };
       this.save(state);
@@ -93,7 +94,7 @@ export class Feature {
       if (current.delegated?.assignmentDigest !== options.delegated.assignmentDigest) throw new Error("Delegated binding changed during import");
       const existing = this.runner.read(options.change);
       if (existing) return existing;
-      const p = loadPlan(this.repo.root, options.change), id = options.delegated.assignmentId;
+      const p = this.runner.plan(options.change), id = options.delegated.assignmentId;
       this.runner.save({ version: 2, change: options.change, fingerprint: saved.approval!.fingerprint, head: saved.approval!.base,
         integration: { branch: `openspec-runner/${options.change}/delegated-${id}/integration`,
           path: resolve(options.delegated.resources.worktreeRoot, `${options.change}-delegated-${id}-integration`), base: saved.approval!.base },
@@ -101,7 +102,7 @@ export class Feature {
       return this.execution(current);
     });
     const exclude = resolve(this.repo.common, "info/exclude"), text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-    if (!text.split(/\r?\n/).includes(".openspec-runner/")) writeFileSync(exclude, `${text}\n.openspec-runner/\n`);
+    if (!this.runner.execution && !text.split(/\r?\n/).includes(".openspec-runner/")) writeFileSync(exclude, `${text}\n.openspec-runner/\n`);
     const workspace = createWorktree(this.repo.root, { ...r.integration, base: r.head }, options.delegated.resources.worktrees);
     this.runner.lock(() => {
       const current = this.read(options.change);
@@ -110,12 +111,13 @@ export class Feature {
     });
     if (git(r.integration.path, "symbolic-ref", "--short", "HEAD") !== r.integration.branch || git(r.integration.path, "rev-parse", "HEAD") !== r.head || !clean(r.integration.path))
       throw new Error("Delegated integration reservation changed; inspect before recovery");
-    return this.status(options.change);
+    return this.runner.execution ? { change: options.change, phase: "prepared", integration: r.integration } : this.status(options.change);
   }
   private update(change: string, fn: (s: FeatureState) => void) {
     return this.runner.lock(() => { const s = this.read(change); fn(s); this.save(s); return s; });
   }
   start(change: string, adopt = false) {
+    if (this.runner.execution) throw new Error("Store features enroll through an approved component assignment import");
     featurePath(this.repo.stateDir, change);
     return this.runner.lock(() => {
       this.runner.assertActionIdentity(change);
@@ -147,11 +149,12 @@ export class Feature {
       throw new Error("Integrate the completed repair before proceeding");
   }
   private current(s: FeatureState) {
-    const p = loadPlan(s.planningRoot, s.change);
+    this.runner.assertExecutionAuthority(s.change);
+    const p = this.runner.plan(s.change, undefined, s.planningRoot);
     approvedFeature(this.repo.stateDir, p);
     const r = this.execution(s);
     if (r.fingerprint !== p.fingerprint) throw new Error("Reconcile the approved plan first");
-    if (loadPlan(r.integration.path, s.change).fingerprint !== p.fingerprint)
+    if (this.runner.plan(s.change, undefined, r.integration.path).fingerprint !== p.fingerprint)
       throw new Error("Integration planning artifacts drifted");
     if (!clean(r.integration.path) || git(r.integration.path, "rev-parse", "HEAD") !== r.head ||
         git(r.integration.path, "symbolic-ref", "--short", "HEAD") !== r.integration.branch)
@@ -190,7 +193,8 @@ export class Feature {
   submissionEvidence(options: { change: string }) {
     const s = this.read(options.change), { r } = this.allImplemented(s);
     if (s.archive || s.phase === "completed") throw new Error("Component has entered archival");
-    const canonical = loadPlan(r.integration.path, options.change);
+    const source = this.runner.plan(options.change, undefined, r.integration.path);
+    const canonical = this.runner.execution ? { ...source, tasks: source.tasks.map(task => ({ ...task, completed: this.runner.satisfied(r, task.id) })) } : source;
     if (!canonical.tasks.every(task => task.completed)) throw new Error("Canonical task completion does not match integrated tasks");
     const review = this.review(s);
     if (review.approvalToken !== s.approval!.token || review.report!.head !== r.head || review.report!.fingerprint !== s.approval!.fingerprint)
@@ -219,7 +223,7 @@ export class Feature {
     let nextAction: ReturnType<Runner["status"]>["nextAction"];
     if (!s.archive) {
       try {
-        const sameCheckout = s.planningRoot === this.repo.root;
+        const sameCheckout = !!this.runner.execution || s.planningRoot === this.repo.root;
         const status = (sameCheckout ? this.runner : new Runner(s.planningRoot)).status(change);
         tasks = status.tasks;
         nextAction = sameCheckout ? status.nextAction : this.runner.status(change).nextAction;
@@ -227,7 +231,7 @@ export class Feature {
     }
     if (!s.archive && s.phase !== "completed") {
       try {
-        const p = loadPlan(s.planningRoot, change);
+        const p = this.runner.plan(change, undefined, s.planningRoot);
         if (!s.approval || s.invalidated || p.fingerprint !== s.approval.fingerprint) {
           s.phase = "awaiting-plan-approval";
           blocker = "Review and approve the current committed planning artifacts and settings";
@@ -254,6 +258,7 @@ export class Feature {
       next.fixing = "Request user direction; a repair-limit increase requires new plan approval";
     if (pendingRepair?.role === "repair" && pendingRepair.phase === "completed")
       next.fixing = `feature integrate --attempt ${pendingRepair.id}`;
+    if (s.delegated && s.phase === "awaiting-final-approval") next[s.phase] = "Export the reviewed component receipt to the coordinator";
     const implementationAction = s.phase === "implementing" ? nextAction
       : s.phase === "awaiting-plan-approval" && nextAction?.blocker ? { blocker: nextAction.blocker } : undefined;
     return { ...s, blocker, tasks, nextAction: implementationAction, recovery: this.recovery(change),
@@ -272,7 +277,7 @@ export class Feature {
     if (s.delegated) throw new Error("Delegated assignment cannot be reapproved locally; obtain coordinator approval");
     if (s.archive || s.phase === "completed") throw new Error("Archived/completed feature cannot be replanned");
     this.assertIdle(s);
-    const p = loadPlan(s.planningRoot, change);
+    const p = this.runner.plan(change, undefined, s.planningRoot);
     assertCommitted(s.planningRoot, p);
     readiness(s.planningRoot, change);
     run("openspec", ["validate", change, "--strict", "--json"], s.planningRoot);
@@ -305,7 +310,7 @@ export class Feature {
               settingsIdentity(a.settings) !== settingsIdentity(snapshot.tasks[a.task]))) a.phase = "stale";
         this.runner.save(existing);
       } else {
-        const p = loadPlan(s.planningRoot, change), id = randomUUID().slice(0, 8);
+        const p = this.runner.plan(change), id = randomUUID().slice(0, 8);
         this.runner.save({ version: 2, change, fingerprint: p.fingerprint, head: snapshot.base,
           integration: { branch: `openspec-runner/${change}/${id}/integration`,
             path: resolve(s.planningRoot, ".openspec-runner/worktrees", `${change}-${id}-integration`), base: snapshot.base },
@@ -344,7 +349,7 @@ export class Feature {
     const worktrees = s.delegated?.resources.worktrees ?? p.config.worktrees;
     return { role, head: r.head, base: s.approval!.base, fingerprint: p.fingerprint,
       settings: s.approval![role], findings, round: role === "repair" ? s.fixRounds + 1 : s.fixRounds,
-      terminal: terminalAdapter(s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees };
+      terminal: terminalAdapter(this.runner.execution ? this.repo.root : s.planningRoot, s.delegated?.resources.terminal ?? p.config.terminal), worktrees };
   }
   launch(change: string, role: "review" | "repair", retry = false) {
     const reserved = this.runner.lock(() => {
@@ -366,7 +371,7 @@ export class Feature {
     try {
       const workspace = createWorktree(this.repo.root, job, reserved.preview.worktrees);
       this.updateJob(change, job.id, j => Object.assign(j, workspace));
-      const p = loadPlan(job.path, change);
+      const p = this.runner.plan(change, undefined, job.path);
       for (const cmd of this.read(change).approval!.setup ?? p.config.setup) run(cmd[0], cmd.slice(1), job.path);
       if (!clean(job.path) || git(job.path, "rev-parse", "HEAD") !== job.base)
         throw new Error("Feature setup changed the checkout");
@@ -401,15 +406,16 @@ export class Feature {
   }
   workerCommand(change: string, j: FeatureJob) {
     return shellCommand([process.execPath, fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url)),
-      "feature", "worker", change, "--attempt", j.id]);
+      "feature", "worker", change, "--attempt", j.id, ...this.runner.storeArgs()]);
   }
   prompt(change: string, j: FeatureJob) {
     const s = this.read(change), skill = `openspec-runner-${j.role === "review" ? "review" : "repair"}`;
-    const input = resolve(dirname(j.path), "reports", `${j.id}-input.json`);
+    const input = resolve(this.runner.execution ? this.repo.stateDir : dirname(j.path), "reports", `${j.id}-input.json`);
     const begin = workerRunnerCommand(["feature", "begin", change, "--attempt", j.id,
-      ...(j.expectedSession ? ["--session", j.expectedSession] : [])], j.agent ?? "codex");
-    const report = workerRunnerCommand(["feature", "report", change, "--attempt", j.id, "--file", input], j.agent ?? "codex");
-    return `${j.agent === "claude" || getHarness(j.agent).lifecycle?.ownership === "hook" ? "/" : "Use $"}${skill}\nChange: ${change}\nAttempt: ${j.id}\n` +
+      ...(j.expectedSession ? ["--session", j.expectedSession] : []), ...this.runner.storeArgs()], j.agent ?? "codex");
+    const report = workerRunnerCommand(["feature", "report", change, "--attempt", j.id, "--file", input, ...this.runner.storeArgs()], j.agent ?? "codex");
+    const invocation = this.runner.execution ? `Read ${fileURLToPath(new URL(`../skills/${skill}/SKILL.md`, import.meta.url))}.` : `${j.agent === "claude" || getHarness(j.agent).lifecycle?.ownership === "hook" ? "/" : "Use $"}${skill}`;
+    return `${invocation}\nChange: ${change}\nAttempt: ${j.id}\n` +
       `First run: ${begin}\n` +
       `Review base: ${s.approval!.base}\nHead: ${j.base}\nFingerprint: ${j.fingerprint}\n` +
       `Role: ${j.role}. ${j.role === "review" ? "Review the entire feature; do not edit tracked files." : "Repair only the supplied blockers; do not change planning artifacts or checkboxes. Commit repairs."}\n` +
@@ -419,6 +425,7 @@ export class Feature {
       `Write JSON at ${input}; submit: ${report}. End immediately after acceptance. Do not archive, integrate, or change runner state yourself.` + pinnedPrompt(this.repo.stateDir, change);
   }
   begin(change: string, id: string, session?: string) {
+    this.runner.assertExecutionAuthority(change);
     return this.updateJob(change, id, j => {
       refreshCopilotEvidence(j, this.repo.common);
       const copilot = j.agent === "copilot" || j.agent === "copilot-vscode";
@@ -433,6 +440,7 @@ export class Feature {
     });
   }
   report(change: string, id: string, report: FeatureReport) {
+    this.runner.assertExecutionAuthority(change);
     return this.updateJob(change, id, j => {
       validateFeatureReport(report, j.role);
       if ((!j.report && (j.phase !== "running" || j.worker?.exitedAt)) || !j.session || this.repo.root !== j.path ||
@@ -464,9 +472,10 @@ export class Feature {
     let exitCode: number | null = null, failure: unknown;
     try {
       exitCode = await superviseWorker(j, this.repo.common, this.prompt(change, j), pid => {
+        this.runner.assertExecutionAuthority(change);
         const identity = processStart(pid);
         this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = identity; current.worker!.processPlatform = process.platform; });
-      }, (fn: (current: SupervisedSession) => void) => { this.updateJob(change, id, fn); });
+      }, (fn: (current: SupervisedSession) => void) => { this.updateJob(change, id, fn); }, this.runner.invocationScope(change));
     } catch (error) { failure = error; }
     this.update(change, s => {
       const current = s.jobs.find(j => j.id === id)!;
@@ -532,7 +541,7 @@ export class Feature {
       if (j.phase === "integrated" && !tx) return { head: r.head, alreadyIntegrated: true };
       this.successful(j);
       this.runner.verifyResult(j, j.report!, change);
-      const p = loadPlan(s.planningRoot, change);
+      const p = this.runner.plan(change, undefined, s.planningRoot);
       approvedFeature(this.repo.stateDir, p);
       if (s.jobs.some(featureActive) || taskActive(r) || r.transaction) throw new Error("Finish active jobs first");
       if (!tx) {
@@ -552,7 +561,7 @@ export class Feature {
           if (git(path, "diff", "--name-only", "--diff-filter=U")) throw new Error("Resolve repair conflicts then feature integrate --continue");
           transaction.phase = "checking"; this.save(s);
           for (const cmd of p.config.verifyIntegration) run(cmd[0], cmd.slice(1), path);
-          if (loadPlan(path, change).fingerprint !== p.fingerprint ||
+          if (this.runner.plan(change, undefined, path).fingerprint !== p.fingerprint ||
               git(path, "diff", "HEAD", "--name-only", "--", `openspec/changes/${change}`, "openspec/runner.yaml", "openspec/config.yaml"))
             throw new Error("Repair integration changed planning artifacts");
           if (git(path, "diff", "--name-only") || git(path, "ls-files", "--others", "--exclude-standard"))
@@ -660,7 +669,7 @@ export class Feature {
             git(path, "rev-parse", "HEAD^1") !== tx.before || git(path, "rev-parse", "HEAD^{tree}") !== tx.tree || !clean(path))
           throw new Error("Unexpected archive commit or worktree; inspect before recovery");
         tx.commit = head; tx.phase = "committed"; this.save(s);
-        if (s.planningRoot !== path && loadPlan(s.planningRoot, change).fingerprint !== s.approval!.fingerprint)
+        if (s.planningRoot !== path && this.runner.plan(change).fingerprint !== s.approval!.fingerprint)
           throw new Error("Planning artifacts changed during archival");
         for (const cmd of s.approval!.verifyIntegration) run(cmd[0], cmd.slice(1), path);
         run("openspec", ["validate", "--all", "--strict", "--json"], path);

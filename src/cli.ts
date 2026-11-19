@@ -20,6 +20,7 @@ import { summaryCommand, formatSummaryResult } from "./summary-cli.js";
 import { linkedCommand, linkedHelp } from "./linked-cli.js";
 import { hookCommand } from "./harnesses/copilot-hook-cli.js";
 import { renderCommand } from "./platform-command.js";
+import { resolveBoundExecutionContext } from "./execution-context.js";
 export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
@@ -228,6 +229,10 @@ export async function main(args = process.argv.slice(2)) {
         retry: { type: "boolean" },
         "expected-state": { type: "string" },
         "expected-launch": { type: "string" },
+        store: { type: "string" },
+        feature: { type: "string" },
+        component: { type: "string" },
+        assignment: { type: "string" },
       },
     });
     const [command, change, task] = p;
@@ -248,6 +253,12 @@ export async function main(args = process.argv.slice(2)) {
         (!["launch", "retry"].includes(command) || !/^[a-f0-9]{64}$/.test(v["expected-launch"])))
       throw new Error("Invalid expected launch settings");
     let result: unknown;
+    if ((v.feature || v.component || v.assignment) && !v.store) throw new Error("Store scope identifiers require --store");
+    if (v.store && (!v.feature || !v.component || !["feature", "launch", "retry", "worker", "begin", "report", "status", "integrate", "recover", "reconcile", "attach", "cleanup"].includes(command)))
+      throw new Error("Store execution requires --store, --feature and --component on an execution command");
+    if (v.store && ["worker", "begin", "report"].includes(command) && !v.assignment) throw new Error("Store callbacks require --assignment");
+    const execution = v.store ? resolveBoundExecutionContext({ implementationRoot: process.cwd(), storeRoot: v.store,
+      featureId: v.feature!, componentId: v.component!, change: command === "feature" ? task : change, assignmentId: v.assignment }) : undefined;
     if (v.all && command !== "cleanup") throw new Error("--all requires cleanup");
     if (v.confirm && !["cleanup", "feature", "execution-settings"].includes(command))
       throw new Error("--confirm requires cleanup, feature approve, or execution-settings");
@@ -257,7 +268,7 @@ export async function main(args = process.argv.slice(2)) {
     if (v["default-agent"] !== undefined && command !== "init")
       throw new Error("--default-agent is supported only by init");
     if (command === "feature") {
-      const action = change, name = task, feature = new Feature(process.cwd(), v["expected-state"]);
+      const action = change, name = task, feature = new Feature(process.cwd(), v["expected-state"], execution);
       if (!action || !name || p.length !== 3) throw new Error("Use feature <action> <change>");
       if (v["expected-state"] && (v["dry-run"] || !["start", "adopt", "approve", "review", "fix", "integrate", "recover", "archive"].includes(action)))
         throw new Error("Expected runner state requires a managed operation");
@@ -352,11 +363,11 @@ export async function main(args = process.argv.slice(2)) {
     }
     else {
       if (!change) throw new Error("Specify a change name");
-      const r = new Runner(process.cwd(), v["expected-state"]),
+      const r = new Runner(process.cwd(), v["expected-state"], execution),
         ids = v.tasks?.split(",").map((x) => x.trim()) ?? [];
       switch (command) {
         case "validate": {
-          const plan = loadPlan(r.repo.root, change);
+          const plan = r.plan(change);
           result = {
             valid: true,
             agent: plan.agent,
@@ -369,11 +380,11 @@ export async function main(args = process.argv.slice(2)) {
           break;
         }
         case "status":
-          result = readFeature(r.repo.stateDir, change) ? new Feature().status(change) : r.status(change);
+          result = readFeature(r.repo.stateDir, change) ? new Feature(process.cwd(), undefined, execution).status(change) : r.status(change);
           break;
         case "launch":
         case "retry": {
-          const plan = loadPlan(r.repo.root, change),
+          const plan = r.plan(change),
             selected = command === "retry" ? [task] : ids,
             selectedAgent = v.agent ?? plan.agent ?? plan.config.defaultAgent ?? "codex",
             adapter = getHarness(selectedAgent),

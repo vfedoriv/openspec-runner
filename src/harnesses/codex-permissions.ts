@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalPath, containedPath, samePath } from "../platform-paths.js";
+import { canonicalPath, containedPath, samePath, unredirectedPath } from "../platform-paths.js";
 import { run } from "../system.js";
 import type { Invocation, ManagedInvocationContext } from "./types.js";
 
@@ -17,16 +17,30 @@ export function codexWorkerPermissions(input: ManagedInvocationContext & { cwd: 
       input.branch.split("/").some(part => !part || part === ".") ||
       readFileSync(join(gitDir, "HEAD"), "utf8").trim() !== `ref: refs/heads/${input.branch}`)
     throw new Error("Codex worker branch identity mismatch");
-  const reports = resolve(dirname(cwd), "reports"), runtime = join(common, "openspec-runner");
+  const runtime = input.store ? canonicalPath(input.store.runtimeDir) : join(common, "openspec-runner");
+  const reports = input.store ? join(runtime, "reports") : resolve(dirname(cwd), "reports");
+  if (input.store) {
+    const storeRoot = canonicalPath(input.store.root);
+    if (!containedPath(storeRoot, runtime) || !containedPath(join(storeRoot, ".openspec-runner"), runtime) ||
+        samePath(join(storeRoot, ".openspec-runner"), runtime) || samePath(common, input.store.common) ||
+        !input.store.contextPaths.length || !unredirectedPath(input.store.runtimeDir) ||
+        input.store.contextPaths.some(path => !containedPath(runtime, canonicalPath(path)) || samePath(runtime, canonicalPath(path)) || !unredirectedPath(path)))
+      throw new Error("Store worker runtime or protected context is outside its owned scope");
+  }
   const name = `openspec_runner_${createHash("sha256").update(cwd).digest("hex").slice(0, 16)}`;
   const temp = join(runtime, "tmp", basename(cwd));
   const ref = join(common, "refs", "heads", input.branch), log = join(common, "logs", "refs", "heads", input.branch);
   const filesystem: Record<string, "read" | "write"> = { [common]: "read" };
   // Windows needs directory create rights for Git's transient .lock files;
   // granting only the not-yet-existing file does not provide those rights.
-  for (const path of [gitDir, join(common, "objects"), runtime, dirname(ref), dirname(log), ref, `${ref}.lock`, log, `${log}.lock`]) {
+  for (const path of [gitDir, join(common, "objects"), ...(!input.store ? [runtime] : []), dirname(ref), dirname(log), ref, `${ref}.lock`, log, `${log}.lock`]) {
     if (!containedPath(common, path)) throw new Error("Codex worker Git write path escapes its repository");
     filesystem[path] = "write";
+  }
+  if (input.store) {
+    filesystem[canonicalPath(input.store.common)] = "read";
+    filesystem[runtime] = "write";
+    for (const path of input.store.contextPaths) filesystem[canonicalPath(path)] = "read";
   }
   filesystem[reports] = "write";
   filesystem[fileURLToPath(new URL("../../", import.meta.url)).replace(/[\\/]$/, "")] = "read";
@@ -42,7 +56,8 @@ export function scopedCodexInvocation(invocation: Invocation, context: ManagedIn
   const policy = codexWorkerPermissions({ ...context, cwd: invocation.cwd });
   const args: string[] = [];
   for (let index = 0; index < invocation.args.length; index++) {
-    if (invocation.args[index] === "--add-dir" && invocation.args[index + 1] && samePath(invocation.args[index + 1], context.common)) { index++; continue; }
+    if (invocation.args[index] === "--add-dir" && invocation.args[index + 1] &&
+        (samePath(invocation.args[index + 1], context.common) || context.store && samePath(invocation.args[index + 1], context.store.runtimeDir))) { index++; continue; }
     args.push(invocation.args[index]);
   }
   args.splice(args[0] === "exec" || args[0] === "resume" ? 1 : 0, 0, "--strict-config", ...policy.configArgs);

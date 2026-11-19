@@ -74,6 +74,13 @@ export interface ManagedInvocationContext {
   common: string;
   gitDir: string;
   branch: string;
+  store?: StoreInvocationScope;
+}
+export interface StoreInvocationScope {
+  root: string;
+  common: string;
+  runtimeDir: string;
+  contextPaths: string[];
 }
 
 export interface ModelDiscovery {
@@ -115,6 +122,7 @@ export interface HarnessAdapter {
     commonGitDir: string,
     prompt: string,
     session: string,
+    store?: StoreInvocationScope,
   ): Invocation;
   activityInvocation?(invocation: Invocation, capabilities: HarnessCapabilities): Invocation;
   managedInvocation?(invocation: Invocation, context: ManagedInvocationContext): Invocation;
@@ -124,6 +132,7 @@ export interface HarnessAdapter {
     cwd: string,
     commonGitDir: string,
     session: string,
+    store?: StoreInvocationScope,
   ): Invocation;
   planningRules(root?: string, config?: AgentConfig): PlanningRulesResult;
 }

@@ -14,6 +14,9 @@ import { closeInspectedTerminal } from "./terminal-cleanup.js";
 import { superviseWorker } from "./worker.js";
 import { processStart } from "./processes.js";
 import { readComponentBinding } from "./component-state.js";
+import { assertStoreBindingAuthority, resolveExecutionContext, type ExecutionContext } from "./execution-context.js";
+import { loadSourcePlan } from "./planning-source.js";
+import { samePath } from "./platform-paths.js";
 import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import {
   atomic,
@@ -34,7 +37,7 @@ import {
   tasksFrom,
   type Plan,
 } from "./plan.js";
-import type { HarnessSettings, WorkerReceipt } from "./harnesses/types.js";
+import type { HarnessSettings, WorkerReceipt, StoreInvocationScope } from "./harnesses/types.js";
 import { completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
 import { getHarness } from "./harnesses/registry.js";
 import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt, type FeatureJob } from "./feature-state.js";
@@ -87,6 +90,7 @@ export interface TaskAttempt extends Workspace {
   error?: string;
   cleaned?: boolean;
   setupDone?: boolean;
+  integrationCommit?: string;
   gitDir?: string;
   worker?: WorkerReceipt;
 }
@@ -245,11 +249,46 @@ export function launchIdentity(preview: ReturnType<Runner["preview"]>, defaults:
 
 export class Runner {
   repo: ReturnType<typeof repository>;
-  constructor(cwd = process.cwd(), private readonly expectedState?: string) {
+  readonly execution?: ExecutionContext;
+  constructor(cwd = process.cwd(), private readonly expectedState?: string, execution?: ExecutionContext) {
     this.repo = repository(cwd);
+    if (execution?.store) {
+      if (execution.planningSource.kind !== "store" || !samePath(this.repo.common, execution.implementation.common))
+        throw new Error("Store execution belongs to another code repository");
+      this.execution = resolveExecutionContext({ implementationRoot: cwd, change: execution.planningSource.change,
+        store: { ...execution.store, source: structuredClone(execution.planningSource) } });
+      if (!samePath(execution.runtimeDir, this.execution.runtimeDir) || !samePath(execution.worktreeRoot, this.execution.worktreeRoot))
+        throw new Error("Store execution runtime differs from its selected owner");
+      this.repo = { ...this.repo, stateDir: this.execution.runtimeDir };
+    }
+  }
+  plan(change: string, executionDraft?: string, checkout = this.repo.root): Plan {
+    if (!this.execution) return loadPlan(checkout, change, executionDraft);
+    if (change !== this.execution.planningSource.change || executionDraft !== undefined)
+      throw new Error("Store assignment planning inputs are immutable");
+    return loadSourcePlan(this.execution.planningSource);
+  }
+  private assertPlanCommitted(plan: Plan, ref = "HEAD") {
+    if (!this.execution) assertCommitted(this.repo.root, plan, ref);
+  }
+  assertExecutionAuthority(change: string) {
+    if (!this.execution) return;
+    assertStoreBindingAuthority(this.execution, change);
+  }
+  storeArgs(): string[] {
+    const scope = this.execution?.store;
+    return scope ? ["--store", scope.storeRoot, "--feature", scope.featureId, "--component", scope.componentId, "--assignment", scope.assignmentId] : [];
+  }
+  invocationScope(change: string): StoreInvocationScope | undefined {
+    const scope = this.execution?.store;
+    if (!scope) return undefined;
+    const binding = readComponentBinding({ stateDir: this.repo.stateDir, change });
+    if (!binding || binding.assignmentId !== scope.assignmentId) throw new Error("Store worker scope differs from its imported binding");
+    return { root: scope.storeRoot, common: repository(scope.storeRoot).common,
+      runtimeDir: this.repo.stateDir, contextPaths: binding.contextPaths };
   }
   actionIdentity(change: string, executionDraft?: string): string {
-    const plan = loadPlan(this.repo.root, change, executionDraft);
+    const plan = this.plan(change, executionDraft);
     const state = this.read(change);
     const integrationHead = state && attempt(() => git(state.integration.path, "rev-parse", "HEAD"));
     return createHash("sha256").update(JSON.stringify([
@@ -262,6 +301,7 @@ export class Runner {
       throw new Error("Runner state changed; refresh and review the action again");
   }
   private ensureRuntimeExcluded() {
+    if (this.execution) return;
     const exclude = resolve(this.repo.common, "info", "exclude"),
       marker = ".openspec-runner/",
       current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
@@ -277,7 +317,7 @@ export class Runner {
     // runner state in repo.common, but put agent workspaces and report inputs
     // in a sibling runtime directory inside the repository root.
     const local = readFeature(this.repo.stateDir, change)?.delegated?.resources;
-    return resolve(local?.worktreeRoot ?? resolve(this.repo.root, ".openspec-runner", "worktrees"), ...parts);
+    return resolve(local?.worktreeRoot ?? this.execution?.worktreeRoot ?? resolve(this.repo.root, ".openspec-runner", "worktrees"), ...parts);
   }
   path(change: string) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(change))
@@ -357,14 +397,15 @@ export class Runner {
   }
   status(change: string) {
     const feature = readFeature(this.repo.stateDir, change);
-    if (feature && (!existsSync(resolve(this.repo.root, "openspec/changes", change, "tasks.md")) ||
-        !existsSync(resolve(this.repo.root, "openspec/changes", change, "execution.yaml")) || feature.archive))
+    if (feature && ((!this.execution && (!existsSync(resolve(this.repo.root, "openspec/changes", change, "tasks.md")) ||
+        !existsSync(resolve(this.repo.root, "openspec/changes", change, "execution.yaml")))) || feature.archive))
       return { change, feature, recovery: this.recovery(change), integration: this.read(change)?.integration, head: this.read(change)?.head,
         next: `openspec-runner feature status ${change} --json` };
-    const p = loadPlan(this.repo.root, change),
+    const p = this.plan(change),
       s = this.read(change);
     const tasks = p.tasks.map((t) => ({
       ...t,
+      ...(this.execution && s ? { completed: this.satisfied(s, t.id) } : {}),
       assignment: p.assignments[t.id],
       ready:
         (!feature || (feature.phase === "implementing" && !feature.invalidated &&
@@ -448,7 +489,7 @@ export class Runner {
         const parallel = ready.filter(id => p.assignments[id].parallel);
         const batch = !running.length && !p.assignments[ready[0]].parallel ? ready.slice(0, 1) : parallel.slice(0, slots);
         if (!batch.length) throw new Error("Ready tasks require exclusive execution. Wait for running tasks to finish.");
-        assertCommitted(this.repo.root, p);
+        this.assertPlanCommitted(p);
         if (!s && feature && git(this.repo.root, "rev-parse", "HEAD") !== feature.approval!.base)
           throw new Error("Current HEAD differs from the approved feature base.");
         selectTerminal(feature?.delegated?.resources.terminal ?? p.config.terminal);
@@ -478,7 +519,8 @@ export class Runner {
     retry = false,
     agent?: string,
   ) {
-    const p = loadPlan(this.repo.root, change);
+    this.assertExecutionAuthority(change);
+    const p = this.plan(change);
     const feature = implementationGate(this.repo.stateDir, p);
     if (feature?.delegated && settings) throw new Error("Delegated execution forbids settings overlays");
     if (feature && agent && agent !== feature.approval!.implementation.harness)
@@ -494,9 +536,9 @@ export class Runner {
     const head =
       s?.head ??
       git(this.repo.root, "rev-parse", "--verify", `${base}^{commit}`);
-    assertCommitted(this.repo.root, p);
-    if (!s) assertCommitted(this.repo.root, p, head);
-    readiness(this.repo.root, change);
+    this.assertPlanCommitted(p);
+    if (!s) this.assertPlanCommitted(p, head);
+    if (!this.execution) readiness(this.repo.root, change);
     const running = this.runningAttempts();
     const featureJobs = activeFeatureJobs(this.repo.stateDir);
     if (featureJobs.length) throw new Error("Exclusive feature review/repair job must finish before launching tasks");
@@ -572,7 +614,7 @@ export class Runner {
     const prepared = this.lock(() => {
       this.assertActionIdentity(change);
       const preview = this.preview(change, ids, settings, base, retry, agent),
-        p = loadPlan(this.repo.root, change);
+        p = this.plan(change);
       if (expectedLaunch && launchIdentity(preview, defaults) !== expectedLaunch)
         throw new Error("Launch settings changed; preview and review again");
       this.ensureRuntimeExcluded();
@@ -718,11 +760,12 @@ export class Runner {
     });
   }
   recover(change: string, task: string) {
+    this.assertExecutionAuthority(change);
     const prepared = this.lock(() => {
       this.assertActionIdentity(change);
       const s = this.requireState(change),
         a = this.latest(s, task),
-        p = loadPlan(this.repo.root, change);
+        p = this.plan(change);
       this.drift(p, s);
       implementationGate(this.repo.stateDir, p);
       if (
@@ -787,14 +830,14 @@ export class Runner {
   prompt(change: string, a: TaskAttempt) {
     const claude = a.agent === "claude";
     const copilot = getHarness(a.agent ?? "codex").lifecycle?.ownership === "hook";
-    const skillInvocation = claude || copilot
+    const skillInvocation = this.execution ? `Read ${fileURLToPath(new URL("../skills/openspec-runner-implement/SKILL.md", import.meta.url))}.` : claude || copilot
       ? "/openspec-runner-implement"
       : "Use $openspec-runner-implement.";
     const begin = workerRunnerCommand(["begin", change, a.task, "--attempt", a.id,
-      ...(claude ? ["--session", a.expectedSession!] : [])], a.agent ?? "codex");
+      ...(claude ? ["--session", a.expectedSession!] : []), ...this.storeArgs()], a.agent ?? "codex");
     const identity = copilot ? "the actual session returned by begin" : claude ? "the exact Claude stream session_id" : "the actual CODEX_THREAD_ID";
     const reportPath = resolve(
-        dirname(a.path),
+        this.execution ? this.repo.stateDir : dirname(a.path),
         "reports",
         `${a.id}-input.json`,
       ),
@@ -806,6 +849,7 @@ export class Runner {
         a.id,
         "--file",
         reportPath,
+        ...this.storeArgs(),
       ], a.agent ?? "codex");
     return `${skillInvocation} Implement ONLY task ${a.task}: ${a.description}\nChange: ${change}\nAttempt: ${a.id}\nHarness: ${a.agent ?? "codex"}\nFirst run: ${begin}\nRead the change artifacts. Do not modify planning artifacts, checkboxes, execution.yaml, or runner.yaml. Verify and commit task changes. Then run ${reportCommand}. The report JSON must contain attempt, task, session (${identity}), outcome (completed/failed/blocked), commit (full HEAD SHA for completed), summary, and verification (nonempty evidence strings). Write the report input exactly at ${reportPath}, outside the task worktree and inside the runner-owned runtime directory. The reserved session is intent only; the runner must observe matching session evidence before a completed ${a.agent ?? "Codex"} result can be integrated. Stop after reporting.` + pinnedPrompt(this.repo.stateDir, change);
   }
@@ -814,14 +858,16 @@ export class Runner {
     if (!a.session) return this.workerCommand(change, a);
     if (a.agent === "claude" && !a.identityConfirmed) return undefined;
     const harness = getHarness(a.agent ?? "codex");
+    const store = this.execution ? this.invocationScope(change) : undefined;
     let invocation = harness.resumeInvocation(
       a.settings,
       a.path,
       this.repo.common,
       a.session,
+      store,
     );
     if (harness.managedInvocation && a.gitDir) {
-      const context = { common: this.repo.common, gitDir: a.gitDir, branch: a.branch };
+      const context = { common: this.repo.common, gitDir: a.gitDir, branch: a.branch, ...(store ? { store } : {}) };
       invocation = harness.managedInvocation(invocation, context);
       harness.validateManagedInvocation?.(invocation, context);
     }
@@ -829,12 +875,13 @@ export class Runner {
   }
   workerCommand(change: string, a: TaskAttempt) {
     return shellCommand([process.execPath, fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url)),
-      "worker", change, a.task, "--attempt", a.id]);
+      "worker", change, a.task, "--attempt", a.id, ...this.storeArgs()]);
   }
   async worker(change: string, task: string, id: string) {
+    this.assertExecutionAuthority(change);
     const prepared = this.lock(() => {
       if (readFeature(this.repo.stateDir, change))
-        implementationGate(this.repo.stateDir, loadPlan(this.repo.root, change));
+        implementationGate(this.repo.stateDir, this.plan(change));
       const s = this.requireState(change), a = this.latest(s, task);
       if (!a || a.id !== id || !a.setupDone)
         throw new Error("Worker attempt is not ready; inspect before retrying");
@@ -883,6 +930,7 @@ export class Runner {
         this.repo.common,
         this.prompt(change, a),
         (pid) => {
+          this.assertExecutionAuthority(change);
           const identity = processStart(pid);
           this.updateAttempt(change, id, (current) => {
             current.worker!.pid = pid;
@@ -891,6 +939,7 @@ export class Runner {
           });
         },
         (update) => this.updateAttempt(change, id, update),
+        this.invocationScope(change),
       );
     } catch (error) { failure = error; }
     this.updateAttempt(change, id, current => {
@@ -910,6 +959,7 @@ export class Runner {
     id: string,
     requestedSession?: string,
   ) {
+    this.assertExecutionAuthority(change);
     return this.lock(() => {
       const s = this.requireState(change),
         a = this.latest(s, task);
@@ -935,6 +985,7 @@ export class Runner {
     });
   }
   report(change: string, task: string, id: string, report: Report) {
+    this.assertExecutionAuthority(change);
     return this.lock(() => {
       const s = this.requireState(change),
         a = this.latest(s, task);
@@ -990,8 +1041,10 @@ export class Runner {
     git(a.path, "merge-base", "--is-ancestor", a.base, report.commit);
     if (git(a.path, "symbolic-ref", "--short", "HEAD") !== a.branch)
       throw new Error("Task worktree changed branches");
+    if (this.execution && git(a.path, "diff", "--name-only", a.base, report.commit, "--", "openspec", ".openspec-runner"))
+      throw new Error("Store workers must keep planning and runner files out of code commits");
     if (
-      loadPlan(a.path, change).fingerprint !== a.fingerprint ||
+      this.plan(change, undefined, a.path).fingerprint !== a.fingerprint ||
       git(
         a.path,
         "diff",
@@ -1012,6 +1065,7 @@ export class Runner {
       throw new Error("Worker changed shared planning artifacts");
   }
   attach(change: string, task: string) {
+    this.assertExecutionAuthority(change);
     const s = this.requireState(change),
       a = this.latest(s, task);
     if (!a) throw new Error("No task attempt");
@@ -1023,7 +1077,7 @@ export class Runner {
         recovery: "Worker finished. Inspect the retained Codex session/log and branch; use retry for further implementation. Do not resume in a removed worktree." };
     }
     if (process.platform === "win32" && readComponentBinding({ stateDir: this.repo.stateDir, change }))
-      implementationGate(this.repo.stateDir, loadPlan(this.repo.root, change));
+      implementationGate(this.repo.stateDir, this.plan(change));
     if (a.terminal.backend === "orca") {
       return { result: attachTerminal(this.repo.root, a.terminal), attempt: a.id };
     }
@@ -1063,7 +1117,7 @@ export class Runner {
     let complete = false;
     try {
       const feature = readFeature(this.repo.stateDir, change), state = this.read(change);
-      complete = !!(!feature && state && loadPlan(state.integration.path, change).tasks.every(t => this.satisfied(state, t.id)));
+      complete = !!(!feature && state && this.plan(change, undefined, state.integration.path).tasks.every(t => this.satisfied(state, t.id)));
     } catch { /* Post-transition summary assessment is observational and best-effort. */ }
     const summary = complete ? safeSummary({ cwd: this.repo.root, change }) : undefined;
     return { ...result, summaries, ...(summary ? { summary } : {}) };
@@ -1085,10 +1139,11 @@ export class Runner {
     const { path } = s.integration;
     if (!clean(path) || git(path, "rev-parse", "HEAD") !== s.head)
       throw new Error("Integration worktree must be clean at its recorded head");
-    if (loadPlan(path, s.change).fingerprint !== s.fingerprint)
+    if (this.plan(s.change, undefined, path).fingerprint !== s.fingerprint)
       throw new Error("Integration planning artifacts drifted");
   }
   private integrateCore(change: string, ids: string[], mode?: "continue" | "abort") {
+    if (mode !== "abort") this.assertExecutionAuthority(change);
     const result = this.lock(() => {
       this.assertActionIdentity(change);
       const s = this.requireState(change),
@@ -1107,7 +1162,7 @@ export class Runner {
         this.save(s);
         return { aborted: true, head: s.head };
       }
-      const p = loadPlan(this.repo.root, change);
+      const p = this.plan(change);
       const feature = implementationGate(this.repo.stateDir, p);
       this.drift(p, s);
       if (mode === "continue") {
@@ -1149,11 +1204,11 @@ export class Runner {
               "Unexpected integration HEAD; inspect before continuing",
             );
           git(path, "merge-base", "--is-ancestor", report.commit!, head);
-          if (
+          if (!this.execution && (
             !tasksFrom(
               readFileSync(resolve(path, p.relativeDir, "tasks.md"), "utf8"),
             ).find((t) => t.id === task)?.completed
-          )
+          ))
             throw new Error("Interrupted commit did not complete checkbox");
         } else {
           const merging = !!attempt(() =>
@@ -1168,22 +1223,26 @@ export class Runner {
             throw new Error(
               "Resolve and stage merge conflicts, then integrate --continue; or use --abort",
             );
-          if (loadPlan(path, change).fingerprint !== s.fingerprint)
+          if (this.plan(change, undefined, path).fingerprint !== s.fingerprint)
             throw new Error("Merge changed planning artifacts");
           tx.phase = "checking";
           this.save(s);
           for (const command of p.config.verifyIntegration)
             run(command[0], command.slice(1), path);
-          if (loadPlan(path, change).fingerprint !== s.fingerprint)
+          if (this.plan(change, undefined, path).fingerprint !== s.fingerprint)
             throw new Error("Integration checks changed planning artifacts");
-          const file = resolve(path, p.relativeDir, "tasks.md"),
-            text = readFileSync(file, "utf8"),
-            tasks = tasksFrom(text),
-            lines = text.split("\n");
-          const target = tasks.find((t) => t.id === task)!;
-          lines[target.line] = lines[target.line].replace(/\[[ xX]\]/, "[x]");
-          writeFileSync(file, lines.join("\n"));
-          git(path, "add", "--", `${p.relativeDir}/tasks.md`);
+          if (!this.execution) {
+            const file = resolve(path, p.relativeDir, "tasks.md"),
+              text = readFileSync(file, "utf8"),
+              tasks = tasksFrom(text),
+              lines = text.split("\n");
+            const target = tasks.find((t) => t.id === task)!;
+            lines[target.line] = lines[target.line].replace(/\[[ xX]\]/, "[x]");
+            writeFileSync(file, lines.join("\n"));
+            git(path, "add", "--", `${p.relativeDir}/tasks.md`);
+          } else if (git(path, "diff", "--cached", "--name-only", "--", "openspec", ".openspec-runner")) {
+            throw new Error("Store integration cannot introduce planning files into code");
+          }
           // Checks may inspect the merged index, but must not leave unstaged or untracked output.
           if (
             git(path, "diff", "--name-only") ||
@@ -1203,6 +1262,7 @@ export class Runner {
         }
         s.head = git(path, "rev-parse", "HEAD");
         a.phase = "integrated";
+        if (this.execution) a.integrationCommit = s.head;
         delete s.transaction;
         this.save(s);
       }
@@ -1210,7 +1270,7 @@ export class Runner {
     });
     if (mode === "abort") return result;
     try {
-      const state = this.requireState(change), plan = loadPlan(this.repo.root, change);
+      const state = this.requireState(change), plan = this.plan(change);
       if (state.cleanupBatch?.some(id => !this.satisfied(state, id))) return result;
       if (plan.config.cleanup === "manual") {
         this.lock(() => {
@@ -1242,7 +1302,7 @@ export class Runner {
           git(this.repo.root, "cat-file", "-e", `${s.head}^{commit}`);
           tasks = s.completion.tasks;
         } else {
-          const plan = loadPlan(s.integration.path, change);
+          const plan = this.plan(change, undefined, s.integration.path);
           if (plan.fingerprint !== s.fingerprint || git(s.integration.path, "rev-parse", "HEAD") !== s.head || !clean(s.integration.path))
             throw new Error("Integration plan/head differs from recorded state; cannot prove completion");
           tasks = plan.tasks.map(t => t.id);
@@ -1291,15 +1351,16 @@ export class Runner {
     });
   }
   reconcile(change: string) {
+    if (this.execution) throw new Error("Store plan changes require renewed approval and a replacement assignment");
     return this.lock(() => {
       this.assertActionIdentity(change);
       const s = this.requireState(change),
-        p = loadPlan(this.repo.root, change);
+        p = this.plan(change);
       if (s.transaction || s.attempts.some(active))
         throw new Error(
           "Finish/report all active attempts and integration before reconciling",
         );
-      assertCommitted(this.repo.root, p);
+      this.assertPlanCommitted(p);
       if (
         !clean(s.integration.path) ||
         git(s.integration.path, "rev-parse", "HEAD") !== s.head
@@ -1316,7 +1377,7 @@ export class Runner {
         throw new Error(
           "Cannot remove satisfied task IDs during reconciliation",
         );
-      const old = loadPlan(s.integration.path, change);
+      const old = this.plan(change, undefined, s.integration.path);
       git(
         s.integration.path,
         "restore",

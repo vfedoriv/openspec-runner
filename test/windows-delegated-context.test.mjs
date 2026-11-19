@@ -9,6 +9,23 @@ import { fileURLToPath } from "node:url";
 const native = { skip: process.platform !== "win32" };
 const helper = fileURLToPath(new URL("../bin/windows-context.ps1", import.meta.url));
 
+test("Windows protects long Store snapshot paths without dropping stream checks", native, async t => {
+  const protection = await import("../dist/windows-context.js");
+  const home = mkdtempSync(join(tmpdir(), "runner-long-store-context-"));
+  const stateDir = join(home, ".openspec-runner", "a".repeat(64), "runtime");
+  mkdirSync(stateDir, { recursive: true });
+  const root = join(stateDir, "component-context", "shared-product-feature", "assigned-component-implementation", "0");
+  const request = { stateDir, journalPath: join(stateDir, "protection.json"), requireStandard: false,
+    roots: [{ path: root, files: [{ path: "components/api/openspec/changes/long-feature/requirements/spec.md", content: "Approved requirements\n" }] }] };
+  t.after(() => { protection.restoreWindowsContext(request); rmSync(home, { recursive: true, force: true }); });
+  const file = join(root, request.roots[0].files[0].path);
+  assert.ok(file.length > 260);
+  protection.sealWindowsContext(request);
+  assert.equal(readFileSync(file, "utf8"), "Approved requirements\n");
+  assert.throws(() => writeFileSync(file, "changed"), /EACCES|EPERM/);
+  protection.verifyWindowsContext(request);
+});
+
 function restoreEntries(journal, targets) {
   execFileSync("pwsh.exe", ["-NoProfile", "-NonInteractive", "-File", helper], {
     input: JSON.stringify({ operation: "restore", sid: journal.sid, targets }), windowsHide: true,

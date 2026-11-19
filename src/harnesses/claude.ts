@@ -12,6 +12,7 @@ import type {
   Invocation,
   ModelDiscovery,
   PlanningRulesResult,
+  StoreInvocationScope,
 } from "./types.js";
 import { run } from "../system.js";
 
@@ -77,6 +78,7 @@ function commonArgs(
   commonGitDir: string,
   session: string,
   resume: boolean,
+  store?: StoreInvocationScope,
 ): string[] {
   const options = settings.options ?? {};
   const args = [
@@ -94,7 +96,7 @@ function commonArgs(
     "--add-dir",
     cwd,
     "--add-dir",
-    dirname(cwd),
+    store?.runtimeDir ?? dirname(cwd),
   ];
   if (settings.effort) args.splice(args.indexOf("--model"), 0, "--effort", settings.effort);
   const allowed = Array.isArray(options.allowedTools)
@@ -113,11 +115,12 @@ export function claudeArgs(
   commonGitDir: string,
   session: string,
   resume = false,
+  store?: StoreInvocationScope,
 ): string[] {
   // cwd is carried by the child process; retaining it in the signature keeps
   // invocation construction explicit and prevents shell interpolation.
   void cwd;
-  return commonArgs(settings, cwd, commonGitDir, session, resume);
+  return commonArgs(settings, cwd, commonGitDir, session, resume, store);
 }
 
 export function claudeInvocation(
@@ -126,10 +129,11 @@ export function claudeInvocation(
   commonGitDir: string,
   prompt: string,
   session: string = randomUUID(),
+  store?: StoreInvocationScope,
 ): Invocation {
   return {
     executable: "claude",
-    args: claudeArgs(settings, cwd, commonGitDir, session),
+    args: claudeArgs(settings, cwd, commonGitDir, session, false, store),
     cwd,
     stdin: prompt,
     env: { OPENSPEC_RUNNER_SESSION: session },
@@ -141,12 +145,13 @@ export function claudeResumeInvocation(
   cwd: string,
   commonGitDir: string,
   session: string,
+  store?: StoreInvocationScope,
 ): Invocation {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(session))
     throw new Error("Claude resume requires a confirmed session UUID");
   return {
     executable: "claude",
-    args: claudeArgs(settings, cwd, commonGitDir, session, true),
+    args: claudeArgs(settings, cwd, commonGitDir, session, true, store),
     cwd,
     env: { OPENSPEC_RUNNER_SESSION: session },
   };

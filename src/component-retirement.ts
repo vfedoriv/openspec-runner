@@ -9,6 +9,8 @@ import { unredirectedPath } from "./platform-paths.js";
 import { Runner, type TaskAttempt } from "./runner.js";
 import { atomic, git, repository } from "./system.js";
 import { inspectTerminal } from "./terminal-cleanup.js";
+import type { ExecutionContext } from "./execution-context.js";
+import { releaseStoreOwnership } from "./store-ownership.js";
 
 export interface RetirementInput { change: string; assignmentId: string; owner: string; reason: string }
 export interface RetirementSnapshot {
@@ -31,8 +33,8 @@ function bytes(path: string): string | null {
   if (!lstatSync(path).isFile()) throw new Error("Retirement requires regular runtime files");
   return readFileSync(path, "utf8");
 }
-function selected(root: string, repositoryId: string, input: RetirementInput) {
-  const repo = repository(root), binding = readComponentBinding({ stateDir: repo.stateDir, change: input.change });
+function selected(root: string, repositoryId: string, input: RetirementInput, execution?: ExecutionContext) {
+  const repo = new Runner(root, undefined, execution).repo, binding = readComponentBinding({ stateDir: repo.stateDir, change: input.change });
   if (!binding || binding.repository !== repositoryId || binding.assignmentId !== input.assignmentId)
     throw new Error("Retirement assignment identity differs from local binding");
   if (binding.assignment.owner !== input.owner || !input.reason?.trim()) throw new Error("Retirement requires matching owner and concrete reason");
@@ -45,14 +47,14 @@ function savedEvidence(path: string, input: RetirementInput, token: string): Ret
     throw new Error("Retirement evidence or confirmation token changed");
   return evidence;
 }
-export function retirementPreview(root: string, repositoryId: string, input: RetirementInput) {
-  const { repo, binding, evidencePath } = selected(root, repositoryId, input);
+export function retirementPreview(root: string, repositoryId: string, input: RetirementInput, execution?: ExecutionContext) {
+  const { repo, binding, evidencePath } = selected(root, repositoryId, input, execution);
   if (binding.phase === "retiring" || binding.phase === "retired") {
     const evidence = savedEvidence(evidencePath, input, binding.retirement!.token);
     return { ...evidence, evidencePath, phase: binding.phase };
   }
   if (binding.phase !== "ready") throw new Error("Incomplete assignment import blocks retirement; recover the reserved import first");
-  const feature = readFeature(repo.stateDir, input.change), runner = new Runner(root), state = runner.read(input.change);
+  const feature = readFeature(repo.stateDir, input.change), runner = new Runner(root, undefined, execution), state = runner.read(input.change);
   if (state?.transaction || state?.cleanupBatch || feature?.transaction || feature?.phase === "archiving" || feature?.archive)
     throw new Error("Pending integration, cleanup, or archive transaction blocks retirement");
   const attempts = [...(state?.attempts ?? []), ...(feature?.jobs ?? [])];
@@ -67,12 +69,12 @@ export function retirementPreview(root: string, repositoryId: string, input: Ret
     head: git(root, "rev-parse", "HEAD"), repository: repositoryId, stateDir: repo.stateDir };
   return { version: 1 as const, input, snapshot, token: digest({ input, snapshot }), evidencePath, phase: binding.phase };
 }
-export function retireComponent(root: string, repositoryId: string, input: RetirementInput, token: string) {
-  return new Runner(root).lock(() => {
-    const { repo, binding, evidencePath } = selected(root, repositoryId, input);
+export function retireComponent(root: string, repositoryId: string, input: RetirementInput, token: string, execution?: ExecutionContext) {
+  return new Runner(root, undefined, execution).lock(() => {
+    const { repo, binding, evidencePath } = selected(root, repositoryId, input, execution);
     if (!token) throw new Error("Retirement confirmation token required");
     if (binding.phase !== "retiring" && binding.phase !== "retired") {
-      const preview = retirementPreview(root, repositoryId, input);
+      const preview = retirementPreview(root, repositoryId, input, execution);
       if (preview.token !== token) throw new Error("Retirement token is stale; preview again");
       const evidence: RetirementEvidence = { version: 1, input, token, snapshot: preview.snapshot };
       if (existsSync(evidencePath)) {
@@ -90,7 +92,7 @@ export function retireComponent(root: string, repositoryId: string, input: Retir
     const original = JSON.parse(evidence.snapshot.binding), { retirement, ...currentBinding } = binding;
     if (digest({ ...currentBinding, phase: original.phase }) !== digest(original)) throw new Error("Retirement binding changed since intent");
     // After intent, dispatch is blocked. Never remove bytes that changed since it.
-    const paths = [[featurePath(repo.stateDir, input.change), evidence.snapshot.feature], [new Runner(root).path(input.change), evidence.snapshot.runner]] as const;
+    const paths = [[featurePath(repo.stateDir, input.change), evidence.snapshot.feature], [new Runner(root, undefined, execution).path(input.change), evidence.snapshot.runner]] as const;
     for (const [path, expected] of paths) {
       const current = bytes(path);
       if (current !== null && current !== expected) throw new Error("Active state changed since retirement intent; retain evidence and reconcile");
@@ -98,6 +100,7 @@ export function retireComponent(root: string, repositoryId: string, input: Retir
     for (const [path] of paths) if (existsSync(path)) unlinkSync(path);
     binding.phase = "retired";
     atomic(componentBindingPath({ stateDir: repo.stateDir, change: input.change }), binding);
+    if (execution) releaseStoreOwnership(execution);
     return { phase: "retired" as const, change: input.change, assignmentId: input.assignmentId, evidencePath,
       nextAction: "Import a different approved assignment; retained resources and evidence require explicit inspection" };
   });

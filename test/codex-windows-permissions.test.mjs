@@ -38,6 +38,28 @@ test("managed Windows Codex grants its Git admin and runtime paths without makin
   assert.throws(() => module.codexWorkerPermissions({ cwd: f.worktree, common: f.common, gitDir: f.common, branch: f.branch }), /admin|worktree|identity/i);
 });
 
+test("Store workers grant owned runtime writes and protected context reads without Store Git writes", async t => {
+  const f = fixture(t), { codexWorkerPermissions } = await import("../dist/harnesses/codex-permissions.js");
+  const root = join(f.root, "store"); mkdirSync(root);
+  execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "pipe" });
+  const runtimeDir = join(root, ".openspec-runner", "owner", "runtime"), context = join(runtimeDir, "component-context", "project");
+  mkdirSync(context, { recursive: true });
+  const scope = { root, common: join(root, ".git"), runtimeDir, contextPaths: [context] };
+  const input = { cwd: f.worktree, common: f.common, gitDir: f.gitDir, branch: f.branch, store: scope };
+  const policy = codexWorkerPermissions(input);
+  assert.equal(policy.profile.filesystem[resolve(runtimeDir)], "write");
+  assert.equal(policy.profile.filesystem[resolve(context)], "read");
+  assert.equal(policy.profile.filesystem[resolve(scope.common)], "read");
+  assert.equal(policy.profile.filesystem[resolve(root)], undefined);
+  assert.equal(policy.profile.filesystem[join(f.common, "openspec-runner")], undefined);
+  assert.ok(policy.prepareDirectories.includes(join(runtimeDir, "reports")));
+  assert.throws(() => codexWorkerPermissions({ ...input, store: { ...scope, runtimeDir: root } }), /Store|runtime/i);
+  const role = { harness: "claude", model: "test-model" };
+  const invocation = getHarness("claude").initialInvocation(role, f.worktree, f.common, "read protected plan", "00000000-0000-4000-8000-000000000000", scope);
+  assert.ok(invocation.args.includes(runtimeDir));
+  assert.equal(invocation.args.includes(root), false);
+});
+
 test("Windows managed Codex invocation prepares reports and pins the runner executable", { skip: process.platform !== "win32" }, async t => {
   const f = fixture(t), harness = getHarness("codex");
   assert.equal(typeof harness.managedInvocation, "function");

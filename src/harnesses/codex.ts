@@ -111,9 +111,9 @@ export const codexHarness: HarnessAdapter = {
       exhaustive: true,
     };
   },
-  initialInvocation(settings, cwd, commonGitDir, prompt): Invocation {
+  initialInvocation(settings, cwd, commonGitDir, prompt, _session, store): Invocation {
     const legacy = settings as Settings;
-    return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), "-"], cwd, stdin: prompt };
+    return { executable: "codex", args: ["exec", ...codexArgs(legacy, cwd, undefined, commonGitDir), ...(store ? ["--add-dir", store.runtimeDir] : []), "-"], cwd, stdin: prompt };
   },
   managedInvocation: (invocation, context) => process.platform === "win32" ? scopedCodexInvocation(invocation, context) : invocation,
   validateManagedInvocation: (invocation, context) => { if (process.platform === "win32") validateCodexInvocation(invocation, context); },
@@ -123,8 +123,8 @@ export const codexHarness: HarnessAdapter = {
         invocation.args.includes("--json")) return invocation;
     return { ...invocation, args: ["exec", "--json", ...invocation.args.slice(1)] };
   },
-  resumeInvocation(settings, cwd, commonGitDir, session): Invocation {
-    return { executable: "codex", args: codexArgs(settings as Settings, cwd, session, commonGitDir), cwd };
+  resumeInvocation(settings, cwd, commonGitDir, session, store): Invocation {
+    return { executable: "codex", args: [...codexArgs(settings as Settings, cwd, session, commonGitDir), ...(store ? ["--add-dir", store.runtimeDir] : [])], cwd };
   },
   planningRules: rules,
 };

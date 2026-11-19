@@ -120,6 +120,7 @@ public static class RunnerContextAccess {
         System.IntPtr security, uint disposition, uint flags, System.IntPtr template);
 
     public static int Probe(string path, uint access) {
+        if (path.Length >= 260 && !path.StartsWith(@"\\?\")) path = @"\\?\" + path;
         using (var handle = CreateFileW(path, access, 7, System.IntPtr.Zero, 3,
                 0x02200000, System.IntPtr.Zero)) {
             return handle.IsInvalid ? Marshal.GetLastWin32Error() : 0;
@@ -138,7 +139,8 @@ foreach ($path in $request.runtimeFiles) {
 
 $entries = foreach ($target in $request.targets) {
     if (($target.mask -band 2) -and $request.operation -ne 'restore') {
-        $streams = Get-Item -LiteralPath $target.path -Stream '*' -Force
+        $streamPath = if ($target.path.Length -ge 260 -and !$target.path.StartsWith('\\?\')) { '\\?\' + $target.path } else { $target.path }
+        $streams = Get-Item -LiteralPath $streamPath -Stream '*' -Force
         if ($streams | Where-Object { $_.Stream -ne ':$DATA' }) {
             throw "Unexpected alternate data stream on pinned context: $($target.path)"
         }
