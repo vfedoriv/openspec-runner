@@ -60,6 +60,11 @@ export function repository(cwd = process.cwd()) {
   const common = canonicalPath(resolve(root, git(root, "rev-parse", "--git-common-dir")));
   return { root, common, stateDir: resolve(common, "openspec-runner") };
 }
+export function assertRepositoryIdentity(options: { root: string; repository: string }) {
+  const identity = attempt(() => git(options.root, "config", "--get", "openspec-runner.repository")) ??
+    attempt(() => git(options.root, "remote", "get-url", "origin"));
+  if (!identity || identity !== options.repository) throw new Error(`Repository identity mismatch: expected ${options.repository}; set openspec-runner.repository or use its exact origin identity`);
+}
 export function locked<T>(dir: string, fn: () => T): T {
   mkdirSync(dir, { recursive: true });
   const file = resolve(dir, "lock.json"),

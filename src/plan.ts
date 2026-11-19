@@ -13,6 +13,7 @@ import { git, run } from "./system.js";
 import { hasHarness, harnessIds } from "./harnesses/registry.js";
 import type { AgentConfig } from "./harnesses/types.js";
 import { containedPath, unredirectedPath } from "./platform-paths.js";
+import type { OpenSpecExecutor } from "./openspec-context.js";
 export interface Assignment {
   model?: string;
   effort?: string;
@@ -389,10 +390,7 @@ export function loadPlan(root: string, change: string, executionDraft?: string):
   for (const p of files.sort()) {
     let content = (p === executionFile && executionDraft !== undefined ? executionDraft : readFileSync(resolve(root, p), "utf8")).replace(/\r\n/g, "\n");
     if (p === relative(root, resolve(directory, "tasks.md")).split(sep).join("/")) {
-      const lines = content.split("\n");
-      for (const task of tasks)
-        lines[task.line] = lines[task.line].replace(/\[[ xX]\]/, "[ ]");
-      content = lines.join("\n");
+      content = uncheckedTaskContent(content, tasks);
     }
     hash.update(p).update("\0").update(content).update("\0");
   }
@@ -408,6 +406,11 @@ export function loadPlan(root: string, change: string, executionDraft?: string):
     files,
   };
 }
+export function uncheckedTaskContent(content: string, tasks: Task[]): string {
+  const lines = content.split("\n");
+  for (const task of tasks) lines[task.line] = lines[task.line].replace(/\[[ xX]\]/, "[ ]");
+  return lines.join("\n");
+}
 export function assertCommitted(root: string, plan: Pick<Plan, "files">, ref = "HEAD") {
   for (const file of plan.files) {
     // Compare bytes against the selected commit, including untracked planning files.
@@ -420,9 +423,9 @@ export function assertCommitted(root: string, plan: Pick<Plan, "files">, ref = "
   if (git(root, "--no-optional-locks", "status", "--porcelain", "--", ...plan.files))
     throw new Error("Planning artifacts must be committed");
 }
-function openspecJson<T>(root: string, args: string[]): T {
+function openspecJson<T>(root: string, args: string[], execute?: OpenSpecExecutor): T {
   const command = `openspec ${args.join(" ")}`,
-    output = run("openspec", args, root);
+    output = execute ? execute({ command: "openspec", args, cwd: root }) : run("openspec", args, root);
   if (!output) throw new Error(`${command} returned empty stdout`);
   try {
     return JSON.parse(output) as T;
@@ -431,17 +434,14 @@ function openspecJson<T>(root: string, args: string[]): T {
   }
 }
 export function readiness(root: string, change: string) {
-  const status = openspecJson(
-      root,
-      ["status", "--change", change, "--json"],
-    ),
-    instructions = openspecJson<any>(
-      root,
-      ["instructions", "apply", "--change", change, "--json"],
-    );
+  const status = openspecJson(root, ["status", "--change", change, "--json"]);
+  return { status, instructions: applyInstructions(root, change) };
+}
+export function applyInstructions(root: string, change: string, execute?: OpenSpecExecutor) {
+  const instructions = openspecJson<any>(root, ["instructions", "apply", "--change", change, "--json"], execute);
   if (!["ready", "all_done"].includes(instructions.state))
     throw new Error(
       `OpenSpec is not ready: ${instructions.instruction ?? instructions.state}`,
     );
-  return { status, instructions };
+  return instructions;
 }

@@ -6,7 +6,7 @@ import { loadPlan, assertCommitted, readiness, tasksFrom } from "./plan.js";
 import { resolveFeatureApprovalSettings } from "./feature.js";
 import { resolve } from "node:path";
 import { committedPlan, exactCheckout, removeExactCheckout, portableVerificationEvidence, verificationCommand } from "./submission.js";
-import { git, gitRaw, attempt, run, repository, atomic, json, clean, locked } from "./system.js";
+import { git, gitRaw, attempt, run, repository, atomic, json, clean, locked, assertRepositoryIdentity } from "./system.js";
 import { affectedDependents, dependencyBlockers } from "./coordination-dependencies.js";
 import { recordTupleReview, type ReviewStage, type TupleReviewMutation, type TupleReviewPreview } from "./coordination-review.js";
 
@@ -31,11 +31,7 @@ export interface CanonicalReferenceInput {
 export type ReferenceInput = ContextInput | CanonicalReferenceInput;
 export interface ApprovalInputs { contract: ContextInput; references?: ReferenceInput[] }
 export interface MutationIdentity { id: string; operationId: string; expectedHead: string; createdAt?: string }
-export function assertRepositoryIdentity(options: { root: string; repository: string }) {
-  const identity = attempt(() => git(options.root, "config", "--get", "openspec-runner.repository")) ??
-    attempt(() => git(options.root, "remote", "get-url", "origin"));
-  if (!identity || identity !== options.repository) throw new Error(`Repository identity mismatch: expected ${options.repository}; set openspec-runner.repository or use its exact origin identity`);
-}
+export { assertRepositoryIdentity } from "./system.js";
 /** Latest introduction on the declared branch's first-parent history is authoritative. */
 export function currentApproval(options: { store: CoordinationStore; snapshot: CoordinationSnapshot }): ApprovalRecord | undefined {
   return options.store.authoritativeApproval({ snapshot: options.snapshot });

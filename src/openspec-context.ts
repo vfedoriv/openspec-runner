@@ -51,6 +51,8 @@ export function resolveContext(options: {
   change: string;
   store?: string;
   execute?: OpenSpecExecutor;
+  /** Explicit component projects must not be redirected by OpenSpec configuration. */
+  expectedProjectRoot?: string;
 }): ResolvedContext {
   id(options.change, "change");
   if (options.store) id(options.store, "Store");
@@ -66,6 +68,9 @@ export function resolveContext(options: {
   if (options.store && root.store_id !== options.store) capability("status root.store_id does not match selected Store");
   const planningHome = object(status?.planningHome);
   const planningRoot = resolve(planningHome?.root ?? root.path);
+  if (options.expectedProjectRoot && (relative(options.expectedProjectRoot, root.path) ||
+      relative(options.expectedProjectRoot, planningRoot)))
+    throw new Error("OpenSpec reported a root outside the selected planning project");
   const inside = (path: string) => {
     const rel = relative(planningRoot, resolve(planningRoot, path));
     if (!rel || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel)) throw new Error("OpenSpec artifact path must remain inside the planning root");
