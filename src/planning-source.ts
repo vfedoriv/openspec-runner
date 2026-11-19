@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
 import {
-  pinContext, pinReferenceContext, resolveContext, safeContextPath,
+  committedBlob, committedTreeEntries, pinContext, pinReferenceContext, resolveContext, safeContextPath,
   type ContextFile, type OpenSpecExecutor,
 } from "./openspec-context.js";
 import {
@@ -83,6 +83,21 @@ function closedObject(value: unknown, fields: string[], label: string) {
   for (const field of Object.keys(value))
     if (!fields.includes(field)) throw new Error(`Unknown Store ${label} field: ${field}`);
 }
+function assertPortableInventory(paths: string[]) {
+  const seen = new Map<string, { spelling: string; directory: boolean }>();
+  for (const path of paths) {
+    const parts = filePath(path).split("/");
+    let spelling = "";
+    for (const [index, part] of parts.entries()) {
+      spelling = spelling ? `${spelling}/${part}` : part;
+      const key = spelling.normalize("NFC").toUpperCase(), previous = seen.get(key);
+      const directory = index < parts.length - 1;
+      if (previous && (previous.spelling !== spelling || !previous.directory || !directory))
+        throw new Error(`Conflicting portable Store paths: ${previous.spelling} and ${spelling}`);
+      seen.set(key, { spelling, directory });
+    }
+  }
+}
 function parseStorePlan(source: StoreSelection & { files: ContextFile[] }): Plan {
   const project = validateSelection(source);
   const directory = `${source.openspecRoot}/changes/${source.change}`;
@@ -90,12 +105,12 @@ function parseStorePlan(source: StoreSelection & { files: ContextFile[] }): Plan
   if (!Array.isArray(source.files)) throw new Error("Store planning source requires a file inventory");
   for (const file of source.files) {
     closedObject(file, ["path", "content"], "planning file");
-    filePath(file.path);
-    if (typeof file.content !== "string" || !file.path.startsWith(`${project}/`))
+    if (typeof file.content !== "string" || typeof file.path !== "string" || !file.path.startsWith(`${project}/`))
       throw new Error("Store planning file is outside its component project or lacks UTF-8 content");
     if (contents.has(file.path)) throw new Error(`Duplicate Store planning path: ${file.path}`);
     contents.set(file.path, file.content);
   }
+  assertPortableInventory([...contents.keys()]);
   const read = (path: string): string => {
     const content = contents.get(path);
     if (content === undefined) throw new Error(`Missing committed Store planning file: ${path}`);
@@ -119,45 +134,87 @@ function parseStorePlan(source: StoreSelection & { files: ContextFile[] }): Plan
 }
 export function loadSourcePlan(source: PlanningSource): Plan {
   if (source.kind === "local") return loadPlan(source.root, source.change);
-  if (source.kind !== "store") throw new Error("Unknown planning source kind");
+  return loadStorePlan(source);
+}
+function loadStorePlan(source: StorePlanningSource): Plan {
+  if (source?.kind !== "store") throw new Error("Expected a Store planning source");
   closedObject(source, ["kind", "repository", "revision", "openspecRoot", "change", "files", "fingerprint"], "planning source");
   const plan = parseStorePlan(source);
   if (source.fingerprint !== plan.fingerprint) throw new Error("Store planning source fingerprint mismatch");
   return plan;
 }
 
-/** Resolve OpenSpec from the selected project and pin the approved revision without touching code. */
-export function pinStorePlan(options: StoreSelection & { storeRoot: string; execute?: OpenSpecExecutor }): StorePlanningSource {
+type PinOptions = StoreSelection & { storeRoot: string; execute?: OpenSpecExecutor };
+
+/** Materialize the committed component for discovery, including auxiliary schema inputs and binary assets. */
+function withCommittedProject<T>(options: PinOptions, inspect: (root: string, cwd: string) => T): T {
   const project = validateSelection(options), store = storeCheckout(options.storeRoot, options.repository);
-  const cwd = unredirectedStorePath(store.root, project);
-  const changeRoot = unredirectedStorePath(store.root, options.openspecRoot, "changes", options.change);
+  unredirectedStorePath(store.root, options.openspecRoot, "changes", options.change);
+  if (git(store.root, "rev-parse", `${options.revision}^{commit}`) !== options.revision)
+    throw new Error("Store plan revision must identify a commit");
+  const entries = committedTreeEntries(store.root, options.revision, project);
+  if (!entries.length) throw new Error(`Missing committed Store project: ${project}`);
+  assertPortableInventory(entries.map(entry => entry.path));
+  for (const entry of entries) {
+    if (!entry.path.startsWith(`${project}/`) || entry.type !== "blob" || !["100644", "100755"].includes(entry.mode))
+      throw new Error(`Committed Store project cannot contain a symlink or non-file: ${entry.path}`);
+  }
+  const runtime = unredirectedStorePath(store.root, ".openspec-runner");
+  let createdRuntime = false, scratch: string | undefined;
+  try {
+    try { mkdirSync(runtime, { mode: 0o700 }); createdRuntime = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    scratch = mkdtempSync(resolve(runtime, "validate-"));
+    for (const entry of entries) {
+      const path = unredirectedStorePath(scratch, entry.path);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, committedBlob({ root: store.root, object: entry.object }), { flag: "wx", mode: 0o600 });
+    }
+    return inspect(store.root, resolve(scratch, project));
+  } finally {
+    if (scratch) rmSync(unredirectedStorePath(runtime, scratch), { recursive: true, force: true });
+    if (createdRuntime) {
+      try { rmdirSync(runtime); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error; }
+    }
+  }
+}
+function pinProject(options: PinOptions, root: string, cwd: string): StorePlanningSource {
+  const project = projectPath(options.openspecRoot), changeRoot = resolve(cwd, "openspec/changes", options.change);
   const context = resolveContext({ cwd, change: options.change, execute: options.execute, expectedProjectRoot: cwd });
   unredirectedStorePath(context.changeRoot);
-  if (!samePath(context.implementationRoot, store.root) || !samePath(context.planningRoot, cwd) || !samePath(context.changeRoot, changeRoot))
+  if (!samePath(context.implementationRoot, root) || !samePath(context.planningRoot, cwd) || !samePath(context.changeRoot, changeRoot))
     throw new Error("OpenSpec returned a planning root or change root outside the selected Store project");
   for (const path of context.artifactPaths) unredirectedStorePath(path);
   const { repository: identity, revision, openspecRoot, change } = options;
-  const pin = pinContext({ context, repository: identity, revision });
+  // Git selection paths are Store-relative; the tool reported paths in the isolated component.
+  const planningRoot = resolve(root, project);
+  const fromSnapshot = (path: string) => unredirectedStorePath(planningRoot, relative(cwd, path));
+  const pin = pinContext({ planningRepositoryRoot: root, context: { ...context, planningRoot, changeRoot: fromSnapshot(changeRoot),
+    artifactPaths: context.artifactPaths.map(fromSnapshot) }, repository: identity, revision });
   const files = new Map(pin.files.map(file => [file.path, file]));
   const runner = files.get(`${openspecRoot}/runner.yaml`);
   if (!runner) throw new Error("Missing committed Store runner.yaml");
   const supplements = supplementPaths(configFrom(parse(runner.content)), project).filter(path => !files.has(path));
   if (supplements.length) {
-    for (const file of pinReferenceContext({ root: store.root, repository: identity, revision, relevantPaths: supplements }).files)
+    for (const file of pinReferenceContext({ root, repository: identity, revision, relevantPaths: supplements }).files)
       files.set(file.path, file);
   }
-  for (const path of files.keys()) unredirectedStorePath(store.root, filePath(path));
+  for (const path of files.keys()) unredirectedStorePath(root, filePath(path));
   const source = { kind: "store" as const, repository: identity, revision, openspecRoot, change,
     files: [...files.keys()].sort().map(path => files.get(path)!) };
   return { ...source, fingerprint: parseStorePlan(source).fingerprint };
+}
+/** Resolve OpenSpec from the approved Git project and pin its portable file inventory. */
+export function pinStorePlan(options: PinOptions): StorePlanningSource {
+  return withCommittedProject(options, (root, cwd) => pinProject(options, root, cwd));
 }
 
 /** Approval checks must inspect the committed component project and run OpenSpec in that project. */
 export function validateStorePlanReadiness(options: { storeRoot: string; source: StorePlanningSource; execute?: OpenSpecExecutor }) {
   const { source, storeRoot, execute } = options;
-  loadSourcePlan(source);
+  loadStorePlan(source);
   const project = projectPath(source.openspecRoot), root = storeCheckout(storeRoot, source.repository).root;
-  const cwd = unredirectedStorePath(root, project);
   function assertRevision() {
     if (git(root, "--no-optional-locks", "diff", "--no-ext-diff", "--name-only", source.revision, "--", project) ||
         git(root, "ls-files", "--others", "-z", "--", project))
@@ -170,14 +227,17 @@ export function validateStorePlanReadiness(options: { storeRoot: string; source:
     }
   }
   assertRevision();
-  const pinned = pinStorePlan({ ...source, storeRoot, execute });
-  const approved = new Map(source.files.map(file => [file.path, file.content]));
-  if (pinned.files.length !== approved.size || pinned.files.some(file => approved.get(file.path) !== file.content))
-    throw new Error("Store plan bytes differ from the selected Git revision");
-  const instructions = applyInstructions(cwd, source.change, execute);
-  const args = ["validate", source.change, "--strict", "--json"];
-  if (execute) execute({ command: "openspec", args, cwd });
-  else run("openspec", args, cwd);
-  assertRevision();
-  return instructions;
+  const pin = { ...source, storeRoot, execute };
+  return withCommittedProject(pin, (store, cwd) => {
+    const pinned = pinProject(pin, store, cwd);
+    const approved = new Map(source.files.map(file => [file.path, file.content]));
+    if (pinned.files.length !== approved.size || pinned.files.some(file => approved.get(file.path) !== file.content))
+      throw new Error("Store plan bytes differ from the selected Git revision");
+    const instructions = applyInstructions(cwd, source.change, execute);
+    const args = ["validate", source.change, "--strict", "--json"];
+    if (execute) execute({ command: "openspec", args, cwd });
+    else run("openspec", args, cwd);
+    assertRevision();
+    return instructions;
+  });
 }

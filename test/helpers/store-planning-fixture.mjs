@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { git } from "./feature-fixture.mjs";
@@ -38,11 +38,11 @@ export function storePlanningFixture(t) {
   git(storeRoot, "add", "."); git(storeRoot, "commit", "-m", "Store plans");
   const revision = git(storeRoot, "rev-parse", "HEAD");
   const input = (component = "api") => {
-    const project = join(storeRoot, "components", component);
     const execute = ({ cwd, args }) => {
-      if (cwd !== project) throw new Error(`Unexpected OpenSpec project: ${cwd}`);
+      if (!readFileSync(join(cwd, "openspec/runner.yaml"), "utf8").includes("defaultAgent"))
+        throw new Error(`Missing committed runner configuration in OpenSpec project: ${cwd}`);
       if (args[0] === "status") return JSON.stringify({
-        root: { source: "nearest", path: project }, planningHome: { root: project },
+        root: { source: "nearest", path: cwd }, planningHome: { root: cwd },
         changeRoot: "openspec/changes/demo", artifactPaths: {},
       });
       if (args[0] === "doctor") return '{"references":[]}';

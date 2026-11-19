@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, symlinkSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, symlinkSync, renameSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { git, storePlanningFixture } from "./helpers/store-planning-fixture.mjs";
 import { loadPlan } from "../dist/plan.js";
 import { loadSourcePlan, pinStorePlan } from "../dist/planning-source.js";
@@ -97,4 +97,65 @@ test("Store configuration cannot reference escaping, missing or committed symlin
     git(f.storeRoot, "commit", "-m", "Configure supplement");
     assert.throws(pin, /path|missing|symlink|supplement/i);
   }
+});
+
+test("discovery and validation read the approved component even during transient edits to the Store checkout", t => {
+  const f = storePlanningFixture(t), input = f.input();
+  const path = "openspec/changes/demo/tasks.md", live = "components/api/" + path;
+  const original = readFileSync(join(f.storeRoot, live), "utf8");
+  const observed = new Set();
+  const execute = request => {
+    f.write(live, "- [x] 1.1 Transient change\n");
+    try {
+      assert.equal(readFileSync(join(request.cwd, path), "utf8"), original);
+      assert.equal(relative(f.storeRoot, request.cwd).split(sep)[0], ".openspec-runner");
+      observed.add(request.args[0]);
+      return input.execute(request);
+    } finally { f.write(live, original); }
+  };
+  const source = pinStorePlan({ ...input, execute });
+  assert.equal(existsSync(join(f.storeRoot, ".openspec-runner")), false);
+  planning.validateStorePlanReadiness({ source, storeRoot: f.storeRoot, execute });
+  assert.deepEqual([...observed].sort(), ["doctor", "instructions", "status", "validate"]);
+  assert.equal(existsSync(join(f.storeRoot, ".openspec-runner")), false);
+  assert.throws(() => pinStorePlan({ ...input, execute: () => "{}" }), /capability/i);
+  assert.equal(existsSync(join(f.storeRoot, ".openspec-runner")), false);
+  const blocked = request => request.args[0] === "instructions" ? '{"state":"blocked"}' : input.execute(request);
+  assert.throws(() => planning.validateStorePlanReadiness({ source, storeRoot: f.storeRoot, execute: blocked }), /not ready/i);
+  assert.equal(existsSync(join(f.storeRoot, ".openspec-runner")), false);
+  f.write(".openspec-runner/keep", "existing state");
+  pinStorePlan(input);
+  assert.throws(() => planning.validateStorePlanReadiness({ source, storeRoot: f.storeRoot, execute: blocked }), /not ready/i);
+  assert.deepEqual(readdirSync(join(f.storeRoot, ".openspec-runner")), ["keep"]);
+  assert.equal(readFileSync(join(f.storeRoot, ".openspec-runner/keep"), "utf8"), "existing state");
+});
+
+test("portable plans reject case aliases and file/directory conflicts in Git and in received inventories", t => {
+  const f = storePlanningFixture(t), input = f.input(), original = pinStorePlan(input);
+  const prefix = "components/api/openspec/changes/demo/";
+  const object = git(f.storeRoot, "hash-object", "-w", prefix + "tasks.md");
+  for (const pair of [["Spec.md", "spec.md"], ["Rules", "rules/guide.md"]]) {
+    const files = pair.map(name => ({ path: prefix + name, content: "guide\n" }));
+    assert.throws(() => loadSourcePlan({ ...original, files: [...original.files, ...files] }), /conflict|case|collision/i);
+    for (const file of files)
+      git(f.storeRoot, "-c", "core.ignorecase=false", "update-index", "--add", "--cacheinfo", "100644", object, file.path);
+    git(f.storeRoot, "commit", "-m", "Add conflicting files");
+    assert.throws(() => pinStorePlan({ ...input, revision: git(f.storeRoot, "rev-parse", "HEAD") }), /conflict|case|collision/i);
+    for (const file of files)
+      git(f.storeRoot, "-c", "core.ignorecase=false", "update-index", "--force-remove", "--", file.path);
+  }
+});
+
+test("Store-only readiness rejects a local source before reading its supplied root", () => {
+  const source = { kind: "local", root: "does-not-exist", change: "demo" };
+  assert.throws(() => planning.validateStorePlanReadiness({ storeRoot: "absent", source,
+    execute: () => assert.fail("unexpected OpenSpec invocation") }), /Store planning source/i);
+});
+
+test("a committed component can be pinned after its live directory has moved", t => {
+  const f = storePlanningFixture(t);
+  renameSync(join(f.storeRoot, "components/api"), join(f.storeRoot, "components/renamed"));
+  const source = pinStorePlan(f.input());
+  assert.equal(loadSourcePlan(source).config.defaultModel, "api");
+  assert.equal(existsSync(join(f.storeRoot, "components/api")), false);
 });

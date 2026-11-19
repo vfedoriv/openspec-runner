@@ -38,3 +38,19 @@ test("Store runtime follows the selected feature, component and code common dire
   mkdirSync(outside); symlinkSync(outside, join(f.storeRoot, ".openspec-runner"), "junction");
   assert.throws(() => select(f.code), /redirect|symlink/i);
 });
+
+test("case-distinct feature and component IDs isolate owners on case-insensitive filesystems", t => {
+  const f = storePlanningFixture(t), lower = pinStorePlan(f.input());
+  git(f.storeRoot, "mv", "components/api", "components/temp-api");
+  git(f.storeRoot, "mv", "components/temp-api", "components/API");
+  git(f.storeRoot, "commit", "-m", "Case-distinct component");
+  const upper = pinStorePlan({ ...f.input("API"), revision: git(f.storeRoot, "rev-parse", "HEAD") });
+  const select = (componentId, source, featureId = "feature", assignmentId = "assignment") =>
+    resolveExecutionContext({ implementationRoot: f.code, change: "demo", store: { storeRoot: f.storeRoot, componentId, source, featureId, assignmentId } });
+  const base = select("api", lower);
+  for (const key of ["runtimeDir", "worktreeRoot"]) {
+    assert.notEqual(base[key].toLowerCase(), select("api", lower, "FEATURE")[key].toLowerCase());
+    assert.notEqual(base[key].toLowerCase(), select("API", upper)[key].toLowerCase());
+    assert.equal(base[key], select("api", lower, "feature", "replacement")[key]);
+  }
+});

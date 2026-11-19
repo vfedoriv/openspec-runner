@@ -44,8 +44,8 @@ export function resolveExecutionContext(input: ExecutionContextInput): Execution
   const checkout = storeCheckout(storeRoot, source.repository);
   if (samePath(checkout.common, common)) throw new Error("Store execution requires a separate implementation Git repository");
   const planningProjectRoot = unredirectedStorePath(checkout.root, "components", componentId);
-  const cloneKey = createHash("sha256").update(common).digest("hex");
-  const owner = unredirectedStorePath(checkout.root, ".openspec-runner", featureId, componentId, cloneKey);
+  const ownerKey = createHash("sha256").update(JSON.stringify([featureId, componentId, common])).digest("hex");
+  const owner = unredirectedStorePath(checkout.root, ".openspec-runner", ownerKey);
   return {
     implementation, planningSource: source, planningProjectRoot,
     runtimeDir: unredirectedStorePath(owner, "runtime"), worktreeRoot: unredirectedStorePath(owner, "worktrees"),

@@ -163,10 +163,12 @@ export function pinContext(options: {
   repository: string;
   revision: string;
   relevantPaths?: string[];
+  /** Explicit Git root when the selection describes a historical project absent from the worktree. */
+  planningRepositoryRoot?: string;
 }): PinnedContext {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.revision)) throw new Error("Context requires a full Git revision");
   if (typeof options.repository !== "string" || !options.repository.trim() || isAbsolute(options.repository)) throw new Error("Context requires a portable repository identity");
-  const root = repository(options.context.planningRoot).root;
+  const root = repository(options.planningRepositoryRoot ?? options.context.planningRoot).root;
   if (git(root, "rev-parse", `${options.revision}^{commit}`) !== options.revision) throw new Error("Context revision must identify an available commit");
   const rootRelative = relative(root, options.context.planningRoot).split(sep).join("/");
   const fromRoot = (path: string) => safeContextPath(relative(root, path).split(sep).join("/"));
@@ -184,13 +186,16 @@ export function pinContext(options: {
     ...(options.context.storeId ? { storeId: options.context.storeId } : {}), fingerprint: contextFingerprint({ files, selections }), files, selections };
 }
 
-function pinnedFiles(options: { root: string; revision: string; selections: string[]; required: string[] }): ContextFile[] {
-  const root = options.root, selections = options.selections, required = options.required;
-  const entries = gitRaw(root, "ls-tree", "-r", "-z", options.revision).split("\0").filter(Boolean).map(line => {
+export function committedTreeEntries(root: string, revision: string, scope?: string) {
+  return gitRaw(root, "ls-tree", "-r", "-z", revision, ...(scope ? ["--", safeContextPath(scope)] : [])).split("\0").filter(Boolean).map(line => {
     const match = /^(\d+) (\w+) ([a-f0-9]+)\t([\s\S]+)$/.exec(line);
     if (!match) throw new Error("Invalid Git tree entry");
     return { mode: match[1], type: match[2], object: match[3], path: match[4] };
   });
+}
+function pinnedFiles(options: { root: string; revision: string; selections: string[]; required: string[] }): ContextFile[] {
+  const root = options.root, selections = options.selections, required = options.required;
+  const entries = committedTreeEntries(root, options.revision);
   for (const path of required) if (!entries.some(e => e.path === path || e.path.startsWith(`${path}/`))) throw new Error(`Committed context path is missing: ${path}`);
   return entries.filter(e => !e.path.startsWith("runner/features/") && e.path !== "runner/features" &&
     selections.some(path => e.path === path || e.path.startsWith(`${path}/`))).map(entry => {
