@@ -77,8 +77,24 @@ Use `node node_modules/typescript/bin/tsc` for focused builds; `node test/helper
 
 **Owner:** Parent coordinates verification and a fresh low-effort Sol reviewer; any fixes are delegated to an implementer.
 
-- [ ] Verify each task's diff and report, with a fresh spec-compliance and quality review gate. Fix Important findings through the original implementer, with targeted regression evidence.
-- [ ] Run `pnpm with current test` on the combined final source. Expected: zero failures; record actual passes/skips. Confirm the four-repository lifecycle, clone reconstruction, repair, recovery, local mode and archival still pass.
-- [ ] Run package dry run, `git diff --check`, inspect the affected CLI preview/status/recovery commands with JSON where applicable, and verify untracked IDE files remain untouched.
-- [ ] Dispatch one fresh whole-change review from base `7fb334c` through final implementation HEAD. Delegate any necessary final fixes, then verify those fixes and rerun checks appropriate to changed behavior.
-- [ ] Record final evidence and remaining limitations in this plan; leave all completed steps checked and changes committed on local `dev`, without pushing.
+- [x] Verify each task's diff and report, with a fresh spec-compliance and quality review gate. Fix Important findings through the original implementer, with targeted regression evidence.
+- [x] Run `pnpm with current test` on the combined final source. Expected: zero failures; record actual passes/skips. Confirm the four-repository lifecycle, clone reconstruction, repair, recovery, local mode and archival still pass.
+- [x] Run package dry run, `git diff --check`, inspect the affected CLI preview/status/recovery commands with JSON where applicable, and verify untracked IDE files remain untouched.
+- [x] Dispatch one fresh whole-change review from base `7fb334c` through final implementation HEAD. Delegate any necessary final fixes, then verify those fixes and rerun checks appropriate to changed behavior.
+- [x] Record final evidence and remaining limitations in this plan; leave all completed steps checked and changes committed on local `dev`, without pushing.
+
+## Final evidence (2026-11-20)
+
+- Implementation commits: `1d25172` (repair authority), `5c0f29f` (artifact policy), `af590b8` (coordinator state isolation). All product changes and independent task/final reviews used `gpt-6.1-sol` at low effort; parent coordinated and verified.
+- Every task reproduced its gap before implementation. Focused checks: Task 1, 30 passes; Task 2, 85 passes plus expanded integration regression; Task 3, runtime 4 passes, native acceptance and archive each passed, existing compatibility suites 3 passes and 59 platform-policy skips.
+- Independent task reviews approved spec compliance and quality. Fresh whole-change review of `7fb334c..af590b8` reported no actionable findings.
+- Parent `pnpm with current test`: 526 tests, 402 passed, 124 platform/opt-in skips, zero failures, 855259 ms. Four-repository CLI lifecycle passed in 493511 ms, including JSON/dry-run boundaries, independent clone reconstruction and Store-only archival. Existing local and recovery tests passed.
+- `pnpm with current pack --dry-run --json` produced valid package metadata after the build output, including the new helper and workflow guide. `git diff --check` passed. No dependencies, generated output or IDE files committed. Work remains on local `dev`, without pushing.
+
+## Decisions and remaining limitations
+
+- Reused the user-requested `dev` checkout; unrelated IDE files remained untouched. Cost: less isolation from unrelated local work.
+- Existing unscoped v2 journals require explicit ownership/path reconciliation; no automatic migration or ambiguous-command replay. Cost: manual recovery may be needed before reusing legacy operation IDs. Version-1 path layout remains unchanged.
+- Dedicated replacement/dependency-staleness repair fixtures were conditional and were not added; the repair entry point now invokes the existing centralized guard, with real revocation/drift and recovery regressions. Cost: these specific combinations lack dedicated repair tests.
+- Deferred minor: expected failure diagnostics and Git CRLF warnings remain in some fixture output.
+- Deferred minor: dedicated two-feature acceptance/delivery execution with identical IDs and portable-evidence assertions. Shared resolver isolation is tested, direct two-feature tuple execution and archive recovery are covered, and native acceptance/delivery lifecycle checks passed.
