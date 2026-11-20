@@ -86,6 +86,8 @@ After integration and a successful supervised review without blocking findings, 
 
 Coordinator import preserves receipt bytes. Acceptance verifies the approved Store source, exact task coverage, baseline or worker/integration evidence, code ancestry and independent checks in a clean exact-code checkout. One Store commit records acceptance and updates that component's canonical task checkboxes. Local integration can be ahead of canonical acceptance. Checkbox-only progress and unrelated component edits do not invalidate approved fingerprints.
 
+Execution checks current component inputs and the primary shared contract against approval before allowing work or callbacks. Custom artifact directory selections include newly committed files. Older v2 pins without selection roots retain their fingerprints, but additions anywhere in their component project require renewed approval. Task evidence requires distinct worker and integration commits with one attempt marker; planning and runtime artifacts are rejected throughout submitted and delivered code history, including files deleted before the final commit.
+
 Use combined tuple review, component delivery evidence, final tuple review and explicit completion consent as in the [operator reference](team-workflow-reference.md). Normal, squash and rebase delivery retain the original accepted evidence; rewritten or changed delivered content still requires the existing exact-delivery review/check gates.
 
 For v2 archive scope, `componentIds` selects component projects physically in the Store; `includeStore` selects the shared project. Always provide `storeDeliveryBranch` equal to the manifest's coordination branch, including component-only scopes. Archive consent binds Store bases separately from code delivery SHAs.

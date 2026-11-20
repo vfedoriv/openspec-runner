@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import {
-  loadSourcePlan, storeCheckout, storeId, unredirectedStorePath,
+  loadSourcePlan, readStorePlanRevision, storeCheckout, storeId, unredirectedStorePath,
   type PlanningSource, type StorePlanningSource,
 } from "./planning-source.js";
 import { samePath } from "./platform-paths.js";
@@ -10,6 +10,7 @@ import { readComponentBinding } from "./component-state.js";
 import { CoordinationStore, replayStatus, stableDigest } from "./coordination-state.js";
 import { assertStoreOwnership } from "./store-ownership.js";
 import { dependencyBlockers } from "./coordination-dependencies.js";
+import { contextFingerprint, repinContext } from "./openspec-context.js";
 
 export interface StoreExecutionSelection {
   storeRoot: string;
@@ -86,6 +87,12 @@ export function assertStoreBindingAuthority(execution: ExecutionContext, change:
       component?.assignmentId !== binding.assignmentId || component.dependencyStale || component.requiresReapproval ||
       dependencyBlockers({ manifest: snapshot.manifest, componentId: binding.assignment.componentId, components: status.components, assignment: binding.assignment }).length)
     throw new Error("Store assignment is revoked, stale, or blocked by changed dependencies");
+  const source = binding.assignment.planningSource;
+  if (readStorePlanRevision({ storeRoot: store.root, source, revision }).fingerprint !== source.fingerprint)
+    throw new Error("Store planning inputs drifted; renew approval before execution");
+  const primary = repinContext({ root: store.root, revision, context: binding.assignment.contract });
+  if (contextFingerprint({ ...primary, references: binding.assignment.contract.references }) !== binding.assignment.contract.fingerprint)
+    throw new Error("Shared contract drifted; renew approval before execution");
   assertRepositoryIdentity({ root: execution.implementation.root, repository: binding.repository });
   return binding;
 }

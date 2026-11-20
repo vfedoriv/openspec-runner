@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, wri
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
 import {
-  committedBlob, committedBlobs, committedTreeEntries, pinContext, pinReferenceContext, resolveContext, safeContextPath,
+  committedBlob, committedBlobs, committedTreeEntries, pinContext, pinReferenceContext, repinContext, resolveContext, safeContextPath,
   type ContextFile, type OpenSpecExecutor,
 } from "./openspec-context.js";
 import {
@@ -21,6 +21,8 @@ export interface StorePlanningSource {
   change: string;
   /** Paths are relative to the Store Git root. Content round-trips exact UTF-8 blob bytes. */
   files: ContextFile[];
+  /** Approved selection roots, including custom artifact directories. Absent on older pins. */
+  selections?: string[];
   /** Independent of unrelated Store commits and completion marks on numbered tasks. */
   fingerprint: string;
 }
@@ -98,7 +100,7 @@ function assertPortableInventory(paths: string[]) {
     }
   }
 }
-function parseStorePlan(source: StoreSelection & { files: ContextFile[] }): Plan {
+function parseStorePlan(source: StoreSelection & { files: ContextFile[]; selections?: string[] }): Plan {
   const project = validateSelection(source);
   const directory = `${source.openspecRoot}/changes/${source.change}`;
   const contents = new Map<string, string>();
@@ -111,6 +113,13 @@ function parseStorePlan(source: StoreSelection & { files: ContextFile[] }): Plan
     contents.set(file.path, file.content);
   }
   assertPortableInventory([...contents.keys()]);
+  if (source.selections !== undefined) {
+    if (!Array.isArray(source.selections) || !source.selections.length ||
+        source.selections.some(path => typeof path !== "string" || !filePath(path).startsWith(`${project}/`)) ||
+        JSON.stringify(source.selections) !== JSON.stringify([...new Set(source.selections)].sort()) ||
+        [...contents.keys()].some(path => !source.selections!.some(selection => path === selection || path.startsWith(`${selection}/`))))
+      throw new Error("Invalid Store planning selection scope");
+  }
   const read = (path: string): string => {
     const content = contents.get(path);
     if (content === undefined) throw new Error(`Missing committed Store planning file: ${path}`);
@@ -123,6 +132,7 @@ function parseStorePlan(source: StoreSelection & { files: ContextFile[] }): Plan
   const files = [...contents.keys()].sort();
   const hash = createHash("sha256");
   hash.update(JSON.stringify([source.repository, source.openspecRoot, source.change]));
+  if (source.selections) hash.update(JSON.stringify(source.selections));
   for (const path of files) {
     const content = read(path);
     hash.update(JSON.stringify([path, path === tasksPath ? uncheckedTaskContent(content, tasks) : content]));
@@ -138,13 +148,13 @@ export function loadSourcePlan(source: PlanningSource): Plan {
 }
 function loadStorePlan(source: StorePlanningSource): Plan {
   if (source?.kind !== "store") throw new Error("Expected a Store planning source");
-  closedObject(source, ["kind", "repository", "revision", "openspecRoot", "change", "files", "fingerprint"], "planning source");
+  closedObject(source, ["kind", "repository", "revision", "openspecRoot", "change", "files", "fingerprint", "selections"], "planning source");
   const plan = parseStorePlan(source);
   if (source.fingerprint !== plan.fingerprint) throw new Error("Store planning source fingerprint mismatch");
   return plan;
 }
 
-type PinOptions = StoreSelection & { storeRoot: string; execute?: OpenSpecExecutor };
+type PinOptions = StoreSelection & { storeRoot: string; execute?: OpenSpecExecutor; kind?: "store"; selections?: string[] };
 
 /** Materialize the committed component for discovery, including auxiliary schema inputs and binary assets. */
 function withCommittedProject<T>(options: PinOptions, inspect: (root: string, cwd: string) => T): T {
@@ -211,6 +221,9 @@ function pinProject(options: PinOptions, root: string, cwd: string): StorePlanni
   }
   for (const path of files.keys()) unredirectedStorePath(root, filePath(path));
   const source = { kind: "store" as const, repository: identity, revision, openspecRoot, change,
+    // Revalidating an older persisted pin must retain its original fingerprint format.
+    ...(options.kind === "store" && options.selections === undefined ? {} :
+      { selections: [...new Set([...(pin.selections ?? []), ...supplements])].sort() }),
     files: [...files.keys()].sort().map(path => files.get(path)!) };
   return { ...source, fingerprint: parseStorePlan(source).fingerprint };
 }
@@ -224,6 +237,18 @@ export function readStorePlanRevision(options: { storeRoot: string; source: Stor
   const { source, revision } = options;
   loadSourcePlan(source);
   const root = storeCheckout(options.storeRoot, source.repository).root;
+  if (source.selections) {
+    const pinned = repinContext({ root, revision, context: { version: 1, repository: source.repository,
+      revision: source.revision, files: source.files, selections: source.selections, fingerprint: "" } });
+    const candidate = { ...source, revision, files: pinned.files };
+    return { ...candidate, fingerprint: parseStorePlan(candidate).fingerprint };
+  }
+  // Legacy pins lost custom directory selectors. Refuse additions in their component
+  // project rather than silently execute against potentially unobserved new inputs.
+  const project = projectPath(source.openspecRoot);
+  const originalPaths = new Set(committedTreeEntries(root, source.revision, project).map(entry => entry.path));
+  if (committedTreeEntries(root, revision, project).some(entry => !originalPaths.has(entry.path)))
+    throw new Error("Store planning selection scope is stale after project additions; renew approval");
   const planningRoot = resolve(root, projectPath(source.openspecRoot));
   const pinned = pinContext({ repository: source.repository, revision, planningRepositoryRoot: root, context: {
     implementationRoot: root, planningRoot, changeRoot: resolve(root, source.openspecRoot, "changes", source.change), change: source.change,

@@ -16,6 +16,7 @@ import { processStart } from "./processes.js";
 import { readComponentBinding } from "./component-state.js";
 import { assertStoreBindingAuthority, resolveExecutionContext, type ExecutionContext } from "./execution-context.js";
 import { loadSourcePlan } from "./planning-source.js";
+import { assertStoreCodeHistory } from "./store-submission.js";
 import { samePath } from "./platform-paths.js";
 import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import {
@@ -1049,8 +1050,7 @@ export class Runner {
     git(a.path, "merge-base", "--is-ancestor", a.base, report.commit);
     if (git(a.path, "symbolic-ref", "--short", "HEAD") !== a.branch)
       throw new Error("Task worktree changed branches");
-    if (this.execution && git(a.path, "diff", "--name-only", a.base, report.commit, "--", "openspec", ".openspec-runner"))
-      throw new Error("Store workers must keep planning and runner files out of code commits");
+    if (this.execution) assertStoreCodeHistory(a.path, a.base, report.commit);
     if (
       this.plan(change, undefined, a.path).fingerprint !== a.fingerprint ||
       git(

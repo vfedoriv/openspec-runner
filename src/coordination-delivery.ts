@@ -1,5 +1,5 @@
 import { stableDigest, type CoordinationEvent, type AssignmentRecord, type SubmissionRecord, type CoordinationSnapshot, type CoordinationStatus, type ReviewFinding, type VerificationEvidence } from "./coordination-state.js";
-import { assertStoreCodeTree, validateStoreSubmission } from "./store-submission.js";
+import { assertStoreCodeHistory, validateStoreSubmission } from "./store-submission.js";
 import { attempt, clean, git, gitRaw, repository } from "./system.js";
 import { resolve } from "node:path";
 import { committedPlan, exactCheckout, removeExactCheckout, verificationCommand } from "./submission.js";
@@ -53,7 +53,7 @@ export function deliveredPlan(options: { root: string; preview: MergePreview }) 
   if (assignment.version === 2) {
     if (!options.preview.receipt) throw new Error("Store delivery requires accepted task evidence");
     validateStoreSubmission({ root: options.root, assignment, receipt: options.preview.receipt });
-    assertStoreCodeTree(options.root, options.preview.payload.deliveryCommit);
+    assertStoreCodeHistory(options.root, assignment.base, options.preview.payload.deliveryCommit);
     return;
   }
   // Rewritten history is allowed here; ordinary submission acceptance still checks ancestry.

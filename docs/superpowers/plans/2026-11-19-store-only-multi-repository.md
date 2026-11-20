@@ -61,7 +61,7 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 
 **Verification:** Build passed; affected execution suites: 89 tests, 88 passed, one skipped, no failures (2026-11-19).
 
-### 4. Make acceptance the durable Store progress boundary — in progress
+### 4. Make acceptance the durable Store progress boundary — completed
 
 **Files:** `src/component.ts`, `src/submission.ts`, `src/coordination.ts`, `src/coordination-state.ts`, `src/coordination-delivery.ts`, `src/coordination-review.ts`, `src/coordination-operation.ts`; tests in `test/coordination-acceptance.test.mjs`, `test/coordination-review.test.mjs`, `test/coordination-delivery.test.mjs`.
 
@@ -72,7 +72,7 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 
 **Verification:** Build passed; affected suites: 127 tests, 36 passed, 91 platform skips, no failures. Independent Store/code clone acceptance with CRLF checkout also passed (2026-11-19).
 
-### 5. Archive all approved planning scopes in the Store — in progress
+### 5. Archive all approved planning scopes in the Store — completed
 
 **Files:** `src/coordination-archive.ts`, `src/coordination.ts`, `src/coordination-state.ts`, `src/archive-paths.ts`; tests in `test/coordination-delivery.test.mjs`, `test/archive-paths.test.mjs`.
 
@@ -82,7 +82,7 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 
 **Verification:** Build passed; Store archival and compatibility suites: 48 tests, 27 passed, 21 platform skips, no failures (2026-11-19).
 
-### 6. Expose both workflows and prove the complete scenario � completed
+### 6. Expose both workflows and prove the complete scenario — completed
 
 **Files:** `src/cli.ts`, `src/linked-cli.ts`, `src/doctor.ts`, `src/execution-settings.ts`, `src/dashboard-reader.ts`, dashboard action/collector modules, `src/summary-evidence.ts`, `src/summary-shared.ts`, `docs/examples/linked-feature-inputs.mjs`, relevant runner skills, `README.md`, team guides; create `test/store-only-multi-repo.test.mjs` and extend existing CLI/dashboard/summary tests.
 
@@ -100,3 +100,12 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 - Relevant Store edits invalidate stale approval; unrelated component progress does not (tasks 1, 2, 4).
 - Crashes between code integration and Store acceptance recover without false completion or lost updates (tasks 3, 4).
 - Multiple clones, Windows path/protection rules, and external runtime permissions preserve ownership/isolation (tasks 1, 2, 3, 6).
+
+## Final review corrections
+
+- [x] Reject execution and callbacks when committed component inputs or the primary shared contract drift from approval. Persist custom selection roots so new files in selected directories invalidate approval; retain frozen external references and checkbox-only progress semantics.
+- [x] Require distinct worker/integration commits and exactly one attempt marker for each integrated task's evidence.
+- [x] Reject planning/runtime artifacts throughout submitted and delivered code history, including intermediate commits whose files were later deleted.
+- [x] Preserve existing v2 fingerprints when selection roots are absent. Such older pins require renewed approval after new component project files appear; v1 and local workflows retain their semantics.
+
+All three Important review findings reproduced as failing tests and passed after fixes. Focused verification: 19 tests passed, no failures or skips. Final `pnpm with current test`: 519 tests, 395 passed, 124 platform/opt-in skips, no failures; the four-repository lifecycle passed. `pnpm with current pack --dry-run --json` and `git diff --check` also passed (2026-11-20). No minor findings were deferred. External OpenSpec/harness binary behavior remains outside source review; repository adapter and lifecycle checks cover the supported boundaries.

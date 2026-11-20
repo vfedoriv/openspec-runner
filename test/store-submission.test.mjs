@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateStoreSubmission } from "../dist/store-submission.js";
 import { deliveredPlan } from "../dist/coordination-delivery.js";
@@ -39,6 +39,45 @@ test("Store task evidence binds approved scope, worker ancestry and integration 
   mkdirSync(join(f.code, "openspec")); writeFileSync(join(f.code, "openspec", "leaked.md"), "forbidden");
   git(f.code, "add", "."); git(f.code, "commit", "-m", "Leak planning artifact");
   assert.throws(() => deliveredPlan({ root: f.code, preview: { assignment, receipt, payload: { deliveryCommit: git(f.code, "rev-parse", "HEAD") } } }), /planning|runtime|artifact/i);
+});
+
+test("Store evidence rejects one integration reused for multiple tasks", t => {
+  const f = storePlanningFixture(t);
+  f.write("components/api/openspec/changes/demo/tasks.md", "- [ ] 1.1 First task\n- [ ] 1.2 Second task\n");
+  f.write("components/api/openspec/changes/demo/execution.yaml", 'version: 2\ntasks:\n  "1.1": {}\n  "1.2": {}\n');
+  git(f.storeRoot, "add", "."); git(f.storeRoot, "commit", "-m", "Two tasks");
+  const source = pinStorePlan({ ...f.input(), revision: git(f.storeRoot, "rev-parse", "HEAD") });
+  const base = git(f.code, "rev-parse", "HEAD");
+  git(f.code, "checkout", "-b", "worker");
+  writeFileSync(join(f.code, "result.txt"), "implemented\n");
+  git(f.code, "add", "."); git(f.code, "commit", "-m", "Implement");
+  const workerCommit = git(f.code, "rev-parse", "HEAD");
+  git(f.code, "checkout", "-b", "integration", base);
+  git(f.code, "merge", "--no-ff", "worker", "-m", "Integrate\n\nopenspec-runner:first\nopenspec-runner:second");
+  const commit = git(f.code, "rev-parse", "HEAD");
+  const assignment = { version: 2, base, planningSource: source, planFingerprint: source.fingerprint,
+    settings: { tasks: { "1.1": {}, "1.2": {} } } };
+  const receipt = { version: 2, planningRevision: source.revision, result: { commit }, tasks: ["first", "second"].map((attemptId, i) => ({
+    id: `1.${i + 1}`, completed: true, evidence: { kind: "integrated", attemptId, workerCommit, integrationCommit: commit },
+  })) };
+  assert.throws(() => validateStoreSubmission({ root: f.code, assignment, receipt }), /distinct|marker/i);
+});
+
+test("Store submission rejects forbidden artifacts removed before the final commit", t => {
+  const f = storePlanningFixture(t), source = pinStorePlan(f.input()), base = git(f.code, "rev-parse", "HEAD");
+  git(f.code, "checkout", "-b", "worker");
+  mkdirSync(join(f.code, "openspec")); writeFileSync(join(f.code, "openspec", "leaked.md"), "forbidden");
+  git(f.code, "add", "."); git(f.code, "commit", "-m", "Leak artifact");
+  rmSync(join(f.code, "openspec"), { recursive: true }); writeFileSync(join(f.code, "result.txt"), "implemented\n");
+  git(f.code, "add", "."); git(f.code, "commit", "-m", "Remove artifact");
+  const workerCommit = git(f.code, "rev-parse", "HEAD");
+  git(f.code, "checkout", "-b", "integration", base);
+  git(f.code, "merge", "--no-ff", "worker", "-m", "Integrate\n\nopenspec-runner:attempt");
+  const commit = git(f.code, "rev-parse", "HEAD");
+  const assignment = { version: 2, base, planningSource: source, planFingerprint: source.fingerprint, settings: { tasks: { "1.1": {} } } };
+  const receipt = { version: 2, planningRevision: source.revision, result: { commit }, tasks: [{ id: "1.1", completed: true,
+    evidence: { kind: "integrated", attemptId: "attempt", workerCommit, integrationCommit: commit } }] };
+  assert.throws(() => validateStoreSubmission({ root: f.code, assignment, receipt }), /planning|runtime|artifact/i);
 });
 
 test("approved baseline tasks require only the assigned code base", t => {
