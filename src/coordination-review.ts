@@ -1,5 +1,5 @@
+import { coordinationJournalPath, coordinationRuntimePath } from "./coordination-runtime.js";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { CoordinationStore, decodeRecord, stableDigest, validateId, type CommitTuple, type CoordinationEvent, type ReviewFinding, type VerificationCommand, type VerificationEvidence } from "./coordination-state.js";
 import type { MutationIdentity } from "./coordination.js";
 import { exactCheckout, removeExactCheckout, verificationCommand } from "./submission.js";
@@ -54,7 +54,7 @@ export function recordTupleReview(options: {
   const { store, input } = options;
   const { version } = store.readManifest();
   validateId({ value: input.id, version }); validateId({ value: input.operationId, version });
-  const runtime = repository(store.root).stateDir, journalPath = resolve(runtime, "review", `${input.operationId}.json`);
+  const runtime = repository(store.root).stateDir, journalPath = coordinationJournalPath({ store, area: "review", operationId: input.operationId });
   return locked(runtime, () => {
     let journal = existsSync(journalPath) ? json<Journal>(journalPath) : undefined;
     if (journal && digest(journal.input) !== digest(input)) throw new Error("Immutable review operation identity differs");
@@ -92,7 +92,7 @@ export function recordTupleReview(options: {
       journal!.expectedHead = result.head; delete journal!.pendingEvent; save(); return result;
     };
     write(event(`${input.id}-started`, `${input.operationId}-started`, { type: "operation-started", targetOperationId: input.operationId, action: `${input.stage}-review`, snapshotToken: input.token }));
-    const paths = Object.fromEntries(Object.keys(journal.preview.tuple).sort().map(id => [id, resolve(runtime, "review-checkouts", input.operationId, id)]));
+    const paths = Object.fromEntries(Object.keys(journal.preview.tuple).sort().map(id => [id, coordinationRuntimePath({ store, area: "review-checkouts", operationId: input.operationId, componentId: id })]));
     const commands = [
       ...Object.entries(journal.preview.components).flatMap(([componentId, component]) => component.setup.map(command => ({ componentId, command, setup: true }))),
       ...journal.preview.verification.map(command => ({ ...command, setup: false })),

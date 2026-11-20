@@ -1,7 +1,7 @@
+import { coordinationRuntimePath } from "./coordination-runtime.js";
 import { stableDigest, type CoordinationEvent, type AssignmentRecord, type SubmissionRecord, type CoordinationSnapshot, type CoordinationStatus, type ReviewFinding, type VerificationEvidence } from "./coordination-state.js";
 import { assertStoreCodeHistory, validateStoreSubmission } from "./store-submission.js";
-import { attempt, clean, git, gitRaw, repository } from "./system.js";
-import { resolve } from "node:path";
+import { attempt, clean, git, gitRaw } from "./system.js";
 import { committedPlan, exactCheckout, removeExactCheckout, verificationCommand } from "./submission.js";
 import { coordinationOperation } from "./coordination-operation.js";
 import type { MutationIdentity } from "./coordination.js";
@@ -86,7 +86,7 @@ export function acceptDeliveredSnapshot(options: {
     if (result) { assertVerified(); return write({ id: input.id, operationId: input.operationId, payload: result }); }
     if (data.running !== undefined || data.stage === "failed") throw new Error(data.reason ?? "Interrupted delivered snapshot check has ambiguous side effects; inspect and use a new operation");
     if (options.preview().token !== data.preview.token) throw new Error("Delivered acceptance inputs drifted since durable intent");
-    const path = resolve(repository(data.preview.assignment.version === 2 ? store.root : root).stateDir, "delivery-checkouts", input.operationId);
+    const path = coordinationRuntimePath({ store, area: "delivery-checkouts", operationId: input.operationId, legacyRoot: root });
     if (data.stage !== "verified") {
       exactCheckout({ root, commit: input.deliveryCommit, path });
       data.stage = "checking"; save();

@@ -3,12 +3,16 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { deliveredStoreFixture } from "./helpers/store-coordination-fixture.mjs";
+import { coordinationRuntimePath } from "../dist/coordination-runtime.js";
+import { inspectArchivePreparation, recoverArchivePreparation } from "../dist/coordination-archive.js";
 import { executable } from "./helpers/feature-fixture.mjs";
 import { git } from "./helpers/store-planning-fixture.mjs";
-import { replayStatus } from "../dist/coordination-state.js";
+import { CoordinationStore, replayStatus } from "../dist/coordination-state.js";
 
 test("Store archives three component projects and shared planning in one recoverable cumulative chain", t => {
   const f = deliveredStoreFixture(t);
+  const second = new CoordinationStore({ root: f.storeRoot, featureId: "second" });
+  second.writeManifest({ manifest: { ...f.c.store.readManifest(), featureId: "second" }, sharedTasks: [{ id: "1.1", completed: false }], expectedHead: f.head(), operationId: "second-init" });
   const scope = { componentIds: ["api", "web", "worker"], includeStore: true, storeDeliveryBranch: "main" };
   const preview = f.c.archivePreview({ scope });
   assert.throws(() => f.c.archivePreview({ scope: { ...scope, storeDeliveryBranch: "other" } }), /declared coordination branch/);
@@ -41,6 +45,10 @@ console.log('Archived '+process.cwd());
   assert.throws(() => f.c.prepareArchive(input), /Interrupted archive result/);
   const interrupted = f.c.inspectArchivePreparation({ operationId: "archive" });
   assert.equal(interrupted.targets.api.stage, "prepared"); assert.equal(interrupted.targets.web.stage, "failed");
+  for (const id of Object.keys(interrupted.targets)) assert.equal(interrupted.targets[id].path, coordinationRuntimePath({ store: f.c.store, area: "archive-checkouts", operationId: "archive", componentId: id }));
+  assert.throws(() => inspectArchivePreparation({ store: second, operationId: "archive" }), /unknown/);
+  assert.throws(() => recoverArchivePreparation({ store: second, operationId: "archive", targetId: "web", attestedBy: "operator" }), /ENOENT/);
+  assert.equal(f.c.inspectArchivePreparation({ operationId: "archive" }).targets.web.stage, "failed");
   f.c.recoverArchivePreparation({ operationId: "archive", targetId: "web", attestedBy: "user" });
   f.c.prepareArchive(input);
   const receipt = f.c.inspectArchivePreparation({ operationId: "archive" });

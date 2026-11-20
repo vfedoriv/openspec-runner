@@ -1,3 +1,4 @@
+import { coordinationJournalPath, coordinationRuntimePath } from "./coordination-runtime.js";
 import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { storeArchiveRoot, archivePaths } from "./archive-paths.js";
@@ -73,7 +74,7 @@ function preparationTarget(data: ArchivePreparationReceipt, id: string, version:
 }
 export function archiveJournalPath(options: { store: CoordinationStore; operationId: string }) {
   validateId({ value: options.operationId, version: options.store.readManifest().version });
-  return resolve(repository(options.store.root).stateDir, "archive", `${options.operationId}.json`);
+  return coordinationJournalPath({ store: options.store, area: "archive", operationId: options.operationId });
 }
 function archiveScopeEvidence(options: { target: ArchiveTarget; receipt: TargetReceipt }) {
   const { target, receipt } = options, path = receipt.path;
@@ -121,7 +122,7 @@ export function prepareApprovedArchive(options: { store: CoordinationStore; inpu
     const preview = options.preview();
     if (preview.token !== input.token) throw new Error("Archive scope/input token is stale");
     if (!options.authorized(preview)) throw new Error("Explicit archive scope approval/consent is required");
-    const targets = Object.fromEntries(Object.keys(preview.targets).map(id => [id, { stage: "reserved" as const, path: resolve(repository(options.roots[id]).stateDir, "archive-checkouts", input.operationId, id), branch: `runner-archive/${store.featureId}/${input.operationId}/${version === 2 ? "store" : id}` }]));
+    const targets = Object.fromEntries(Object.keys(preview.targets).map(id => [id, { stage: "reserved" as const, path: coordinationRuntimePath({ store, area: "archive-checkouts", operationId: input.operationId, componentId: id, legacyRoot: options.roots[id] }), branch: `runner-archive/${store.featureId}/${input.operationId}/${version === 2 ? "store" : id}` }]));
     return { preview, completionEventId: options.completionEventId, targets };
   }, execute: ({ journal, save, write }) => {
     const data = journal.data;

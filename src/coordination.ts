@@ -1,3 +1,4 @@
+import { coordinationJournalPath, coordinationRuntimePath } from "./coordination-runtime.js";
 import { existsSync, realpathSync } from "node:fs";
 import { safeSharedSummary } from "./summary-service.js";
 import { CoordinationStore, decodeManifest, stableDigest, replayStatus, type FeatureManifest, type ApprovalRecord, type ComponentSnapshot, type CoordinationSnapshot, type AssignmentRecord, type CoordinationEvent, type SubmissionRecord, type VerificationEvidence, decodeRecord, validateId, type ArchiveScope, type ArchiveBases } from "./coordination-state.js";
@@ -353,7 +354,7 @@ export class Coordination {
   accept(options: MutationIdentity & { submissionId: string; token: string; inputs?: ApprovalInputs }) {
     const { version } = this.store.readManifest();
     validateId({ value: options.id, version }); validateId({ value: options.operationId, version });
-    const runtime = repository(this.store.root).stateDir, journalPath = resolve(runtime, "acceptance", `${options.operationId}.json`);
+    const runtime = repository(this.store.root).stateDir, journalPath = coordinationJournalPath({ store: this.store, area: "acceptance", operationId: options.operationId });
     return locked(runtime, () => {
       type Journal = { input: { id: string; operationId: string; submissionId: string; token: string; expectedHead: string; createdAt?: string };
         preview: ReturnType<Coordination["acceptancePreview"]>; createdAt: string; stage: "reserved" | "checking" | "verified" | "failed";
@@ -385,7 +386,7 @@ export class Coordination {
           const repo = repository(path), identity = id === journal!.preview.receipt.repository ? component : `repository:${id}`;
           return [{ path: repo.root, identity }, { path: repo.common, identity: `${identity}:git` }, { path: repo.stateDir, identity: `${identity}:runtime` }];
         });
-        roots.push({ path: resolve(journal!.preview.assignment.version === 2 ? runtime : repository(this.mapped(journal!.preview.receipt.repository)).stateDir, "acceptance-checkouts", options.operationId), identity: component });
+        roots.push({ path: coordinationRuntimePath({ store: this.store, area: "acceptance-checkouts", operationId: options.operationId, legacyRoot: this.mapped(journal!.preview.receipt.repository) }), identity: component });
         return journal!.evidence.map(evidence => portableVerificationEvidence({ evidence, roots }));
       };
       const savedAcceptance = (record: NonNullable<ReturnType<CoordinationStore["readRecord"]>>) => {
@@ -440,7 +441,7 @@ export class Coordination {
         if (journal.stage === "failed") throw new Error(journal.reason ?? "Acceptance checks failed; use a new reviewed operation");
         if (journal.running !== undefined) throw new Error("Interrupted acceptance check has ambiguous side effects; inspect coordinator checkout and reconcile with a new operation");
         if (this.acceptancePreview(options).token !== journal.preview.token) throw new Error("Acceptance inputs drifted since durable intent");
-        const root = this.mapped(journal.preview.receipt.repository), path = resolve(journal.preview.assignment.version === 2 ? runtime : repository(root).stateDir, "acceptance-checkouts", options.operationId);
+        const root = this.mapped(journal.preview.receipt.repository), path = coordinationRuntimePath({ store: this.store, area: "acceptance-checkouts", operationId: options.operationId, legacyRoot: root });
         if (journal.stage !== "verified") {
           exactCheckout({ root, commit: journal.preview.commit, path });
           const setup = journal.preview.assignment.settings.setup ?? [], commands = [...setup, ...journal.preview.verification];

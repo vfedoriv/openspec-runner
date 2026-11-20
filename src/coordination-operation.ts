@@ -1,5 +1,5 @@
+import { coordinationJournalPath } from "./coordination-runtime.js";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { CoordinationStore, stableDigest, validateId, type CoordinationEvent } from "./coordination-state.js";
 import type { MutationIdentity } from "./coordination.js";
 import { atomic, clean, git, json, locked, repository } from "./system.js";
@@ -19,7 +19,7 @@ export function coordinationOperation<T, R>(options: {
   return locked(runtime, () => {
     const manifest = store.readManifest();
     validateId({ value: input.id, version: manifest.version }); validateId({ value: input.operationId, version: manifest.version });
-    const path = resolve(runtime, options.action, `${input.operationId}.json`), digest = (value: unknown) => stableDigest({ value: JSON.parse(JSON.stringify(value)) });
+    const path = coordinationJournalPath({ store, area: options.action, operationId: input.operationId }), digest = (value: unknown) => stableDigest({ value: JSON.parse(JSON.stringify(value)) });
     let journal = existsSync(path) ? json<OperationJournal<T>>(path) : undefined;
     if (journal && digest(journal.input) !== digest(input)) throw new Error("Immutable operation identity differs");
     if (git(store.root, "branch", "--show-current") !== manifest.coordinationBranch) throw new Error("Mutation requires declared coordination branch");
