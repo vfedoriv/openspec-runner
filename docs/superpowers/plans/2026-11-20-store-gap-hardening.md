@@ -40,11 +40,11 @@ Use `node node_modules/typescript/bin/tsc` for focused builds; `node test/helper
 
 **Interfaces:** Consume `Runner.assertExecutionAuthority(change: string): void`. No new public CLI or persisted fields. Later Task 2 retains this guard.
 
-- [ ] Add regressions for a pending repair transaction followed by assignment revocation and by committed component/shared semantic drift. Continuing must reject before merge/check/commit/state advancement, retaining the transaction and integration HEAD. Include the already-committed-but-not-reconciled recovery path, replacement/dependency staleness where feasible, valid unchanged continuation, and permitted abort under stale authority.
-- [ ] Build and run the focused regression before changing implementation. Expected: the stale continuation test fails because authority is skipped for existing transactions. Record exact RED result.
-- [ ] In `Feature.integrate`, call live authority for every non-abort path, including interrupted transactions and already-integrated retries. Preserve identity checks and abort safeguards; do not use `current(s)` to require a clean checkout during conflict recovery.
-- [ ] Run the affected Store repair and existing feature suites. Expected: new authority regressions and local repair/recovery tests pass.
-- [ ] Self-review, update these checkboxes, commit with an imperative subject, and report BASE/HEAD, files, RED/GREEN commands/results and limitations.
+- [x] Add regressions for a pending repair transaction followed by assignment revocation and by committed component/shared semantic drift. Continuing must reject before merge/check/commit/state advancement, retaining the transaction and integration HEAD. Include the already-committed-but-not-reconciled recovery path, replacement/dependency staleness where feasible, valid unchanged continuation, and permitted abort under stale authority.
+- [x] Build and run the focused regression before changing implementation. Expected: the stale continuation test fails because authority is skipped for existing transactions. Record exact RED result.
+- [x] In `Feature.integrate`, call live authority for every non-abort path, including interrupted transactions and already-integrated retries. Preserve identity checks and abort safeguards; do not use `current(s)` to require a clean checkout during conflict recovery.
+- [x] Run the affected Store repair and existing feature suites. Expected: new authority regressions and local repair/recovery tests pass.
+- [x] Self-review, update these checkboxes, commit with an imperative subject, and report BASE/HEAD, files, RED/GREEN commands/results and limitations.
 
 ### Task 2: Apply one artifact policy before integration commits
 

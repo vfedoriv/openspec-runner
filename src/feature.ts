@@ -547,6 +547,7 @@ export class Feature {
         else git(path, "reset", "--hard", tx!.before);
         delete s.transaction; this.save(s); return { aborted: true };
       }
+      this.runner.assertExecutionAuthority(change);
       const j = s.jobs.find(j => j.id === (mode === "continue" ? tx!.attempt : id));
       if (!j || j.role !== "repair") throw new Error("Specify a repair --attempt");
       if (j.phase === "integrated" && !tx) return { head: r.head, alreadyIntegrated: true };
