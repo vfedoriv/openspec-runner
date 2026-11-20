@@ -73,9 +73,8 @@ with Herdr or Orca terminals.
 
 ## Evidence
 
-The ignored local evidence directory is
-`.superpowers/sdd/2026-10-29-real-harnesses/`. It retains fixture repositories,
-worktrees, runner logs, hook leases, reports, and the diagnostic driver.
+Temporary local fixture repositories, logs and diagnostic drivers are no longer
+retained in this checkout. This document preserves the historical results.
 
 - Claude successful implementation: `ac4eee93-a220-42ce-9156-e49a909d5050`;
   review: `b26a667e-c21d-4913-97b3-5d74f7f3d405`.

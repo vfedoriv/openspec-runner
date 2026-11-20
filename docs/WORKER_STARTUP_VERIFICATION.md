@@ -63,7 +63,7 @@ stopped at `awaiting-final-approval`; final approval and archival were not run.
 
 Task commit: `a16aaf1d2063dd7c7fcfa2717a49e035081c0f6c`. Live state, reports,
 and logs remain in `C:/Users/vital/AppData/Local/Temp/live-codex-stdin-1tE6e3/`.
-The local driver and transcript are under `.superpowers/sdd/2026-11-04-live-acceptance/`.
+The temporary local driver and transcript were removed during documentation cleanup.
 
 Final verification:
 

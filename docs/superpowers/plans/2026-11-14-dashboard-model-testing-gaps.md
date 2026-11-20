@@ -8,7 +8,7 @@
 
 **Tech stack** — Node.js 22.13 or newer, pnpm 11.7.0, `node:test`, Git, Ink, Windows and native Linux harnesses.
 
-**Scope** — [Original plan and re-check](2026-11-14-dashboard-model-assignments.md#remaining-gaps-from-the-2026-11-14-re-check). [Companion implementation plan](2026-11-14-dashboard-model-implementation-gaps.md).
+**Scope** — Remaining dashboard model-assignment verification. Superseded design and implementation plans are retained in Git history; current operation is documented in [the dashboard guide](../../dashboard-guide.md).
 
 ## Global constraints
 

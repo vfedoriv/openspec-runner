@@ -79,8 +79,8 @@ recovered live fixture; it returned the Copilot task and left state byte-identic
 Fixture names above are under `C:/Users/vital/AppData/Local/Temp/`.
 Each retains `.git/openspec-runner` state, logs and reports, plus its isolated Git
 history. The Herdr worktree was intentionally removed after safe cleanup.
-Ignored local drivers and the Herdr result receipt are under
-`.superpowers/sdd/2026-11-04-live-acceptance/` in this checkout.
+Temporary local drivers and receipts were removed during documentation cleanup.
+This record preserves the measured results; the raw local artifacts are no longer available.
 
 | Stage | Attempt | Session |
 |---|---|---|
