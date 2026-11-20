@@ -2,9 +2,19 @@ import type { AssignmentRecord, SubmissionRecord } from "./coordination-state.js
 import { loadSourcePlan } from "./planning-source.js";
 import { git, gitRaw } from "./system.js";
 
+function forbiddenStoreCodePath(path: string): boolean {
+  return /^(?:openspec|\.openspec-runner)(?:\/|$)/i.test(path);
+}
+
+/** Inspect the complete staged snapshot, including unchanged paths and rename destinations. */
+export function assertStoreCodeIndex(root: string): void {
+  const paths = gitRaw(root, "ls-files", "--cached", "-z").split("\0").filter(Boolean);
+  if (paths.some(forbiddenStoreCodePath)) throw new Error("Store code index contains planning or runtime artifacts");
+}
+
 export function assertStoreCodeTree(root: string, commit: string) {
   const paths = gitRaw(root, "ls-tree", "-r", "--name-only", "-z", commit).split("\0").filter(Boolean);
-  if (paths.some(path => /^(?:openspec|\.openspec-runner)(?:\/|$)/i.test(path))) throw new Error("Store code snapshot contains planning or runtime artifacts");
+  if (paths.some(forbiddenStoreCodePath)) throw new Error("Store code snapshot contains planning or runtime artifacts");
 }
 
 /** Net diffs hide artifacts that a worker committed and later removed. */
@@ -12,7 +22,7 @@ export function assertStoreCodeHistory(root: string, base: string, commit: strin
   assertStoreCodeTree(root, commit);
   const paths = gitRaw(root, "log", "--format=", "--name-only", "-z", "--no-renames", "--full-history",
     "--diff-merges=first-parent", `${base}..${commit}`).split("\0").map(path => path.replace(/^\n+/, "")).filter(Boolean);
-  if (paths.some(path => /^(?:openspec|\.openspec-runner)(?:\/|$)/i.test(path)))
+  if (paths.some(forbiddenStoreCodePath))
     throw new Error("Store code history contains planning or runtime artifacts");
 }
 

@@ -16,7 +16,7 @@ import { processStart } from "./processes.js";
 import { readComponentBinding } from "./component-state.js";
 import { assertStoreBindingAuthority, resolveExecutionContext, type ExecutionContext } from "./execution-context.js";
 import { loadSourcePlan } from "./planning-source.js";
-import { assertStoreCodeHistory } from "./store-submission.js";
+import { assertStoreCodeHistory, assertStoreCodeIndex } from "./store-submission.js";
 import { samePath } from "./platform-paths.js";
 import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import {
@@ -1212,6 +1212,7 @@ export class Runner {
               "Unexpected integration HEAD; inspect before continuing",
             );
           git(path, "merge-base", "--is-ancestor", report.commit!, head);
+          if (this.execution) assertStoreCodeHistory(path, tx.before, head);
           if (!this.execution && (
             !tasksFrom(
               readFileSync(resolve(path, p.relativeDir, "tasks.md"), "utf8"),
@@ -1248,8 +1249,6 @@ export class Runner {
             lines[target.line] = lines[target.line].replace(/\[[ xX]\]/, "[x]");
             writeFileSync(file, lines.join("\n"));
             git(path, "add", "--", `${p.relativeDir}/tasks.md`);
-          } else if (git(path, "diff", "--cached", "--name-only", "--", "openspec", ".openspec-runner")) {
-            throw new Error("Store integration cannot introduce planning files into code");
           }
           // Checks may inspect the merged index, but must not leave unstaged or untracked output.
           if (
@@ -1259,6 +1258,7 @@ export class Runner {
             throw new Error(
               "Integration checks left files to review; clean/stage them before --continue",
             );
+          if (this.execution) assertStoreCodeIndex(path);
           tx.phase = "committing";
           this.save(s);
           git(

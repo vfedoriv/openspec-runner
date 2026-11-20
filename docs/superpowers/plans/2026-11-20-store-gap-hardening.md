@@ -52,12 +52,12 @@ Use `node node_modules/typescript/bin/tsc` for focused builds; `node test/helper
 
 **Interfaces:** Consume existing `assertStoreCodeTree(root, commit)` and `assertStoreCodeHistory(root, base, commit)`. Produce `assertStoreCodeIndex(root: string): void` in `src/store-submission.ts`, sharing the same top-level forbidden-root predicate (`openspec`, `.openspec-runner`, case-insensitive). Other implementation details follow existing adapter conventions.
 
-- [ ] Add regressions for task and repair integration where verification/conflict resolution stages forbidden paths, covering lowercase roots, `OpenSpec`, `.OPENSPEC-RUNNER`, and paths outside the active change. Assert rejection before commit, retained evidence, unchanged HEAD, and no integrated success state. Include a permitted staged implementation file as a positive control.
-- [ ] Add focused index helper coverage for deletions, renamed files, case aliases, and forbidden directories already present in the complete staged tree. Existing worker/history rejection must continue to cover intermediate artifacts later removed.
-- [ ] Run the reproductions before implementation. Expected: repair accepts a forbidden staged file and the task guard misses a case variant; record RED outputs.
-- [ ] Implement the index helper by inspecting the full staged Git tree/path inventory with null-delimited output and the common case-insensitive policy. Apply it after checks and immediately before task/repair commits in Store mode. Validate recovered committed integration history before marking task/repair integrated so crash recovery cannot adopt polluted commits. Preserve local mode's legitimate OpenSpec checkbox commits.
-- [ ] Build and run affected Store submission/integration/repair and existing local feature/runner suites. Expected: all regressions pass, local checkbox behavior unchanged. Preserve Task 1's authority guard.
-- [ ] Update checkboxes, self-review, commit, and report exact RED/GREEN evidence.
+- [x] Add regressions for task and repair integration where verification/conflict resolution stages forbidden paths, covering lowercase roots, `OpenSpec`, `.OPENSPEC-RUNNER`, and paths outside the active change. Assert rejection before commit, retained evidence, unchanged HEAD, and no integrated success state. Include a permitted staged implementation file as a positive control.
+- [x] Add focused index helper coverage for deletions, renamed files, case aliases, and forbidden directories already present in the complete staged tree. Existing worker/history rejection must continue to cover intermediate artifacts later removed.
+- [x] Run the reproductions before implementation. Expected: repair accepts a forbidden staged file and the task guard misses a case variant; record RED outputs.
+- [x] Implement the index helper by inspecting the full staged Git tree/path inventory with null-delimited output and the common case-insensitive policy. Apply it after checks and immediately before task/repair commits in Store mode. Validate recovered committed integration history before marking task/repair integrated so crash recovery cannot adopt polluted commits. Preserve local mode's legitimate OpenSpec checkbox commits.
+- [x] Build and run affected Store submission/integration/repair and existing local feature/runner suites. Expected: all regressions pass, local checkbox behavior unchanged. Preserve Task 1's authority guard.
+- [x] Update checkboxes, self-review, commit, and report exact RED/GREEN evidence.
 
 ### Task 3: Isolate coordinator journals and checkouts by feature
 

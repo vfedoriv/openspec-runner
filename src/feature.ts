@@ -13,6 +13,7 @@ import { getHarness } from "./harnesses/registry.js";
 import { completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
 import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
+import { assertStoreCodeHistory, assertStoreCodeIndex } from "./store-submission.js";
 import type { ExecutionContext } from "./execution-context.js";
 import type { StoreTaskEvidence } from "./coordination-state.js";
 import {
@@ -578,11 +579,13 @@ export class Feature {
             throw new Error("Repair integration changed planning artifacts");
           if (git(path, "diff", "--name-only") || git(path, "ls-files", "--others", "--exclude-standard"))
             throw new Error("Repair checks left changes to inspect before --continue");
+          if (this.runner.execution) assertStoreCodeIndex(path);
           transaction.phase = "committing"; this.save(s);
           git(path, "commit", "-m", `Repair OpenSpec feature ${change}\n\n${transaction.marker}`);
         } else if (git(path, "log", "-1", "--format=%B").includes(transaction.marker) &&
             git(path, "rev-parse", "HEAD^1") === transaction.before && clean(path)) {
           git(path, "merge-base", "--is-ancestor", j.report!.commit!, head);
+          if (this.runner.execution) assertStoreCodeHistory(path, transaction.before, head);
         } else throw new Error("Unexpected repair integration HEAD; inspect before recovery");
         r.head = git(path, "rev-parse", "HEAD"); delete r.completion;
         this.runner.save(r);

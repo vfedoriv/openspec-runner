@@ -92,3 +92,22 @@ test("approved baseline tasks require only the assigned code base", t => {
   receipt.tasks[0].evidence.base = "0".repeat(40);
   assert.throws(() => validateStoreSubmission({ root: f.code, assignment, receipt }), /baseline/i);
 });
+
+test("Store index policy checks the complete staged tree, renames and deletions", async t => {
+  const { assertStoreCodeIndex } = await import("../dist/store-submission.js");
+  const f = storePlanningFixture(t);
+  writeFileSync(join(f.code, "allowed.txt"), "code\n", "utf8"); git(f.code, "add", ".");
+  assert.equal(typeof assertStoreCodeIndex, "function");
+  assert.doesNotThrow(() => assertStoreCodeIndex(f.code));
+  mkdirSync(join(f.code, "OpenSpec")); writeFileSync(join(f.code, "OpenSpec", "other.md"), "artifact\n", "utf8");
+  git(f.code, "add", "."); git(f.code, "commit", "-m", "Existing forbidden tree");
+  writeFileSync(join(f.code, "allowed.txt"), "updated\n", "utf8"); git(f.code, "add", ".");
+  assert.throws(() => assertStoreCodeIndex(f.code), /artifact|planning|runtime/i);
+  git(f.code, "rm", "OpenSpec/other.md");
+  assert.doesNotThrow(() => assertStoreCodeIndex(f.code));
+  mkdirSync(join(f.code, ".OPENSPEC-RUNNER"));
+  git(f.code, "mv", "allowed.txt", ".OPENSPEC-RUNNER/state.json");
+  assert.throws(() => assertStoreCodeIndex(f.code), /artifact|planning|runtime/i);
+  git(f.code, "mv", ".OPENSPEC-RUNNER/state.json", "allowed.txt");
+  assert.doesNotThrow(() => assertStoreCodeIndex(f.code));
+});
