@@ -12,6 +12,10 @@ import { processStart } from "./processes.js";
 import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import type { DashboardOptions, DashboardSnapshot, SessionSummary } from "./dashboard-types.js";
 import { collectCoordination } from "./dashboard-coordination.js";
+import { readStorePlanRevision } from "./planning-source.js";
+import { CoordinationStore } from "./coordination-state.js";
+import { git } from "./system.js";
+import { resolveBoundExecutionContext } from "./execution-context.js";
 
 function session(featureId: string, attempt: TaskAttempt | FeatureJob): SessionSummary {
   let observation: SessionSummary["process"] = "unknown";
@@ -36,17 +40,18 @@ function session(featureId: string, attempt: TaskAttempt | FeatureJob): SessionS
 
 /** Read only: no locks, migration, recovery, harness calls or verification commands. */
 export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
-  const repo = repository(options.cwd), runner = new Runner(options.cwd), collectedAt = new Date().toISOString();
+  const runner = new Runner(options.cwd, undefined, options.execution), repo = runner.repo, collectedAt = new Date().toISOString();
   const snapshot: DashboardSnapshot = {
     version: 1, collectedAt, repository: { ...repo, currentWorktree: repo.root },
+    ...(options.execution?.store ? { executionSelection: { store: options.execution.store.storeRoot, feature: options.execution.store.featureId, component: options.execution.store.componentId, assignment: options.execution.store.assignmentId, change: options.execution.planningSource.change } } : {}),
     ...(options.store && options.map ? { storeContext: { store: resolve(options.store), map: resolve(options.map) } } : {}),
     features: [], tasks: [], sessions: [], assignments: [], attention: [], errors: [], sources: {},
   };
   const configPath = resolve(repo.root, "openspec/runner.yaml");
-  snapshot.setup = { configuration: existsSync(configPath) ? "ready" : "missing", scopedChange: options.change };
+  snapshot.setup = { configuration: options.execution || existsSync(configPath) ? "ready" : "missing", scopedChange: options.change };
   if (snapshot.setup.configuration === "ready") {
     try {
-      const config = configFrom(parse(readFileSync(configPath, "utf8")));
+      const config = options.execution ? runner.plan(options.execution.planningSource.change).config : configFrom(parse(readFileSync(configPath, "utf8")));
       snapshot.repository.maxParallel = config.maxParallel;
       snapshot.repository.defaultHarness = config.defaultAgent;
     }
@@ -60,11 +65,15 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
         changes.add(directories ? entry.name : entry.name.slice(0, -5));
     }
   };
-  discover(resolve(repo.root, "openspec/changes"), true);
-  discover(repo.stateDir); discover(resolve(repo.stateDir, "features")); discover(resolve(repo.stateDir, "components"));
+  if (options.execution) changes.add(options.execution.planningSource.change);
+  else {
+    discover(resolve(repo.root, "openspec/changes"), true);
+    discover(repo.stateDir); discover(resolve(repo.stateDir, "features")); discover(resolve(repo.stateDir, "components"));
+  }
   for (const change of [...changes].sort()) {
     if (options.change && change !== options.change) continue;
-    const source = `local:${change}`;
+    const scope = options.execution?.store;
+    const source = scope ? `store:${scope.featureId}:${scope.componentId}:${change}` : `local:${change}`;
     snapshot.sources[source] = { collectedAt, stale: false };
     const attention = (key: string, message: string, priority = 2, targetId = source) => {
       snapshot.attention.push({ id: `${source}:${key}`, source, targetId, priority, message });
@@ -74,11 +83,20 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
       const binding = readComponentBinding({ stateDir: repo.stateDir, change });
       const directory = resolve(repo.root, "openspec/changes", change);
       let plan: ReturnType<typeof loadPlan> | undefined;
-      const missingExecution = existsSync(resolve(directory, "tasks.md")) && !existsSync(resolve(directory, "execution.yaml"));
-      if (existsSync(resolve(directory, "tasks.md")) && !missingExecution) plan = loadPlan(repo.root, change);
+      const missingExecution = !options.execution && existsSync(resolve(directory, "tasks.md")) && !existsSync(resolve(directory, "execution.yaml"));
+      if (options.execution) plan = runner.plan(change);
+      else if (existsSync(resolve(directory, "tasks.md")) && !missingExecution) plan = loadPlan(repo.root, change);
       else if (!missingExecution && !state && !feature && !binding) throw new Error("Planning artifacts are missing tasks.md or execution.yaml");
       if (plan) snapshot.repository.maxParallel = plan.config.maxParallel;
       const globalReasons: string[] = missingExecution ? ["execution.yaml is missing"] : [];
+      if (scope && options.execution?.planningSource.kind === "store" && binding) {
+        try {
+          const store = new CoordinationStore({ root: scope.storeRoot, featureId: scope.featureId });
+          const branch = store.readManifest({ revision: binding.historyRevision }).coordinationBranch;
+          const current = readStorePlanRevision({ storeRoot: scope.storeRoot, source: options.execution.planningSource, revision: git(store.root, "rev-parse", `refs/heads/${branch}`) });
+          if (current.fingerprint !== plan?.fingerprint) globalReasons.push("Store planning drift: obtain renewed coordinator approval");
+        } catch (error) { globalReasons.push(`Store planning drift: ${error instanceof Error ? error.message : String(error)}`); }
+      }
       if (plan && state && state.fingerprint !== plan.fingerprint) globalReasons.push("Planning drift: artifacts changed; reconcile required");
       if (state?.transaction || feature?.transaction) globalReasons.push("Interrupted integration transaction requires recovery");
       if (feature) {
@@ -115,10 +133,10 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
         if (["failed", "blocked", "stale"].includes(current.phase)) attention(`attempt:${current.attempt.id}`, `Attempt ${current.attempt.id} is ${current.phase}${current.attempt.error ? `: ${current.attempt.error}` : ""}`, 1, current.id);
         if (["completed", "failed", "blocked"].includes(current.phase) && !current.attempt.report) attention(`report:${current.attempt.id}`, `Missing report for ${current.attempt.id}`, 1, current.id);
       }
-      const recovery = feature ? new Feature(repo.root).recovery(change) : status?.recovery ?? runner.recovery(change);
+      const recovery = feature ? new Feature(repo.root, undefined, options.execution).recovery(change) : status?.recovery ?? runner.recovery(change);
       recovery.forEach((entry, index) => attention(`recovery:${index}`, entry.evidence, 2,
         sessions.find(row => row.attempt.id === entry.attempt)?.id ?? source));
-      snapshot.features.push({ id: source, recovery, change, planFingerprint: plan?.fingerprint, origin: "local", ...(missingExecution ? { missingExecution } : {}), phase: feature?.phase, state: feature, ...(state ? { execution: { head: state.head, path: state.integration.path, fingerprint: state.fingerprint, planFingerprint: plan?.fingerprint, transaction: !!state.transaction, cleanupPending: !!state.cleanupBatch, automaticCleanup: plan?.config.cleanup === "automatic" } } : {}), nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
+      snapshot.features.push({ id: source, recovery, change, ...(scope ? { runtimeDir: repo.stateDir } : {}), ...(scope ? { executionScope: { store: scope.storeRoot, feature: scope.featureId, component: scope.componentId, assignment: scope.assignmentId } } : {}), planFingerprint: plan?.fingerprint, origin: "local", ...(missingExecution ? { missingExecution } : {}), phase: feature?.phase, state: feature, ...(state ? { execution: { head: state.head, path: state.integration.path, fingerprint: state.fingerprint, planFingerprint: plan?.fingerprint, transaction: !!state.transaction, cleanupPending: !!state.cleanupBatch, automaticCleanup: plan?.config.cleanup === "automatic" } } : {}), nextAction: status?.nextAction, completed: summaries.filter(t => state ? runner.satisfied(state, t.task.id) : t.task.completed).length, total: summaries.length, taskIds: summaries.map(t => t.id), sessionIds: sessions.map(s => s.id) });
       snapshot.tasks.push(...summaries); snapshot.sessions.push(...sessions);
       if (binding) {
         const a = binding.assignment;
@@ -133,7 +151,9 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
   const result = { ...snapshot, ...collectCoordination(options, snapshot) };
   for (const feature of result.features) {
     if (feature.origin === "local" && feature.change) {
-      feature.deliverySummary = readCurrentSummary({ cwd: options.cwd, change: feature.change });
+      const scope = feature.executionScope;
+      const execution = scope ? resolveBoundExecutionContext({ implementationRoot: options.cwd, storeRoot: scope.store, featureId: scope.feature, componentId: scope.component, assignmentId: scope.assignment, change: feature.change }) : undefined;
+      feature.deliverySummary = readCurrentSummary({ cwd: options.cwd, change: feature.change, execution });
       feature.summaryCommand = ["summary", feature.change];
     } else if (feature.coordination && options.store && options.map) {
       feature.deliverySummary = readCurrentSummary({ cwd: options.cwd, featureId: feature.coordination.featureId, store: options.store, map: options.map });
@@ -142,7 +162,11 @@ export function collectDashboard(options: DashboardOptions): DashboardSnapshot {
   }
   for (const task of result.tasks) {
     const feature = result.features.find(f => f.id === task.featureId);
-    if (feature?.change) task.deliverySummary = readCurrentSummary({ cwd: options.cwd, change: feature.change, task: task.task.id });
+    if (feature?.change) {
+      const scope = feature.executionScope;
+      const execution = scope ? resolveBoundExecutionContext({ implementationRoot: options.cwd, storeRoot: scope.store, featureId: scope.feature, componentId: scope.component, assignmentId: scope.assignment, change: feature.change }) : undefined;
+      task.deliverySummary = readCurrentSummary({ cwd: options.cwd, change: feature.change, task: task.task.id, execution });
+    }
   }
   return result;
 }

@@ -1,5 +1,7 @@
 # Team workflow
 
+For new multi-code-repository features, use the [version-2 Store-only workflow](store-only-workflow.md). It keeps every component's OpenSpec files in the Store. The walkthrough below documents the compatible version-1 workflow with local component planning; keep active v1 assignments on that protocol until an explicit idle migration.
+
 Shared completion and component handoffs receive [delivery summaries](delivery-summary-guide.md) with their distinct delivery status; slides are available on request.
 
 Use this guide when one feature needs work in several repositories.

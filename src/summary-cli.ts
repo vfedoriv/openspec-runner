@@ -7,6 +7,7 @@ import { resolveSummary, ensureSummary } from "./summary-service.js";
 import { readSummary, publishNarrative, exportSummary } from "./summary-store.js";
 import { summaryDigest } from "./summary-evidence.js";
 import type { SummaryHandle, SummaryRequest } from "./summary-types.js";
+import { resolveBoundExecutionContext } from "./execution-context.js";
 
 export function formatSummaryResult(handle: SummaryHandle): string {
   return `${handle.synopsis}\nSummary: ${handle.basic}; narrative: ${handle.narrative}\n${handle.paths?.narrative ?? handle.paths?.basic ?? ""}${handle.warning ? `\n${handle.warning}\nRetry summary work with --refresh; do not repeat implementation.` : ""}${handle.narrative === "pending" ? "\nA coordinating agent can enrich this summary using openspec-runner-summarize." : ""}`;
@@ -17,17 +18,20 @@ export function summaryCommand(options: { cwd: string; args: string[] }): void {
     json: { type: "boolean" }, task: { type: "string" }, refresh: { type: "boolean" }, export: { type: "string" },
     "input-digest": { type: "string" }, source: { type: "string" }, file: { type: "string" }, "expected-revision": { type: "string" },
     publish: { type: "boolean" }, store: { type: "string" }, map: { type: "string" },
+    feature: { type: "string" }, component: { type: "string" }, assignment: { type: "string" },
     "presentation-brief": { type: "string" }, audience: { type: "string" }, "provider-config": { type: "string" }, assets: { type: "string" },
   } });
   const publish = shared ? !!v.publish : p[1] === "publish";
   const name = shared ? p[2] : p[publish ? 2 : 1];
   if (!name || p.length !== (shared || publish ? 3 : 2)) throw new Error("Use summary CHANGE or summary publish CHANGE");
-  if (shared && v.task || !shared && (v.store || v.map || v.publish)) throw new Error("Invalid local/shared summary options");
+  if (shared && (v.task || v.feature || v.component || v.assignment) || !shared && (v.map || v.publish)) throw new Error("Invalid local/shared summary options");
+  if (!shared && (v.store || v.feature || v.component || v.assignment) && (!v.store || !v.feature || !v.component)) throw new Error("Store component summary requires --store, --feature and --component");
   if ([!!v.refresh, !!v.export, publish, !!v["presentation-brief"]].filter(Boolean).length > 1) throw new Error("Summary modes are mutually exclusive");
   if (!v["presentation-brief"] && (v.audience || v.assets || v["provider-config"])) throw new Error("Presentation options require --presentation-brief");
   if (!publish && (v.source || v.file || v["expected-revision"] || v["input-digest"])) throw new Error("Publishing options require publish mode");
   if (shared && (!v.store || !v.map)) throw new Error("Shared summary requires --store and --map");
-  const request: SummaryRequest = shared ? { cwd: options.cwd, featureId: name, store: v.store!, map: v.map! } : { cwd: options.cwd, change: name, task: v.task };
+  const execution = !shared && v.store ? resolveBoundExecutionContext({ implementationRoot: options.cwd, storeRoot: v.store, featureId: v.feature!, componentId: v.component!, assignmentId: v.assignment, change: name }) : undefined;
+  const request: SummaryRequest = shared ? { cwd: options.cwd, featureId: name, store: v.store!, map: v.map! } : { cwd: options.cwd, change: name, task: v.task, execution };
   const { stateDir, bundle } = resolveSummary(request);
   let handle = readSummary({ stateDir, subject: bundle.evidence.subject, sourceDigest: bundle.digest });
   let result: unknown;

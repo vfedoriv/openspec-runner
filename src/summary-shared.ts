@@ -8,6 +8,7 @@ import { git, json, repository } from "./system.js";
 import { summaryBundle, collectLocalSummary } from "./summary-evidence.js";
 import { Runner } from "./runner.js";
 import type { SummaryBundle, SummaryEvidence, SummaryRequest } from "./summary-types.js";
+import type { ExecutionContext } from "./execution-context.js";
 
 export function collectSharedSummary(request: { cwd: string; featureId: string; store: string; map?: string; repositories?: Record<string, string> }): SummaryBundle {
   if (request.map) readMachineMap(request.map);
@@ -57,8 +58,8 @@ export function collectSharedSummary(request: { cwd: string; featureId: string; 
   return summaryBundle(evidence);
 }
 
-export function collectComponentSummary(options: { cwd: string; change: string; submissionId?: string }): SummaryBundle {
-  const repo = repository(options.cwd), binding = readComponentBinding({ stateDir: repo.stateDir, change: options.change });
+export function collectComponentSummary(options: { cwd: string; change: string; submissionId?: string; execution?: ExecutionContext }): SummaryBundle {
+  const runner = new Runner(options.cwd, undefined, options.execution), repo = runner.repo, binding = readComponentBinding({ stateDir: repo.stateDir, change: options.change });
   if (!binding) throw new Error("Delegated component binding unavailable");
   const directory = resolve(repo.stateDir, "submissions");
   const records = readdirSync(directory).filter(name => name.endsWith(".json")).map(name => {
@@ -69,13 +70,13 @@ export function collectComponentSummary(options: { cwd: string; change: string; 
     return decoded;
   })
     .filter((r): r is SubmissionRecord => !!r && r.outcome === "completed" && !!r.result);
-  const head = new Runner(options.cwd).read(options.change)?.head;
+  const head = runner.read(options.change)?.head;
   const candidates = options.submissionId ? records : records.filter(r => !head || r.result!.commit === head);
   candidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   if (!candidates.length) throw new Error("No completed submission matches current component result");
   const record = candidates[0];
   let local: SummaryEvidence | undefined;
-  try { const candidate = collectLocalSummary({ cwd: options.cwd, change: options.change }, true).evidence; if (candidate.source.result === record.result!.commit) local = candidate; } catch { /* Portable receipt evidence remains usable without local history. */ }
+  try { const candidate = collectLocalSummary({ cwd: options.cwd, change: options.change, execution: options.execution }, true).evidence; if (candidate.source.result === record.result!.commit) local = candidate; } catch { /* Portable receipt evidence remains usable without local history. */ }
   const ref = { id: `receipt:${record.id}`, repository: record.repository, commit: record.result!.commit, recordId: record.id };
   return summaryBundle({ version: 1, subject: { kind: "component", featureId: binding.featureId, change: options.change, assignmentId: binding.assignmentId },
     lifecycle: "component-handoff", source: { repository: record.repository, result: record.result!.commit, base: record.base, fingerprint: record.planFingerprint },

@@ -294,7 +294,7 @@ export class Component {
   }
   exportSubmission(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
     const result = this.exportSubmissionCore(options);
-    return { ...result, ...(options.outcome === "completed" ? { summary: safeComponentSummary(this.repo.root, options.change, result.record.id) } : {}) };
+    return { ...result, ...(options.outcome === "completed" ? { summary: safeComponentSummary(this.repo.root, options.change, result.record.id, this.execution) } : {}) };
   }
   private exportSubmissionCore(options: { change: string; outcome: SubmissionRecord["outcome"]; reason?: string; id: string; operationId: string; token: string; createdAt?: string }) {
     const version = this.readBinding(options)?.assignment.version;

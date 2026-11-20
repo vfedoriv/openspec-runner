@@ -3,7 +3,8 @@ export type SummarySubject =
   | { kind: "change" | "feature"; change: string }
   | { kind: "component"; featureId: string; change: string; assignmentId: string }
   | { kind: "shared-feature"; featureId: string };
-export type SummaryRequest = { cwd: string; change: string; task?: string } |
+import type { ExecutionContext } from "./execution-context.js";
+export type SummaryRequest = { cwd: string; change: string; task?: string; execution?: ExecutionContext } |
   { cwd: string; featureId: string; store: string; map: string };
 export type SummaryLifecycle = "task-integrated" | "batch-satisfied" | "feature-completed" | "component-handoff" | "shared-completed";
 export interface SummaryReference { id: string; repository: string; commit?: string; path?: string; recordId?: string }

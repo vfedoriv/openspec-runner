@@ -163,6 +163,22 @@ test("unchanged Store reads avoid repeated Git work without sharing mutable snap
   assert.equal(store.readSnapshot({ revision: snapshot.head }).records.filter(record => record.kind === "approval").length, 1);
 });
 
+test("approval authority reads introductions in one Git traversal across unrelated history", t => {
+  const { root, write } = fixture(t); write(approval());
+  for (let index = 0; index < 8; index++) git(root, "commit", "--allow-empty", "-m", `Unrelated ${index}`);
+  const store = new CoordinationStore({ root, featureId: "feature" }), snapshot = store.readSnapshot();
+  const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
+  const bin = mkdtempSync(join(tmpdir(), "runner-authority-git-")), log = join(bin, "calls");
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  writeGitWrapper(join(bin, "git"), realGit, `fs.appendFileSync(${JSON.stringify(log)}, args.join(' ') + '\\n');`);
+  const previousPath = process.env.PATH; process.env.PATH = `${bin}${process.platform === "win32" ? ";" : ":"}${previousPath}`;
+  try {
+    assert.equal(store.authoritativeApproval({ snapshot }).id, "approval");
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    assert.ok(calls.length <= 2, `Authority launched ${calls.length} Git processes`);
+  } finally { process.env.PATH = previousPath; }
+});
+
 test("lost index refresh after record commit recovers the exact commit without dirty index state", (t) => {
   const { root, write } = fixture(t), before = git(root, "rev-parse", "HEAD");
   const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];

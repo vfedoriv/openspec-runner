@@ -7,7 +7,7 @@ import {
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parse, stringify } from "yaml";
 import type { HarnessSettings } from "./harnesses/types.js";
-import { committedBlob, contextFingerprint, safeContextPath, type PinnedContext, type ContextFile } from "./openspec-context.js";
+import { committedBlob, committedBlobs, contextFingerprint, safeContextPath, type PinnedContext, type ContextFile } from "./openspec-context.js";
 import { tasksFrom } from "./plan.js";
 import { attempt, git, gitRaw, repository } from "./system.js";
 import { affectedDependents, dependencyBlockers } from "./coordination-dependencies.js";
@@ -842,6 +842,7 @@ export class CoordinationStore {
     // Only committed identities are cached; callers receive their own mutable copy.
     if (this.cachedSnapshot?.head === head) return structuredClone(this.cachedSnapshot);
     const entries = this.entries(head), manifestEntry = entries.find(e => e.path === `${this.directory}/manifest.yaml`);
+    committedBlobs({ root: this.root, objects: entries.map(entry => entry.object) });
     if (!manifestEntry) throw new Error(`Missing committed feature manifest: ${this.featureId}`);
     const manifest = decodeManifest({ value: committedBlob({ root: this.root, object: manifestEntry.object }).toString("utf8") });
     if (manifest.featureId !== this.featureId) throw new Error("Manifest feature identity mismatch");
@@ -862,17 +863,16 @@ export class CoordinationStore {
     const key = JSON.stringify([snapshot.head, approvals.map(record => record.id).sort()]);
     if (this.cachedApproval?.key === key) return approvals.find(record => record.id === this.cachedApproval!.id);
     if (!approvals.length) { this.cachedApproval = { key }; return undefined; }
-    const commits = git(this.root, "rev-list", "--first-parent", snapshot.head).split("\n");
-    for (const commit of commits) {
-      const parent = attempt(() => git(this.root, "rev-parse", `${commit}^1`));
-      const introduced = approvals.filter(record => {
-        const path = `${this.directory}/approvals/${record.id}.json`;
-        return attempt(() => git(this.root, "rev-parse", `${commit}:${path}`)) !== undefined &&
-          (!parent || attempt(() => git(this.root, "rev-parse", `${parent}:${path}`)) === undefined);
-      });
-      if (introduced.length > 1) throw new Error("Ambiguous approval history: multiple approvals introduced in one coordination commit");
-      if (introduced.length) { this.cachedApproval = { key, id: introduced[0].id }; return introduced[0]; }
+    const paths = new Map(approvals.map(record => [`${this.directory}/approvals/${record.id}.json`, record]));
+    const changes = gitRaw(this.root, "log", "--first-parent", "--full-history", "--diff-merges=first-parent", "--diff-filter=A", "--format=commit %H", "--name-only", snapshot.head, "--", `${this.directory}/approvals`);
+    const introduced: ApprovalRecord[] = [];
+    for (const line of changes.split("\n")) {
+      if (/^commit [a-f0-9]+$/.test(line) && introduced.length) break;
+      const record = paths.get(line.trim());
+      if (record) introduced.push(record);
     }
+    if (introduced.length > 1) throw new Error("Ambiguous approval history: multiple approvals introduced in one coordination commit");
+    if (introduced.length) { this.cachedApproval = { key, id: introduced[0].id }; return introduced[0]; }
     if (approvals.length) throw new Error("Approval is not introduced on authoritative coordination history");
     return undefined;
   }

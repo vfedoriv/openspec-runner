@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -115,9 +115,15 @@ test("Store import activates a recoverable code-only integration worktree", asyn
   assert.equal(submissionPreview.tasks[0].evidence.kind, "integrated");
   const exported = exporter.exportSubmission({ ...submission, id: "completed-receipt", operationId: "completed-receipt", token: submissionPreview.token });
   assert.equal(exported.record.version, 2);
+  assert.notEqual(exported.summary.basic, "failed", exported.summary.warning);
+  assert.ok(exported.summary.paths.evidence.startsWith(f.execution.runtimeDir));
   const cli = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
   const status = JSON.parse(execFileSync(process.execPath, [cli, "status", "demo", ...feature.runner.storeArgs(), "--json"], { cwd: f.code, encoding: "utf8" }));
   assert.equal(status.tasks[0].completed, true);
+  const summary = JSON.parse(execFileSync(process.execPath, [cli, "summary", "demo", ...feature.runner.storeArgs(), "--json"], { cwd: f.code, encoding: "utf8" }));
+  assert.equal(summary.available, true);
+  const evidence = JSON.parse(readFileSync(exported.summary.paths.evidence, "utf8"));
+  assert.ok(evidence.evidence.references.some(reference => reference.repository === "contracts"));
 
   const otherStore = join(f.dir, "other-store");
   git(f.dir, "clone", "--quiet", f.storeRoot, otherStore);

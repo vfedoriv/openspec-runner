@@ -4,7 +4,7 @@ import { basename, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { actionsFor, focusReason, previewCommand, projectTarget, type DashboardAction, type PreviewInput } from "./dashboard-actions.js";
-import type { DashboardSnapshot } from "./dashboard-types.js";
+import type { DashboardSnapshot, FeatureSummary } from "./dashboard-types.js";
 import { shellCommand } from "./system.js";
 import { resolveCommand } from "./platform-command.js";
 import { observeProcess, stopOwnedProcess } from "./platform-process.js";
@@ -12,6 +12,13 @@ import { desktopClipboardCommand, desktopPathCommand, savedDashboardPath, valida
 
 const sanitize = (text: string) => text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 const bounded = (value: unknown) => sanitize(JSON.stringify(value, null, 2).slice(0, 1024 * 1024));
+const scopeArgs = (scope?: FeatureSummary["executionScope"]) => scope ? ["--store", scope.store, "--feature", scope.feature, "--component", scope.component, "--assignment", scope.assignment] : [];
+function runnerPrelude(scope: FeatureSummary["executionScope"], change: string) {
+  const imported = `import { Runner } from ${JSON.stringify(new URL("./runner.js", import.meta.url).href)};`;
+  if (!scope) return `${imported} const runner = new Runner();`;
+  const selection = { storeRoot: scope.store, featureId: scope.feature, componentId: scope.component, assignmentId: scope.assignment, change };
+  return `${imported} import { resolveBoundExecutionContext } from ${JSON.stringify(new URL("./execution-context.js", import.meta.url).href)}; const runner = new Runner(process.cwd(), undefined, resolveBoundExecutionContext({implementationRoot: process.cwd(), ...${JSON.stringify(selection)}}));`;
+}
 
 export async function readDashboardCatalog(root: string, harness: string, signal: AbortSignal) {
   const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
@@ -80,8 +87,8 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
 }
 
 async function currentSnapshot(snapshot: DashboardSnapshot, signal: AbortSignal): Promise<DashboardSnapshot> {
-  const source = `import { collectDashboard } from ${JSON.stringify(new URL("./dashboard-reader.js", import.meta.url).href)}; console.log(JSON.stringify(collectDashboard({cwd: process.argv[1], ...JSON.parse(process.argv[2])})));`;
-  const result = await dashboardChild(process.execPath, ["--input-type=module", "-e", source, snapshot.repository.root, JSON.stringify(snapshot.storeContext ?? {})], snapshot.repository.root, signal);
+  const source = `import { collectDashboard } from ${JSON.stringify(new URL("./dashboard-reader.js", import.meta.url).href)}; import { resolveBoundExecutionContext } from ${JSON.stringify(new URL("./execution-context.js", import.meta.url).href)}; const {executionSelection, ...options} = JSON.parse(process.argv[2]); if(executionSelection) options.execution=resolveBoundExecutionContext({implementationRoot: process.argv[1],storeRoot:executionSelection.store,featureId:executionSelection.feature,componentId:executionSelection.component,assignmentId:executionSelection.assignment,change:executionSelection.change}); console.log(JSON.stringify(collectDashboard({cwd: process.argv[1], ...options})));`;
+  const result = await dashboardChild(process.execPath, ["--input-type=module", "-e", source, snapshot.repository.root, JSON.stringify({ ...snapshot.storeContext, executionSelection: snapshot.executionSelection, change: snapshot.setup?.scopedChange })], snapshot.repository.root, signal);
   return JSON.parse(result.stdout) as DashboardSnapshot;
 }
 
@@ -265,13 +272,14 @@ export async function runDashboardAction(options: {
     if (!selected?.available || !selected.argv) throw new Error(selected?.reason ?? "Action is no longer eligible");
     const command = [...selected.argv];
     const [, operation, change] = command;
-    const feature = current.features.find(row => row.origin === "local" && row.change === change);
+    const targetFeatureId = current.sessions.find(row => row.id === target.id)?.featureId ?? current.tasks.find(row => row.id === target.id)?.featureId ?? target.id;
+    const feature = current.features.find(row => row.id === targetFeatureId);
     const job = current.sessions.find(row => row.id === target.id)?.attempt;
     const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
     const cli = (args: string[], writes = false) =>
       dashboardChild(process.execPath, [entry, ...args, "--json"], root, signal, writes);
     const identity = async () => {
-      const source = `import { Runner } from ${JSON.stringify(new URL("./runner.js", import.meta.url).href)}; console.log(new Runner().actionIdentity(process.argv[1]));`;
+      const source = `${runnerPrelude(feature?.executionScope, change)} console.log(runner.actionIdentity(process.argv[1]));`;
       return (await dashboardChild(process.execPath, ["--input-type=module", "-e", source, change], root, signal)).stdout.trim();
     };
     const settingsFile = suffix === "managed-plan" && input?.settingsFile
@@ -370,10 +378,9 @@ export async function runDashboardAction(options: {
     if (!feature?.change || feature.origin !== "local") throw new Error("A local change is required");
     const change = feature.change;
     const entry = fileURLToPath(new URL("../bin/openspec-runner.js", import.meta.url));
-    const cli = (args: string[], mutation = false) => dashboardChild(process.execPath, [entry, ...args, "--json"], root, signal, mutation);
-    const runnerModule = JSON.stringify(new URL("./runner.js", import.meta.url).href);
+    const cli = (args: string[], mutation = false) => dashboardChild(process.execPath, [entry, ...args, ...(args.includes("--store") ? [] : scopeArgs(feature.executionScope)), "--json"], root, signal, mutation);
     const runner = (source: string, args: string[]) => dashboardChild(process.execPath,
-      ["--input-type=module", "-e", `import { Runner } from ${runnerModule}; const runner = new Runner(); ${source}`, ...args], root, signal);
+      ["--input-type=module", "-e", `${runnerPrelude(feature.executionScope, change)} ${source}`, ...args], root, signal);
     if (suffix === "resume") {
       const attempt = session!.attempt;
       if (attempt.cleaned || attempt.worker?.exitedAt || attempt.terminal.closed || attempt.report || session!.worktreeAvailable !== true)
@@ -419,6 +426,7 @@ export async function runDashboardAction(options: {
       details = { ...inspected, effect: "Removes this worktree, including ignored files, and closes its terminal. The branch and reports are retained." };
     }
     if (!command) throw new Error("No executable operation");
+    if (!command.includes("--store")) command = [...command, ...scopeArgs(feature.executionScope)];
     const review = [selected.label, root, shellCommand(["openspec-runner", ...command]), bounded(details), ...(identity ? [`Reviewed state: ${identity}`] : [])].join("\n");
     if (options.confirmation === undefined) return { text: review, confirmation: review };
     if (options.confirmation !== review) throw new Error("Action changed; refresh and review it again");

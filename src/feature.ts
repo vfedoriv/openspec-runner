@@ -281,7 +281,7 @@ export class Feature {
     const entries = [...this.runner.recovery(change), ...s.jobs.flatMap(job => workerRecovery(change, job, true) ?? [])];
     if (s.transaction && execution) entries.unshift(integrationRecovery(change, execution.integration.path, s.transaction.phase,
       { attempt: s.transaction.attempt, managed: true }));
-    return entries;
+    return entries.map(entry => ({ ...entry, argv: this.runner.scopeCommand(entry.argv) }));
   }
   planPreview(change: string, input: FeatureSettings) {
     const s = this.read(change);
@@ -629,7 +629,7 @@ export class Feature {
   }
   archive(change: string) {
     const result = this.archiveCore(change);
-    return { ...result, summary: safeSummary({ cwd: this.repo.root, change }) };
+    return { ...result, summary: safeSummary({ cwd: this.repo.root, change, execution: this.runner.execution }) };
   }
   private archiveCore(change: string) {
     return this.runner.lock(() => {

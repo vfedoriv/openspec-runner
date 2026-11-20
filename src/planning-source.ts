@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, wri
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
 import {
-  committedBlob, committedTreeEntries, pinContext, pinReferenceContext, resolveContext, safeContextPath,
+  committedBlob, committedBlobs, committedTreeEntries, pinContext, pinReferenceContext, resolveContext, safeContextPath,
   type ContextFile, type OpenSpecExecutor,
 } from "./openspec-context.js";
 import {
@@ -173,10 +173,11 @@ function withCommittedProject<T>(options: PinOptions, inspect: (root: string, cw
         createdRuntime = false;
       }
     }
-    for (const entry of entries) {
+    const blobs = committedBlobs({ root: store.root, objects: entries.map(entry => entry.object) });
+    for (const [index, entry] of entries.entries()) {
       const path = unredirectedStorePath(scratch, entry.path);
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, committedBlob({ root: store.root, object: entry.object }), { flag: "wx", mode: 0o600 });
+      writeFileSync(path, blobs[index], { flag: "wx", mode: 0o600 });
     }
     return inspect(store.root, resolve(scratch, project));
   } finally {
@@ -216,6 +217,20 @@ function pinProject(options: PinOptions, root: string, cwd: string): StorePlanni
 /** Resolve OpenSpec from the approved Git project and pin its portable file inventory. */
 export function pinStorePlan(options: PinOptions): StorePlanningSource {
   return withCommittedProject(options, (root, cwd) => pinProject(options, root, cwd));
+}
+
+/** Observe pinned inputs and default project selections using Git only; no tool or scratch checkout. */
+export function readStorePlanRevision(options: { storeRoot: string; source: StorePlanningSource; revision: string }): StorePlanningSource {
+  const { source, revision } = options;
+  loadSourcePlan(source);
+  const root = storeCheckout(options.storeRoot, source.repository).root;
+  const planningRoot = resolve(root, projectPath(source.openspecRoot));
+  const pinned = pinContext({ repository: source.repository, revision, planningRepositoryRoot: root, context: {
+    implementationRoot: root, planningRoot, changeRoot: resolve(root, source.openspecRoot, "changes", source.change), change: source.change,
+    source: "store", artifactPaths: source.files.map(file => resolve(root, file.path)), references: [],
+  } });
+  const candidate = { ...source, revision, files: pinned.files };
+  return { ...candidate, fingerprint: parseStorePlan(candidate).fingerprint };
 }
 
 /** Approval checks must inspect the committed component project and run OpenSpec in that project. */

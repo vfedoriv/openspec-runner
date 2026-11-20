@@ -117,6 +117,45 @@ export function resolveContext(options: {
 const blobCache = new Map<string, Buffer>();
 const blobCacheLimit = 16 * 1024 * 1024;
 let blobCacheBytes = 0;
+function rememberBlob(root: string, object: string, bytes: Buffer) {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(object) || bytes.length > blobCacheLimit) return;
+  const key = JSON.stringify([resolve(root), object]);
+  if (blobCache.has(key)) { blobCacheBytes -= blobCache.get(key)!.length; blobCache.delete(key); }
+  while (blobCache.size && (blobCacheBytes + bytes.length > blobCacheLimit || blobCache.size >= 1024)) {
+    const oldest = blobCache.keys().next().value!;
+    blobCacheBytes -= blobCache.get(oldest)!.length; blobCache.delete(oldest);
+  }
+  blobCache.set(key, Buffer.from(bytes)); blobCacheBytes += bytes.length;
+}
+
+/** Batch exact immutable objects; lengths delimit binary payloads rather than line splitting. */
+export function committedBlobs(options: { root: string; objects: string[] }): Buffer[] {
+  const values = new Map<string, Buffer>();
+  for (const object of options.objects) {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(object)) throw new Error("Batched Git reads require full object hashes");
+    const cached = blobCache.get(JSON.stringify([resolve(options.root), object]));
+    if (cached) values.set(object, cached);
+  }
+  const missing = [...new Set(options.objects.filter(object => !values.has(object)))];
+  if (missing.length) {
+    const invocation = resolveCommand({ executable: "git", args: ["-c", `core.hooksPath=${gitHooksPath()}`, "cat-file", "--batch"], cwd: options.root });
+    const output = execFileSync(invocation.executable, invocation.args, { cwd: options.root, env: invocation.env, windowsHide: true,
+      input: `${missing.join("\n")}\n`, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
+    let offset = 0;
+    for (const object of missing) {
+      const end = output.indexOf(10, offset);
+      const header = end < 0 ? undefined : /^([a-f0-9]+) blob (\d+)$/.exec(output.subarray(offset, end).toString("ascii"));
+      if (!header || header[1] !== object) throw new Error("Invalid or unavailable Git blob in batch response");
+      const size = Number(header[2]), start = end + 1;
+      if (!Number.isSafeInteger(size) || size < 0 || size > 16 * 1024 * 1024 || start + size >= output.length || output[start + size] !== 10)
+        throw new Error("Invalid Git blob batch payload length");
+      const bytes = Buffer.from(output.subarray(start, start + size));
+      values.set(object, bytes); rememberBlob(options.root, object, bytes); offset = start + size + 1;
+    }
+    if (offset !== output.length) throw new Error("Unexpected trailing Git blob batch output");
+  }
+  return options.objects.map(object => Buffer.from(values.get(object)!));
+}
 
 /** Read exact Git blob bytes; system.git deliberately trims command output. */
 export function committedBlob(options: { root: string; object: string }): Buffer {
@@ -132,13 +171,7 @@ export function committedBlob(options: { root: string; object: string }): Buffer
     env: invocation.env, windowsHide: true,
     cwd: options.root, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024,
   });
-  if (key && bytes.length <= blobCacheLimit) {
-    while (blobCache.size && (blobCacheBytes + bytes.length > blobCacheLimit || blobCache.size >= 1024)) {
-      const oldest = blobCache.keys().next().value!;
-      blobCacheBytes -= blobCache.get(oldest)!.length; blobCache.delete(oldest);
-    }
-    blobCache.set(key, Buffer.from(bytes)); blobCacheBytes += bytes.length;
-  }
+  if (key) rememberBlob(options.root, options.object, bytes);
   return bytes;
 }
 export function contextFingerprint(options: { files: ContextFile[]; references?: PinnedContext[]; selections?: string[] }): string {
@@ -197,12 +230,16 @@ function pinnedFiles(options: { root: string; revision: string; selections: stri
   const root = options.root, selections = options.selections, required = options.required;
   const entries = committedTreeEntries(root, options.revision);
   for (const path of required) if (!entries.some(e => e.path === path || e.path.startsWith(`${path}/`))) throw new Error(`Committed context path is missing: ${path}`);
-  return entries.filter(e => !e.path.startsWith("runner/features/") && e.path !== "runner/features" &&
-    selections.some(path => e.path === path || e.path.startsWith(`${path}/`))).map(entry => {
+  const selected = entries.filter(e => !e.path.startsWith("runner/features/") && e.path !== "runner/features" &&
+    selections.some(path => e.path === path || e.path.startsWith(`${path}/`)));
+  for (const entry of selected) {
     safeContextPath(entry.path);
     if (entry.mode === "120000") throw new Error(`Committed context cannot contain a symlink: ${entry.path}`);
     if (entry.type !== "blob" || !["100644", "100755"].includes(entry.mode)) throw new Error(`Context requires regular files: ${entry.path}`);
-    const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(committedBlob({ root, object: entry.object }));
+  }
+  const blobs = committedBlobs({ root, objects: selected.map(entry => entry.object) });
+  return selected.map((entry, index) => {
+    const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(blobs[index]);
     return { path: entry.path, content };
   }).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
  }

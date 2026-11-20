@@ -3,6 +3,9 @@ name: openspec-runner-coordinate
 description: Coordinate local OpenSpec batches or managed features, or shared Store assignments, acceptance, tuple reviews, Git merge evidence, exact completion and archive delivery.
 ---
 
+For one code repository, retain the ordinary repository-local OpenSpec workflow. For a feature spanning code repositories, use a version-2 Store-backed manifest: shared planning is `Store/openspec`, component projects are `Store/components/<component>/openspec`, and all runner planning/configuration/progress/archive artifacts stay in that Store. Bootstrap with `init --store CHECKOUT --file MANIFEST`. Read `docs/store-only-workflow.md` from the runner installation for the complete workflow. Do not run code-local `init`, copy plans, install skills, or commit task checkboxes in code repositories. Preserve active version-1 histories until an explicit idle migration and renewed approval.
+
+
 Identify the mode first. A shared feature has an explicit Store checkout, feature ID and machine repository map. Resume with `coordination status <feature> --store PATH --map MAP --json`. A local imported assignment belongs to `openspec-runner-component`; use `component status` and stop at receipt export, never the local final-approval/archive steps below. For a repository-local change:
 
 First run `openspec-runner status <change> --json`. If it returns a feature lifecycle phase and approval history, use the managed lifecycle below. Otherwise preserve the explicit batch-approval workflow in the remaining instructions.

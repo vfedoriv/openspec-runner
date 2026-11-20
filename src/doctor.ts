@@ -1,5 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
+import { storeProjectRoot } from "./store-setup.js";
+import { assertStoreBindingAuthority, resolveBoundExecutionContext } from "./execution-context.js";
+import { readStorePlanRevision } from "./planning-source.js";
+import { CoordinationStore } from "./coordination-state.js";
 import { parseArgs } from "node:util";
 import { parse } from "yaml";
 import { selectTerminal, worktrees, worktrunkCommand } from "./adapters.js";
@@ -21,7 +25,7 @@ type Check = {
   capabilities?: HarnessCapabilities;
 };
 
-async function diagnose(cwd: string, selected?: string) {
+async function diagnose(cwd: string, selected?: string, planningProject?: string, scope?: { storeRoot: string; feature: string; component: string; assignment?: string; change?: string }) {
   const checks: Check[] = [];
   const inspect = <T>(id: string, probe: () => T, describe: (value: T) => string, backend?: (value: T) => string) => {
     try {
@@ -38,15 +42,32 @@ async function diagnose(cwd: string, selected?: string) {
   const base = repo && inspect("base", () => git(root, "rev-parse", "--verify", "HEAD^{commit}"), head => `Current base ${head}`);
   const configPath = "openspec/runner.yaml";
   const config = repo ? inspect("config", () => {
-    const path = resolve(root, configPath);
+    const path = resolve(planningProject ?? root, configPath);
     if (!existsSync(path)) throw new Error(`Missing ${configPath}. Run openspec-runner init in this checkout.`);
     return configFrom(parse(readFileSync(path, "utf8")));
   }, value => `runner.yaml version ${value.version}, default harness ${value.defaultAgent}`) : undefined;
   if (!repo) checks.push({ id: "config", status: "unchecked", message: "Open a Git checkout to inspect project settings." });
-  if (config && base) inspect("config-commit", () => assertCommitted(root, { files: projectPlanFiles(root, config) }, base),
+  if (config && base) inspect("config-commit", () => {
+    const planningRoot = planningProject ?? root, planningRepo = repository(planningRoot);
+    const files = projectPlanFiles(planningRoot, config).map(file => relative(planningRepo.root, resolve(planningRoot, file)).split(sep).join("/"));
+    return assertCommitted(planningRepo.root, { files }, planningProject ? git(planningRepo.root, "rev-parse", "HEAD") : base);
+  },
     () => "Project planning inputs match the current base");
+  if (scope && repo) inspect("assignment", () => {
+    const store = new CoordinationStore({ root: scope.storeRoot, featureId: scope.feature });
+    const change = scope.change ?? store.readManifest().components[scope.component]?.change;
+    if (!change) throw new Error("Store component is missing from the selected manifest");
+    const execution = resolveBoundExecutionContext({ implementationRoot: root, storeRoot: scope.storeRoot, featureId: scope.feature,
+      componentId: scope.component, assignmentId: scope.assignment, change });
+    const binding = assertStoreBindingAuthority(execution, change);
+    const branch = store.readManifest({ revision: binding.historyRevision }).coordinationBranch;
+    if (execution.planningSource.kind !== "store") throw new Error("Expected Store planning source");
+    const current = readStorePlanRevision({ storeRoot: store.root, source: execution.planningSource, revision: git(store.root, "rev-parse", `refs/heads/${branch}`) });
+    if (current.fingerprint !== execution.planningSource.fingerprint) throw new Error("Store planning drift; obtain renewed coordinator approval");
+    return binding.assignmentId;
+  }, assignment => `Current Store assignment ${assignment}`);
 
-  inspect("openspec", () => run("openspec", ["--version"], root, 10000), version => `OpenSpec ${version || "CLI responded"}`);
+  inspect("openspec", () => run("openspec", ["--version"], planningProject ?? root, 10000), version => `OpenSpec ${version || "CLI responded"}`);
   const harness = getHarness(selected ?? config?.defaultAgent);
   const configured = config?.agents[harness.id];
   const model = configured?.defaultModel ?? config?.defaultModel;
@@ -104,7 +125,7 @@ async function diagnose(cwd: string, selected?: string) {
   }
 
   checks.push({ id: "live", status: "unchecked", message: "Worker authentication, model access, permissions, and task setup or verification require a live run." });
-  return { version: 1, ok: checks.every(check => check.status !== "blocked"), root: repo?.root, agent: harness.id, checks };
+  return { version: 1, ok: checks.every(check => check.status !== "blocked"), root: repo?.root, ...(planningProject ? { planningRoot: planningProject, implementationRoot: repo?.root } : {}), agent: harness.id, checks };
 }
 
 export async function doctorCommand(args: string[]): Promise<void> {
@@ -112,6 +133,7 @@ export async function doctorCommand(args: string[]): Promise<void> {
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
     agent: { type: "string", multiple: true },
+    store: { type: "string" }, component: { type: "string" }, feature: { type: "string" }, assignment: { type: "string" }, change: { type: "string" },
   } });
   if (values.help) {
     console.log("doctor [--agent ID] [--json]   Check project configuration and local execution tools");
@@ -119,7 +141,10 @@ export async function doctorCommand(args: string[]): Promise<void> {
   }
   if ((values.agent?.length ?? 0) > 1) throw new Error("Specify --agent at most once");
   if (values.agent?.[0] !== undefined) getHarness(values.agent[0]);
-  const result = await diagnose(process.cwd(), values.agent?.[0]);
+  if ((values.component || values.feature || values.assignment) && !values.store) throw new Error("Store scope identifiers require --store");
+  if (values.assignment && (!values.feature || !values.component)) throw new Error("--assignment requires --feature and --component");
+  const scope = values.store && values.feature && values.component ? { storeRoot: values.store, feature: values.feature, component: values.component, assignment: values.assignment, change: values.change } : undefined;
+  const result = await diagnose(process.cwd(), values.agent?.[0], values.store ? storeProjectRoot(values.store, values.component) : undefined, scope);
   if (values.json) console.log(JSON.stringify(result, null, 2));
   else for (const check of result.checks) console.log(`${check.status.toUpperCase()} ${check.id} — ${check.message}`);
   if (!result.ok) process.exitCode = 1;

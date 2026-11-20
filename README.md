@@ -9,7 +9,9 @@ approval through isolated implementation, whole-feature review, bounded repairs,
 final approval, OpenSpec archival, and completion on a retained integration
 branch.
 
-The package installs eight project-local agent skills:
+Use repository-local `openspec/` for the single-repository workflow. Features spanning code repositories use the [Store-only workflow](docs/store-only-workflow.md): shared and component planning, configuration, progress, runtime and archives stay in the Store; code repositories contain implementation and tests. Existing version-1 linked histories remain compatible.
+
+Local `init` installs eight project-local agent skills. Store-backed workers use bundled skill paths and need no installation in code repositories:
 
 | Skill | Where it runs | Responsibility |
 |---|---|---|

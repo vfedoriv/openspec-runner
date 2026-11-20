@@ -29,6 +29,26 @@ export function focusReason(session: SessionSummary): string | undefined {
 export const projectTarget = "project";
 
 export function actionsFor(snapshot: DashboardSnapshot, targetId: string): DashboardAction[] {
+  const actions = unscopedActionsFor(snapshot, targetId);
+  const targetFeature = snapshot.tasks.find(task => task.id === targetId)?.featureId ?? snapshot.sessions.find(session => session.id === targetId)?.featureId ?? targetId;
+  const scopes = snapshot.features.filter(feature => feature.executionScope);
+  const feature = snapshot.features.find(feature => feature.id === targetFeature);
+  const binding = snapshot.assignments.find(assignment => assignment.id === targetId)?.binding;
+  const scope = feature?.executionScope ?? (binding?.assignment.version === 2 && snapshot.storeContext ? {
+    store: snapshot.storeContext.store, feature: binding.featureId, component: binding.assignment.componentId, assignment: binding.assignmentId,
+  } : undefined) ?? (targetId === projectTarget && scopes.length === 1 ? scopes[0].executionScope : undefined);
+  return actions.map(action => {
+    if (targetId === projectTarget && scopes.length && action.argv?.[0] === "init") return { ...action, available: false, reason: "Create planning configuration in the Store with init --store --file" };
+    if (!scope || !action.argv) return action;
+    const argv = [...action.argv];
+    if (argv[0] === "component") { if (!argv.includes("--component")) argv.push("--component", scope.component); }
+    else if (["launch", "retry", "recover", "integrate", "cleanup", "feature", "attach", "status", "summary", "doctor", "models", "planning-rules", "validate"].includes(argv[0]))
+      argv.push("--store", scope.store, "--feature", scope.feature, "--component", scope.component, "--assignment", scope.assignment);
+    return { ...action, argv };
+  });
+}
+
+function unscopedActionsFor(snapshot: DashboardSnapshot, targetId: string): DashboardAction[] {
   if (targetId === projectTarget) return [
     { id: "project:doctor", label: "Check project", kind: "check", available: true, argv: ["doctor"] },
     { id: "project:models", label: "Models", kind: "check", available: true, argv: ["models", "--agent", snapshot.repository.defaultHarness ?? "codex", "--catalog"] },
@@ -153,11 +173,13 @@ export function actionsFor(snapshot: DashboardSnapshot, targetId: string): Dashb
   }
   const last = task?.attempts.at(-1), retry = !!last && ["failed", "blocked", "stale"].includes(last.phase);
   const suggested = feature.id === targetId && !snapshot.sources[feature.id]?.stale ? feature.nextAction?.launch : undefined;
-  const taskText = suggested?.[3];
+  const scopeFlags = ["--store", "--feature", "--component", "--assignment"];
+  const bare = suggested?.filter((value, index) => !scopeFlags.includes(value) && !(index > 0 && scopeFlags.includes(suggested[index - 1])));
+  const taskText = bare?.[3];
   const ids = taskText?.split(",") ?? [];
   const prefill = taskText && taskText.length <= taskInputLimit && validTaskIds(ids) &&
-    suggested?.length === 6 && suggested[0] === "launch" && suggested[1] === change && suggested[2] === "--tasks" &&
-    suggested[4] === "--dry-run" && suggested[5] === "--json" &&
+    bare?.length === 6 && bare[0] === "launch" && bare[1] === change && bare[2] === "--tasks" &&
+    bare[4] === "--dry-run" && bare[5] === "--json" &&
     ids.every(id => snapshot.tasks.some(t => t.featureId === feature.id && t.task.id === id && t.ready))
     ? taskText : undefined;
   add("launch-preview", prefill ? "Preview suggested batch" : "Preview launch (select exact tasks and settings)", "preview", task && !task.ready ? task.reasons.join("; ") || "Task is not ready" : undefined);
@@ -288,6 +310,7 @@ export function previewCommand(snapshot: DashboardSnapshot, action: DashboardAct
     if (!input.settingsFile || !existsSync(resolve(snapshot.repository.root, input.settingsFile)) || !statSync(resolve(snapshot.repository.root, input.settingsFile)).isFile()) throw new Error("Existing settings file required");
     argv = ["feature", "approve", feature.change, "--file", input.settingsFile];
   } else throw new Error("Preview unavailable");
-  return [...argv, "--dry-run", "--json"];
+  const scope = feature.executionScope;
+  return [...argv, ...(scope ? ["--store", scope.store, "--feature", scope.feature, "--component", scope.component, "--assignment", scope.assignment] : []), "--dry-run", "--json"];
 }
 import { savedDashboardPath, type DashboardPathKind } from "./dashboard-paths.js";

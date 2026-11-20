@@ -8,12 +8,15 @@ import { agentMayBeActive } from "./harnesses/lifecycle.js";
 import { getHarness } from "./harnesses/registry.js";
 import { assignmentsFrom, initExecution, loadPlan } from "./plan.js";
 import { publishExclusive, replaceBytes } from "./platform-files.js";
-import { unredirectedPath } from "./platform-paths.js";
+import { containedPath, unredirectedPath } from "./platform-paths.js";
 import { Runner } from "./runner.js";
+import { git } from "./system.js";
 
-export function editExecutionSettings(change: string, input: unknown, confirm?: string, cwd = process.cwd()) {
+export function editExecutionSettings(change: string, input: unknown, confirm?: string, cwd = process.cwd(), planningProject?: string) {
   const runner = new Runner(cwd);
-  const { root, stateDir } = runner.repo;
+  const root = planningProject ?? runner.repo.root, { stateDir } = runner.repo;
+  if (planningProject && (!containedPath(runner.repo.root, root) || !unredirectedPath(root)))
+    throw new Error("Store planning root must remain inside the selected Store root without redirects");
   const edit = () => {
     const feature = readFeature(stateDir, change);
     const state = runner.read(change);
@@ -97,7 +100,7 @@ export function editExecutionSettings(change: string, input: unknown, confirm?: 
         .flatMap(([field, oldValue, newValue]) => [`- ${field}: ${oldValue ?? "inherit"}`, `+ ${field}: ${newValue ?? "inherit"}`])].join("\n");
     }).join("\n");
     const token = createHash("sha256").update(JSON.stringify([
-      runner.actionIdentity(change, original), path, bytes?.toString("base64") ?? null,
+      planningProject ? { head: git(runner.repo.root, "rev-parse", "HEAD"), fingerprint: plan.fingerprint } : runner.actionIdentity(change, original), path, bytes?.toString("base64") ?? null,
       plan.tasks.map(task => [task.id, task.completed]), next, input,
     ])).digest("hex");
     if (confirm !== undefined) {

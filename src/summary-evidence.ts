@@ -25,7 +25,7 @@ export function summaryBundle(evidence: SummaryEvidence): SummaryBundle {
   return { version: 1, generatorVersion: 1, digest: summaryDigest(evidence), collectedAt: new Date().toISOString(), evidence };
 }
 export function collectLocalSummary(request: Extract<SummaryRequest, { change: string }>, componentHandoff = false): SummaryBundle {
-  const runner = new Runner(request.cwd), state = runner.requireState(request.change);
+  const runner = new Runner(request.cwd, undefined, request.execution), state = runner.requireState(request.change);
   const feature = readFeature(runner.repo.stateDir, request.change);
   const integrated = state.attempts.filter(a => a.phase === "integrated" && a.report?.outcome === "completed");
   const selected = request.task ? integrated.filter(a => a.task === request.task).slice(-1) : integrated;
@@ -33,7 +33,7 @@ export function collectLocalSummary(request: Extract<SummaryRequest, { change: s
   if (!request.task) {
     if (feature && feature.phase !== "completed" && !(componentHandoff && feature.delegated)) throw new Error("Managed feature has not completed its lifecycle");
     if (!feature) {
-      const tasks = tasksFrom(git(runner.repo.root, "show", `${state.head}:openspec/changes/${request.change}/tasks.md`));
+      const tasks = runner.execution ? runner.plan(request.change).tasks.map(task => ({ ...task, completed: runner.satisfied(state, task.id) })) : tasksFrom(git(runner.repo.root, "show", `${state.head}:openspec/changes/${request.change}/tasks.md`));
       if (!tasks.length || !tasks.every(t => t.completed && runner.satisfied(state, t.id))) throw new Error("Batch has not completed its lifecycle");
     }
   }
@@ -73,6 +73,15 @@ export function collectLocalSummary(request: Extract<SummaryRequest, { change: s
     const id = `plan:${path}`;
     evidence.references.push({ id, repository: "implementation", commit: result, path });
     if (path.endsWith("proposal.md")) evidence.facts.push({ id: "intent", category: "intent", authority: "planning", text: git(root, "show", `${result}:${path}`), references: [id] });
+  }
+  const source = runner.execution?.planningSource;
+  if (source?.kind === "store") {
+    evidence.source.storeRevision = source.revision;
+    for (const file of source.files.filter(file => /(?:proposal|tasks|spec)\.md$/.test(file.path))) {
+      const id = `store-plan:${file.path}`;
+      evidence.references.push({ id, repository: source.repository, commit: source.revision, path: file.path });
+      if (file.path.endsWith("/proposal.md")) evidence.facts.push({ id: "store-intent", category: "intent", authority: "planning", text: file.content, references: [id] });
+    }
   }
   if (!evidence.facts.some(f => f.category === "intent")) evidence.gaps.push("Original feature intent was not available in committed proposal artifacts.");
   evidence.gaps.push("Worker verification statements are reported claims; full integration check logs are not retained in this bundle.");

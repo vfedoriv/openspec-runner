@@ -5,10 +5,13 @@ import type { FeatureJob, FeatureState } from "./feature-state.js";
 import type { ComponentBinding } from "./component-state.js";
 import type { ComponentStatus, CoordinationStatus } from "./coordination-state.js";
 import type { SummaryHandle } from "./summary-types.js";
-export type DashboardOptions = { cwd: string; change?: string; store?: string; map?: string };
+import type { ExecutionContext } from "./execution-context.js";
+export type DashboardOptions = { cwd: string; change?: string; store?: string; map?: string; execution?: ExecutionContext };
 export type SourceError = { source: string; message: string; stale: boolean };
 export type AttentionItem = { id: string; source: string; targetId?: string; priority: number; message: string };
 export type FeatureSummary = {
+  runtimeDir?: string;
+  executionScope?: { store: string; feature: string; component: string; assignment: string };
   deliverySummary?: SummaryHandle; summaryCommand?: string[];
   nextAction?: NextAction;
   recovery?: RecoveryEntry[];
@@ -37,6 +40,7 @@ export type AssignmentSummary = {
   status?: ComponentStatus; stale: boolean;
 };
 export type DashboardSnapshot = {
+  executionSelection?: NonNullable<FeatureSummary["executionScope"]> & { change: string };
   version: 1; collectedAt: string;
   setup?: { configuration: "missing" | "invalid" | "ready"; scopedChange?: string };
   storeContext?: { store: string; map: string };

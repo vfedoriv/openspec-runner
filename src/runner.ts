@@ -279,6 +279,14 @@ export class Runner {
     const scope = this.execution?.store;
     return scope ? ["--store", scope.storeRoot, "--feature", scope.featureId, "--component", scope.componentId, "--assignment", scope.assignmentId] : [];
   }
+  scopeCommand(argv: string[]): string[] {
+    return this.execution && !argv.includes("--store") ? [...argv, ...this.storeArgs()] : argv;
+  }
+  private scopeNextAction(next: NextAction): NextAction {
+    return { ...next, ...(next.launch ? { launch: this.scopeCommand(next.launch) } : {}),
+      ...(next.integrate ? { integrate: this.scopeCommand(next.integrate) } : {}),
+      ...(next.blocker?.argv ? { blocker: { ...next.blocker, argv: this.scopeCommand(next.blocker.argv) } } : {}) };
+  }
   invocationScope(change: string): StoreInvocationScope | undefined {
     const scope = this.execution?.store;
     if (!scope) return undefined;
@@ -393,7 +401,7 @@ export class Runner {
       kind: "cleanup", worktree: state.integration.path, evidence: "Post-integration cleanup is pending.",
       next: "Continue integration to resume cleanup.", argv: ["integrate", change, "--continue"],
     });
-    return entries;
+    return entries.map(entry => ({ ...entry, argv: this.scopeCommand(entry.argv) }));
   }
   status(change: string) {
     const feature = readFeature(this.repo.stateDir, change);
@@ -432,7 +440,7 @@ export class Runner {
       cleanup: s?.cleanupResults,
       tasks,
       nextAction: !feature || feature.phase === "implementing"
-        ? this.suggestActions(p, s, tasks.filter(t => t.ready).map(t => t.id))
+        ? this.scopeNextAction(this.suggestActions(p, s, tasks.filter(t => t.ready).map(t => t.id)))
         : undefined,
     };
   }
@@ -1109,7 +1117,7 @@ export class Runner {
         try {
           const state = this.read(change);
           for (const task of new Set(state?.attempts.filter(a => a.phase === "integrated").map(a => a.task)))
-            summaries.push(safeSummary({ cwd: this.repo.root, change, task }));
+            summaries.push(safeSummary({ cwd: this.repo.root, change, task, execution: this.execution }));
         } catch { /* Summary failures never replace an integration error. */ }
       }
     }
@@ -1119,7 +1127,7 @@ export class Runner {
       const feature = readFeature(this.repo.stateDir, change), state = this.read(change);
       complete = !!(!feature && state && this.plan(change, undefined, state.integration.path).tasks.every(t => this.satisfied(state, t.id)));
     } catch { /* Post-transition summary assessment is observational and best-effort. */ }
-    const summary = complete ? safeSummary({ cwd: this.repo.root, change }) : undefined;
+    const summary = complete ? safeSummary({ cwd: this.repo.root, change, execution: this.execution }) : undefined;
     return { ...result, summaries, ...(summary ? { summary } : {}) };
   }
   private integrationReport(s: State, task: string, managed: boolean) {

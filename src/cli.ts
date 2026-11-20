@@ -21,9 +21,11 @@ import { linkedCommand, linkedHelp } from "./linked-cli.js";
 import { hookCommand } from "./harnesses/copilot-hook-cli.js";
 import { renderCommand } from "./platform-command.js";
 import { resolveBoundExecutionContext } from "./execution-context.js";
+import { initStore, storeProjectRoot } from "./store-setup.js";
 export const help = `openspec-runner — explicit OpenSpec task batches in isolated harness worktrees
 
 init [--agent ID|all]          Create runner.yaml and install selected project skills
+init --store CHECKOUT --file MANIFEST   Create configuration only in declared v2 Store projects
 init-execution <change> [--dry-run] [--json]   Generate starter execution.yaml
 models [--agent ID] [--catalog] [--json]   Query the selected harness model capabilities
 execution-settings <change> --file PATCH [--dry-run | --confirm TOKEN]
@@ -69,6 +71,10 @@ begin <change> <task> --attempt ID [--session ID]
 report <change> <task> --attempt ID --file PATH
 
 ${linkedHelp}
+Store execution: add --store CHECKOUT --feature ID --component ID --assignment ID.
+Store planning: init-execution, validate, models, planning-rules and execution-settings
+accept --store CHECKOUT [--component ID]; omit component for the shared project.
+Store component integration records evidence without code-local task checkbox updates.
 Run coordination inside Herdr or stablyai/orca for persistent automatic sessions. Otherwise launch
 prints commands to run once in your terminals. Delivery and archival are explicit.
 `;
@@ -175,6 +181,8 @@ export async function main(args = process.argv.slice(2)) {
           help: { type: "boolean", short: "h" },
           "dry-run": { type: "boolean" },
           json: { type: "boolean" },
+          store: { type: "string" },
+          component: { type: "string" },
         },
       });
       jsonOutput = values.json === true;
@@ -183,7 +191,9 @@ export async function main(args = process.argv.slice(2)) {
         return;
       }
       if (positionals.length !== 1) throw new Error("Use init-execution <change> [--dry-run] [--json]");
-      const result = initExecution(repository().root, positionals[0], { dryRun: values["dry-run"] === true });
+      if (values.component && !values.store) throw new Error("--component requires --store");
+      const root = values.store ? storeProjectRoot(values.store, values.component) : repository().root;
+      const result = initExecution(root, positionals[0], { dryRun: values["dry-run"] === true });
       if (jsonOutput) console.log(JSON.stringify(result, null, 2));
       else if (!result.created) process.stdout.write(result.yaml);
       else console.log(`Created ${result.path}\nReview the settings, then run openspec-runner validate ${result.change} --json`);
@@ -253,11 +263,13 @@ export async function main(args = process.argv.slice(2)) {
         (!["launch", "retry"].includes(command) || !/^[a-f0-9]{64}$/.test(v["expected-launch"])))
       throw new Error("Invalid expected launch settings");
     let result: unknown;
+    const planningCommand = ["models", "planning-rules", "validate", "execution-settings"].includes(command);
+    const planningProject = v.store && planningCommand ? storeProjectRoot(v.store, v.component) : undefined;
     if ((v.feature || v.component || v.assignment) && !v.store) throw new Error("Store scope identifiers require --store");
-    if (v.store && (!v.feature || !v.component || !["feature", "launch", "retry", "worker", "begin", "report", "status", "integrate", "recover", "reconcile", "attach", "cleanup"].includes(command)))
+    if (v.store && command !== "init" && !planningCommand && (!v.feature || !v.component || !["feature", "launch", "retry", "worker", "begin", "report", "status", "integrate", "recover", "reconcile", "attach", "cleanup"].includes(command)))
       throw new Error("Store execution requires --store, --feature and --component on an execution command");
-    if (v.store && ["worker", "begin", "report"].includes(command) && !v.assignment) throw new Error("Store callbacks require --assignment");
-    const execution = v.store ? resolveBoundExecutionContext({ implementationRoot: process.cwd(), storeRoot: v.store,
+    if (v.store && (["worker", "begin", "report"].includes(command) || command === "feature" && ["worker", "begin", "report"].includes(change)) && !v.assignment) throw new Error("Store callbacks require --assignment");
+    const execution = v.store && command !== "init" && !planningCommand ? resolveBoundExecutionContext({ implementationRoot: process.cwd(), storeRoot: v.store,
       featureId: v.feature!, componentId: v.component!, change: command === "feature" ? task : change, assignmentId: v.assignment }) : undefined;
     if (v.all && command !== "cleanup") throw new Error("--all requires cleanup");
     if (v.confirm && !["cleanup", "feature", "execution-settings"].includes(command))
@@ -312,7 +324,13 @@ export async function main(args = process.argv.slice(2)) {
         default: throw new Error(`Unknown feature action: ${action}`);
       }
     }
-    else if (command === "init") result = init(process.cwd(), v.agent ?? "codex", v["default-agent"], v["default-model"]);
+    else if (command === "init") {
+      if (v.store) {
+        if (!v.file || v.feature || v.component || v.assignment || v.agent || v["default-agent"] || v["default-model"])
+          throw new Error("Store setup requires init --store CHECKOUT --file MANIFEST; harness settings come from the manifest");
+        result = initStore({ storeRoot: v.store, manifest: readSettingsInput(v.file) });
+      } else result = init(process.cwd(), v.agent ?? "codex", v["default-agent"], v["default-model"]);
+    }
     else if (command === "models") {
       let configuredVersion: 1 | 2 | undefined;
       let defaultAgent: string | undefined;
@@ -320,7 +338,7 @@ export async function main(args = process.argv.slice(2)) {
       let catalogCwd = process.cwd();
       if (!v.agent || v.catalog) {
         try {
-          const root = repository(process.cwd()).root;
+          const root = planningProject ?? repository(process.cwd()).root;
           const path = resolve(root, "openspec/runner.yaml");
           if (existsSync(path)) {
             const config = configFrom(parse(readFileSync(path, "utf8")));
@@ -346,11 +364,12 @@ export async function main(args = process.argv.slice(2)) {
     } else if (command === "execution-settings") {
       if (!change || p.length !== 2 || !v.file || !!v["dry-run"] === !!v.confirm)
         throw new Error("Use execution-settings <change> --file PATCH with --dry-run or --confirm TOKEN");
-      result = editExecutionSettings(change, readSettingsInput(v.file), v.confirm);
+      if (planningProject && v.assignment) throw new Error("Imported settings are frozen; edit Store planning inputs and obtain renewed coordinator approval");
+      result = editExecutionSettings(change, readSettingsInput(v.file), v.confirm, v.store ?? process.cwd(), planningProject);
     } else if (command === "planning-rules") {
       if (!v.agent || v.agent === "all") throw new Error("planning-rules requires --agent HARNESS");
-      let root = process.cwd();
-      try { root = repository(process.cwd()).root; } catch {
+      let root = planningProject ?? process.cwd();
+      try { root = planningProject ?? repository(process.cwd()).root; } catch {
         // Bundled rules are useful while planning before a repository exists.
       }
       let agentConfig;
@@ -367,7 +386,7 @@ export async function main(args = process.argv.slice(2)) {
         ids = v.tasks?.split(",").map((x) => x.trim()) ?? [];
       switch (command) {
         case "validate": {
-          const plan = r.plan(change);
+          const plan = planningProject ? loadPlan(planningProject, change) : r.plan(change);
           result = {
             valid: true,
             agent: plan.agent,
@@ -375,7 +394,8 @@ export async function main(args = process.argv.slice(2)) {
             tasks: plan.tasks,
             assignments: plan.assignments,
             fingerprint: plan.fingerprint,
-            openspec: readiness(r.repo.root, change),
+            openspec: readiness(planningProject ?? r.repo.root, change),
+            ...(planningProject ? { planningRoot: planningProject, implementationRoot: r.repo.root } : {}),
           };
           break;
         }

@@ -5,8 +5,10 @@ import { coordinationRevision } from "./coordination.js";
 import { readMachineMap } from "./repository-map.js";
 import { attempt, git, gitRaw, repository } from "./system.js";
 import type { AssignmentSummary, DashboardOptions, DashboardSnapshot } from "./dashboard-types.js";
+import { resolveBoundExecutionContext } from "./execution-context.js";
+import { collectDashboard } from "./dashboard-reader.js";
 
-type Fields = Pick<DashboardSnapshot, "features" | "tasks" | "assignments" | "attention" | "errors" | "sources">;
+type Fields = Pick<DashboardSnapshot, "features" | "tasks" | "sessions" | "setup" | "assignments" | "attention" | "errors" | "sources">;
 type Candidate = { branches: Set<string>; manifests: FeatureManifest[]; errors: string[] };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const normalized = (path: string) => {
@@ -19,6 +21,7 @@ export function collectCoordination(options: DashboardOptions, local: DashboardS
   const result: Fields = {
     features: [...local.features], tasks: [...local.tasks], assignments: [...local.assignments], attention: [...local.attention],
     errors: [...local.errors], sources: { ...local.sources },
+    sessions: [...local.sessions], setup: local.setup,
   };
   const error = (source: string, reason: unknown) => {
     result.sources[source] = { collectedAt: local.collectedAt, stale: false };
@@ -82,7 +85,7 @@ export function collectCoordination(options: DashboardOptions, local: DashboardS
 
   for (const [featureId, candidate] of [...candidates].sort(([a], [b]) => a.localeCompare(b))) {
     const source = `shared:${featureId}`;
-    const bindings = local.assignments.filter(a => a.binding?.featureId === featureId && a.repository === associated);
+    let bindings = result.assignments.filter(a => a.binding?.featureId === featureId && a.repository === associated);
     const matches = (manifest: FeatureManifest) => Object.values(manifest.components).some(c => c.repository === associated && (!options.change || c.change === options.change));
     // A malformed candidate has no trustworthy association; report its data error individually.
     if (candidate.manifests.length && !candidate.manifests.some(matches) && !bindings.length) continue;
@@ -104,6 +107,20 @@ export function collectCoordination(options: DashboardOptions, local: DashboardS
       const authority = store.authoritativeApproval({ snapshot });
       const status = store.status({ revision: inspectedRevision });
       const assignments = snapshot.records.filter((r): r is AssignmentRecord => r.kind === "assignment" && r.repository === associated && (!options.change || r.change === options.change));
+      if (manifest.version === 2) for (const assignment of assignments) {
+        if (bindings.some(binding => binding.binding?.assignmentId === assignment.id)) continue;
+        try {
+          const execution = resolveBoundExecutionContext({ implementationRoot: local.repository.root, storeRoot: root, featureId,
+            componentId: assignment.componentId, change: assignment.change, assignmentId: assignment.id });
+          const observed = collectDashboard({ cwd: options.cwd, change: assignment.change, execution });
+          for (const key of ["features", "tasks", "sessions", "assignments", "attention", "errors"] as const) (result[key] as unknown[]).push(...observed[key]);
+          Object.assign(result.sources, observed.sources);
+          if (observed.setup?.configuration === "ready") result.setup = { ...observed.setup, scopedChange: local.setup?.scopedChange };
+          bindings = result.assignments.filter(binding => binding.binding?.featureId === featureId && binding.repository === associated);
+        } catch (cause) {
+          if (!/No matching imported|identity changed/.test(message(cause))) error(source, cause);
+        }
+      }
       result.sources[source] = { collectedAt: local.collectedAt, stale: false };
       result.features.push({ id: source, origin: "shared", coordination: status, completed: Object.values(status.components).filter(c => !!c.deliveryCommit).length,
         total: Object.keys(manifest.components).length, taskIds: [], sessionIds: [] });

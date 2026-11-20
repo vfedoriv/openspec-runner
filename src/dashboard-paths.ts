@@ -13,7 +13,7 @@ export function savedDashboardPath(snapshot: DashboardSnapshot, target: string, 
   if (feature?.origin !== "local") return;
   const path = kind === "log" ? session?.log : kind === "worktree" ? session?.attempt.path : feature.execution?.path;
   if (!path) return;
-  const root = kind === "log" ? resolve(snapshot.repository.stateDir, "logs") :
+  const root = kind === "log" ? resolve(feature.runtimeDir ?? snapshot.repository.stateDir, "logs") :
     feature.state?.delegated?.resources.worktreeRoot ??
     resolve(feature.state?.planningRoot ?? snapshot.repository.root, ".openspec-runner", "worktrees");
   return { path, root, stale: snapshot.sources[feature.id]?.stale === true,

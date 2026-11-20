@@ -1,5 +1,7 @@
 # Team workflow: operator reference
 
+For new multi-code-repository features, start with the [version-2 Store-only workflow](store-only-workflow.md). This reference's existing v1 examples retain code-local component planning. V2 uses the same consent and handoff protocol with Store planning roots and explicit execution scope; do not copy OpenSpec artifacts into code repositories.
+
 See [delivery summary commands](delivery-summary-guide.md) for shared inspection, refresh, publication, export and requested presentation briefs.
 
 This reference is for agents and operators who run the CLI directly.

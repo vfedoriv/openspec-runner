@@ -3,6 +3,16 @@ name: openspec-runner-review
 description: Review a managed OpenSpec feature in an assigned fresh reviewer checkout and submit structured findings without changing implementation or planning artifacts.
 ---
 
+## Store-backed assignments (version 2)
+
+When the assignment has `planningSource.kind: store`, the approved component project is `Store/components/<component>/openspec` at the pinned Store revision. The code base is a separate code-repository commit. Read the immutable snapshot paths and absolute bundled `SKILL.md` path supplied by the runner; no skill installation or `openspec/` setup in the code repository is required.
+
+Keep all plans, `runner.yaml`, `execution.yaml`, progress, reports, protected context and archives in the Store. Never copy them into code worktrees. Run the exact supplied worker/begin/report commands with `--store STORE --feature FEATURE --component COMPONENT --assignment ASSIGNMENT`; do not drop these flags. For manual orchestration, use the same scope on `status`, `launch`, `integrate`, `feature review`, and `feature fix`.
+
+Worker commits contain implementation and tests. Store-mode integration records successful task evidence in the Store runtime without checking a code-local task file. Coordinator acceptance independently verifies the code and atomically updates canonical component task checkboxes in the Store. Shared milestones follow recorded deliveries/final review. Components export receipts; only the coordinator approves shared completion and archives Store projects. The ordinary single-repository workflow retains local OpenSpec files and its existing checkbox integration.
+
+
+
 Require the change, attempt, review base, reviewed head, fingerprint, and exact begin/report commands in the runner prompt. Begin in the assigned checkout using that command. Codex uses its actual CODEX_THREAD_ID; Claude uses the supplied reserved session UUID. Stop if registration fails.
 
 Read the approved proposal, specs, design, and tasks. Review the entire base-to-head feature diff and relevant surrounding code against its acceptance criteria. Read implementation verification evidence from runner status/reports when useful and run appropriate checks. Do not edit tracked files, commit, revise the plan, integrate, or archive. Keep generated output outside the tracked tree or in ignored build paths.
@@ -13,6 +23,6 @@ Submit outcome completed with a findings array (empty when clear), the exact hea
 
 Write the report at the runner-supplied external path, submit using its exact report command, and end immediately after acceptance. The supervising process records exit; an accepted report alone does not establish a finished review. Do not close terminals, kill processes, delete worktrees, or resolve your own report by editing code.
 
-For the `copilot` or `copilot-vscode` harness, use the runner-provided begin/report commands in the assigned worktree. `begin` resolves the actual hook-confirmed root session; use the returned session in the report and never use CODEX_THREAD_ID or invent a session ID. Require an explicit model recognized by the selected Copilot surface, omit effort, and do not translate model selectors between CLI and editor. A requested model is not observed model evidence. Invoke installed skills with `/openspec-runner-NAME`.
+For the `copilot` or `copilot-vscode` harness, use the runner-provided begin/report commands in the assigned worktree. `begin` resolves the actual hook-confirmed root session; use the returned session in the report and never use CODEX_THREAD_ID or invent a session ID. Require an explicit model recognized by the selected Copilot surface, omit effort, and do not translate model selectors between CLI and editor. A requested model is not observed model evidence. For ordinary local installations, invoke installed skills with `/openspec-runner-NAME`; Store-backed assignments use the supplied absolute bundled skill paths.
 
 Copilot completion requires matching native hook ownership and an accepted report followed by root stop evidence. CLI additionally requires successful supervised process exit. VS Code records agent-turn completion while the editor window may remain open; launcher exit alone never completes a worker. If hook delivery, supervisor recovery, or editor liveness is uncertain, retain resources and inspect the saved chat rather than redispatching. Editor attach identifies the worktree and saved chat without claiming exact chat resume. Existing approval, report, delegation, verification, and archival boundaries still apply.

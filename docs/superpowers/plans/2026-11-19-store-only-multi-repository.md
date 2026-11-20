@@ -82,14 +82,16 @@ The local knowledge graph corroborates the plan-loading call chain but was index
 
 **Verification:** Build passed; Store archival and compatibility suites: 48 tests, 27 passed, 21 platform skips, no failures (2026-11-19).
 
-### 6. Expose both workflows and prove the complete scenario — in progress
+### 6. Expose both workflows and prove the complete scenario — completed
 
 **Files:** `src/cli.ts`, `src/linked-cli.ts`, `src/doctor.ts`, `src/execution-settings.ts`, `src/dashboard-reader.ts`, dashboard action/collector modules, `src/summary-evidence.ts`, `src/summary-shared.ts`, `docs/examples/linked-feature-inputs.mjs`, relevant runner skills, `README.md`, team guides; create `test/store-only-multi-repo.test.mjs` and extend existing CLI/dashboard/summary tests.
 
-- [ ] Add explicit Store setup via `init --store CHECKOUT --file MANIFEST` to create configuration only in declared Store roots. Pass `--store`, feature, and component identity through Store-backed component execution and generated worker commands. Keep existing local commands unchanged; snapshots/settings changes remain subject to existing approval rules.
-- [ ] Make doctor, dashboard, summaries, and action previews resolve the same planning/runtime context. Report the Store plan and mapped code repository separately; absence of code-local OpenSpec configuration is valid in Store mode. Update skills and the checked example builder with both workflows and migration guidance.
-- [ ] Add a four-repository CLI acceptance fixture: one Store and three initially OpenSpec-free code repos. Cover approval, independent and dependent assignments, implementation, repair/review, receipt exchange, acceptance, combined checks, all three deliveries, final consent, and Store-only archival. Repeat with an independent machine/clone map; assert no OpenSpec artifacts or runner setup appear in code worktrees and code commits contain implementation changes only.
-- [ ] Verify previews with `--dry-run --json` leave all four repositories/runtime trees unchanged; assert status/summary reconstruction from synchronized Store records and retrieved code commits. Run `pnpm test` and `pnpm pack --dry-run` before submission.
+- [x] Add explicit Store setup via `init --store CHECKOUT --file MANIFEST` to create configuration only in declared Store roots. Pass `--store`, feature, and component identity through Store-backed component execution and generated worker commands. Keep existing local commands unchanged; snapshots/settings changes remain subject to existing approval rules.
+- [x] Make doctor, dashboard, summaries, and action previews resolve the same planning/runtime context. Report the Store plan and mapped code repository separately; absence of code-local OpenSpec configuration is valid in Store mode. Update skills and the checked example builder with both workflows and migration guidance.
+- [x] Add a four-repository CLI acceptance fixture: one Store and three initially OpenSpec-free code repos. Cover approval, independent and dependent assignments, implementation, repair/review, receipt exchange, acceptance, combined checks, all three deliveries, final consent, and Store-only archival. Repeat with an independent machine/clone map; assert no OpenSpec artifacts or runner setup appear in code worktrees and code commits contain implementation changes only.
+- [x] Verify previews with `--dry-run --json` leave all four repositories/runtime trees unchanged; assert status/summary reconstruction from synchronized Store records and retrieved code commits. Run `pnpm test` and `pnpm pack --dry-run` before submission.
+
+**Verification:** `pnpm with current test` passed: 515 tests, 391 passed, 124 platform/opt-in skips, no failures. The four-repository Store lifecycle, independent clone map and Store-only archival passed. `pnpm with current pack --dry-run --json` passed. Installed pnpm was selected without changing the pinned package manager or dependencies (2026-11-20).
 
 ## Review focus / completion criteria
 

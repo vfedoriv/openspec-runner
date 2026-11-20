@@ -11,6 +11,7 @@ import { CoordinationStore, decodeManifest, decodeRecord, type ArchiveScope, typ
 import { resolveContext } from "./openspec-context.js";
 import { git, json, repository } from "./system.js";
 import type { MergeInput } from "./coordination-delivery.js";
+import { resolveBoundExecutionContext } from "./execution-context.js";
 
 export const linkedHelp = `coordination <action> <feature> --store CHECKOUT --map MAP [--json]
   init --file MANIFEST | status [--revision SHA]
@@ -33,7 +34,7 @@ export const linkedHelp = `coordination <action> <feature> --store CHECKOUT --ma
   init requires --operation ID; imported receipts keep their own IDs.
   Snapshot mutations require --confirm TOKEN from the matching --dry-run preview.
   --dry-run never writes records, runs checks, or creates checkouts.
-component <action> <feature> --store CHECKOUT --repository ID [--json]
+component <action> <feature> --store CHECKOUT --repository ID [--component ID] [--json]
   inspect | import --assignment ID --owner LABEL [--file RESOURCES]
   status --change CHANGE [--revision SHA]
   retire --change CHANGE --assignment ID --owner LABEL --reason TEXT
@@ -43,6 +44,7 @@ component <action> <feature> --store CHECKOUT --repository ID [--json]
   import/export accept --dry-run; real import/export require --expected-head SHA
   and --confirm TOKEN. --root CHECKOUT selects the local implementation checkout.
 Store checkout paths and machine maps are local; manifest storeId selects OpenSpec.
+Store-only v2 guide: ${fileURLToPath(new URL("../docs/store-only-workflow.md", import.meta.url))}
 Workflow guide: ${fileURLToPath(new URL("../docs/team-workflow.md", import.meta.url))}
 Input builder: ${fileURLToPath(new URL("../docs/examples/linked-feature-inputs.mjs", import.meta.url))}
 `;
@@ -120,7 +122,7 @@ export async function linkedCommand(args: string[]): Promise<unknown> {
   const v = parsed.values as Values, [family, action, featureId] = parsed.positionals;
   if (v.help) return { help: linkedHelp };
   if (parsed.positionals.length !== 3 || !actions[family]?.[action]) throw new Error(`Use ${family} <action> <feature>; see --help`);
-  const common = ["store", "json", "dry-run", "help", ...(family === "coordination" ? ["map"] : ["repository", "root"])];
+  const common = ["store", "json", "dry-run", "help", ...(family === "coordination" ? ["map"] : ["repository", "root", "component"])];
   const allowed = new Set([...common, ...actions[family][action]]), seen = new Set<string>();
   for (const token of parsed.tokens ?? []) if (token.kind === "option") {
     if (!allowed.has(token.name)) throw new Error(`--${token.name} is not supported for ${family} ${action}`);
@@ -133,11 +135,27 @@ export async function linkedCommand(args: string[]): Promise<unknown> {
   const storeRoot = repository(resolve(value(v, "store"))).root;
   const envelope = { version: 1, command: family, action, featureId, dryRun, planningRoot: storeRoot };
   if (family === "component") {
-    const component = new Component({ root: resolve(optional(v, "root") ?? process.cwd()), repository: value(v, "repository") });
+    const root = resolve(optional(v, "root") ?? process.cwd()), repositoryId = value(v, "repository");
+    let execution;
+    if (!["inspect", "import"].includes(action)) {
+      let componentId = optional(v, "component");
+      if (!componentId) {
+        const manifest = new CoordinationStore({ root: storeRoot, featureId }).readManifest({ revision: optional(v, "revision") });
+        if (manifest.version === 2) {
+          const matches = Object.entries(manifest.components).filter(([, component]) => component.repository === repositoryId && component.change === value(v, "change"));
+          if (matches.length !== 1) throw new Error("Specify --component for the selected Store assignment");
+          componentId = matches[0][0];
+        }
+      }
+      if (componentId) execution = resolveBoundExecutionContext({ implementationRoot: root, storeRoot, featureId, componentId,
+        change: value(v, "change"), assignmentId: optional(v, "assignment") });
+    }
+    const component = new Component({ root, repository: repositoryId, execution });
     let result: any;
     if (action === "inspect" || action === "import") {
       const input = { storeRoot, featureId, assignmentId: value(v, "assignment"), owner: value(v, "owner"), ...(v.file ? { resources: file<Partial<ComponentResources>>(v) } : {}),
         ...(action === "import" && !dryRun ? { historyRevision: head(v) } : v.revision ? { historyRevision: value(v, "revision") } : {}) };
+      if (v.component && component.assignmentContext(input).assignment.componentId !== v.component) throw new Error("Assignment differs from explicit --component");
       result = action === "import" && !dryRun ? await component.import({ ...input, token: value(v, "confirm") }) : await component.inspect(input);
     } else {
       const change = value(v, "change"), binding = component.readBinding({ change });
