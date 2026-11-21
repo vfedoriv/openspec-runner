@@ -360,3 +360,35 @@ test("action menus project known worktree availability without consulting filesy
   delete s.sessions[0].worktreeAvailable;
   assert.match(actionsFor(s, "session").find(a => a.kind === "diff").reason, /unknown/);
 });
+
+test("mutation child ignores cancellation after its readiness marker", async t => {
+  const root = mkdtempSync(join(tmpdir(), "dashboard-mutation-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const ready = join(root,"ready"), release = join(root,"release");
+  const controller = new AbortController();
+  const source = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},'ready');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);console.log('mutation completed');}},10);`;
+  const pending = runnerModule.dashboardChild(process.execPath,["-e",source],root,controller.signal,true);
+  const deadline = Date.now()+3000;
+  while(!existsSync(ready)&&Date.now()<deadline) await new Promise(r=>setTimeout(r,10));
+  assert.equal(existsSync(ready),true);
+  controller.abort();
+  writeFileSync(release,"go");
+  assert.match((await pending).stdout,/mutation completed/);
+});
+
+test("successful helper retains its intentional background owner", { skip: process.platform !== "linux" }, async t => {
+  const { observeProcess, processIsGone } = await import("../dist/platform-process.js");
+  const root = mkdtempSync(join(tmpdir(),"dashboard-owner-")), marker=join(root,"owner");
+  let identity;
+  t.after(()=>{
+    if(identity && observeProcess(identity.pid)?.createdAt===identity.createdAt) {try{process.kill(identity.pid,"SIGKILL");}catch{}}
+    rmSync(root,{recursive:true,force:true});
+  });
+  const owner = `require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000);`;
+  const source = `const {spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e',${JSON.stringify(owner)}],{stdio:'ignore'});child.unref();const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){clearInterval(timer);console.log('copied');}},10);`;
+  const result = await runnerModule.dashboardChild(process.execPath,["-e",source],root,new AbortController().signal);
+  identity = observeProcess(Number(readFileSync(marker,"utf8")));
+  assert.match(result.stdout,/copied/);
+  assert.ok(identity,"successful helper's clipboard-style background owner must remain alive");
+  assert.equal(processIsGone(identity.pid),false);
+});

@@ -33,7 +33,7 @@ export async function copyDashboardSettings(json: string, root: string, signal: 
 }
 
 /** Async child boundary: no shell, independent streams, bounded bytes and complete cleanup. */
-export function dashboardChild(command: string, argv: string[], cwd: string, signal: AbortSignal, mutation = false, stdin?: Buffer): Promise<{ stdout: string; stderr: string }> {
+export function dashboardChild(command: string, argv: string[], cwd: string, signal: AbortSignal, mutation = false, stdin?: Buffer, rawStdout = false): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(new Error("Action cancelled")); return; }
     const grouped = process.platform !== "win32";
@@ -47,6 +47,7 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     let bytes = 0, failure: Error | undefined, identity: string | undefined;
     let stopping: Promise<void> | undefined;
+    let forceTimer: ReturnType<typeof setTimeout> | undefined;
     child.once("spawn", () => { if (!grouped) identity = observeProcess(child.pid!)?.createdAt; });
     const stop = (reason: string) => {
       failure ??= new Error(reason);
@@ -61,13 +62,18 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
         })();
         return;
       }
-      try { if (grouped && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); }
-      catch { child.kill("SIGKILL"); }
+      if (forceTimer) return;
+      try { if (child.pid) process.kill(-child.pid, "SIGTERM"); }
+      catch { child.kill("SIGTERM"); }
+      forceTimer = setTimeout(() => {
+        try { if (child.pid) process.kill(-child.pid, "SIGKILL"); }
+        catch { child.kill("SIGKILL"); }
+      }, 1000);
     };
     const abort = () => stop("Action cancelled");
     const timer = mutation ? undefined : setTimeout(() => stop("Action timed out after 30 seconds"), 30_000);
     if (!mutation) signal.addEventListener("abort", abort, { once: true });
-    const cleanup = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); };
+    const cleanup = () => { clearTimeout(forceTimer); clearTimeout(timer); signal.removeEventListener("abort", abort); };
     const collect = (chunks: Buffer[]) => (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > 1024 * 1024) { if (!mutation) stop("Action output exceeded 1 MiB"); }
@@ -77,10 +83,24 @@ export function dashboardChild(command: string, argv: string[], cwd: string, sig
     child.once("error", error => { cleanup(); reject(error); });
     child.once("close", async code => {
       await stopping;
+      // A failed root can exit while a transport descendant is still alive.
+      // Successful helpers may intentionally retain descendants (clipboard owners).
+      if (!mutation && (failure || code !== 0) && grouped && child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* Owned group already gone. */ }
+      }
       cleanup();
-      const out = sanitize(Buffer.concat(stdout).toString("utf8")), err = sanitize(Buffer.concat(stderr).toString("utf8"));
+      // Protocol consumers must validate exact bytes before displaying parsed fields.
+      let text: string;
+      try {
+        const bytes = Buffer.concat(stdout);
+        text = rawStdout ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) : bytes.toString("utf8");
+      } catch {
+        reject(failure ?? new Error("Action stdout is not valid UTF-8"));
+        return;
+      }
+      const out = rawStdout ? text : sanitize(text), err = sanitize(Buffer.concat(stderr).toString("utf8"));
       if (failure) reject(failure);
-      else if (code !== 0) reject(new Error(`Action failed (${code}): ${err || out}`));
+      else if (code !== 0) reject(new Error(`Action failed (${code}): ${err || sanitize(out)}`));
       else resolve({ stdout: out, stderr: err + (bytes > 1024 * 1024 ? "\nOutput truncated" : "") });
     });
   });

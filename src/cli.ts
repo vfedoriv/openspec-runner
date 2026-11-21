@@ -352,7 +352,22 @@ export async function main(args = process.argv.slice(2)) {
         }
       }
       const adapter = getHarness(v.agent ?? defaultAgent ?? "codex");
-      if (v.catalog) result = await modelCatalog(adapter.id, catalogCwd, configured?.agents[adapter.id]?.defaultModel);
+      if (v.catalog) {
+        let interrupted: number | undefined;
+        const sigint = () => { interrupted ??= 130; }, sigterm = () => { interrupted ??= 143; };
+        // Own only this read-only catalog request, never mutation commands.
+        process.on("SIGINT", sigint); process.on("SIGTERM", sigterm);
+        try {
+          const catalog = await modelCatalog(adapter.id, catalogCwd, configured?.agents[adapter.id]?.defaultModel);
+          result = catalog;
+          if (interrupted) {
+            const uncertain = catalog.reason?.includes("Process termination is uncertain") ? "; process termination is uncertain" : "";
+            throw Object.assign(new Error(`Model catalog interrupted${uncertain}`), { exitCode: interrupted });
+          }
+        } finally {
+          process.removeListener("SIGINT", sigint); process.removeListener("SIGTERM", sigterm);
+        }
+      }
       else {
         const discovered = await adapter.models();
         result = v.agent || configuredVersion === 2
@@ -591,6 +606,6 @@ export async function main(args = process.argv.slice(2)) {
     console.error(
       jsonOutput ? JSON.stringify({ error: e.message }) : `Error: ${e.message}`,
     );
-    process.exitCode = 1;
+    process.exitCode = e.exitCode === 130 || e.exitCode === 143 ? e.exitCode : 1;
   }
 }

@@ -18,7 +18,18 @@ Start with the guide for the workflow you want to use.
 | [Expanded live acceptance](LIVE_ACCEPTANCE_2026-11-04.md) | Maintainers checking real lifecycle evidence | 2026-11-04 results and remaining scope |
 | [Startup readiness verification](WORKER_STARTUP_VERIFICATION.md) | Maintainers checking worker dispatch ordering | Fast-child tests and native CLI acceptance |
 | [Shared recovery verification](SHARED_RECOVERY_VERIFICATION.md) | Maintainers checking assignment retirement and nested Store archives | Retained evidence, interruption/race tests and exact archive scope |
-| [Maintenance priorities](maintenance-priorities.md) | Maintainers choosing the next fixes | Remaining work after the 2026-11-04 recovery changes |
+| [Maintenance priorities](maintenance-priorities.md) | Maintainers choosing the next fixes | Current required gates and deferred work |
+
+## Verification maintenance
+
+- [Dated acceptance evidence](verification/2026-11-21-acceptance.md)
+- [Scenario acceptance matrix](ACCEPTANCE_MATRIX.md)
+- [Current coverage plan](superpowers/plans/2026-11-20-verification-coverage.md)
+- [Model discovery and dashboard assignment evidence](MODEL_DISCOVERY_VERIFICATION.md)
+
+The November 14 mixed checklist was replaced by these documents. Historical
+records retain their original measured scope; later evidence is linked where it
+supersedes an older pending status.
 
 ## Start here
 

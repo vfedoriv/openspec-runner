@@ -1,5 +1,26 @@
 # Copilot worker verification
 
+## Current scoped update — 2026-11-21
+
+Native Linux normal-PATH prompt-free discovery and readiness-synchronized
+top-level SIGINT cleanup now PASS; prior path/leak failures remain historical
+in [model discovery evidence](MODEL_DISCOVERY_VERIFICATION.md). The SDK catalog
+exposed only `auto`; non-auto picker/worker parity is BLOCKED, effective model/effort
+is not inferred, and runner effort remains unsupported.
+
+Current catalog recheck is compatibility BLOCKED: ambient CLI1.0.114 protocol4
+versus pinned SDK1.0.34 protocol3, rejected at client.start before listModels.
+This does not establish authentication failure. Earlier CLI1.0.112 catalog and
+CLI1.0.114 worker/archive passes remain independently scoped. No upgrade was
+performed; compatible versions and prompt-free recheck remain required.
+
+Fresh Git/manual `auto` worker session/report/real-exit/integration, exact active
+attach command, report-before-exit rejection and separate cancellation/positive
+archive checks are recorded in the [scenario matrix](ACCEPTANCE_MATRIX.md).
+A separate genuine blocking-review → repair → fresh review → explicit archive also PASS, with exact tracked greeting/policy bytes at repaired integration and archive heads. The observed Linux SIGSTOP-supervisor-before-root-stop then SIGKILL case safely retained failed/null exit/no completion and rejected integration/cleanup; end-to-end retry is BLOCKED by the intentional stale-launcher ownership guard. No recovery PASS or bypass follows. Native Windows reruns and unavailable real-terminal/editor interaction remain BLOCKED independently. Optional discovery bridge is DEFERRED. Installed CLI versions varied between runs; each receipt records its own version.
+
+
+
 Copilot CLI and VS Code Copilot are distinct harnesses: `copilot` and
 `copilot-vscode`. Both execute implementation, review, and repair workers.
 Use a supported runner host, including native Windows with Git/manual resources
@@ -92,8 +113,11 @@ launch previews, implementation/review/repair, integration, and interrupted
 supervisor recovery for the editor. This is the historical pre-smoke automated
 record; the later authenticated results above supersede its live-testing status.
 
-Full CLI/editor acceptance, including cancellation and recovery, remains
-**pending**. The production startup correction uses `--trust-folder -p PROMPT`
+The full CLI/editor matrix remains **incomplete**. Cancellation and interrupted-
+supervisor recovery have specific live passes in the expanded record above;
+these do not establish every host/backend combination. The checklist below is
+a repeatable per-environment procedure, not a claim that every item is untested.
+Track outstanding cases in the [coverage plan](superpowers/plans/2026-11-20-verification-coverage.md). The production startup correction uses `--trust-folder -p PROMPT`
 without a reserved session ID; trust applies only to the new invocation and does
 not grant tool permissions. Existing reserved attempts require an explicit fresh
 retry after inspection. Attachment uses `--resume` with the observed session ID.
@@ -120,8 +144,8 @@ hook schema, requested model, and any independently observed model evidence.
 - [ ] Repeat with a managed reviewer, a blocking finding, a repair worker, and
   a fresh reviewer. Confirm the existing final user approval remains required.
 - Not applicable to the current shared-record contract: Copilot assignments are
-  rejected by its Codex/Claude-only validator, and native Windows delegation is
-  excluded. Test delegated Copilot execution only after that contract is extended.
+  rejected by its Codex/Claude-only validator. Native Windows delegation is
+  verified only for Codex/Claude with Git/manual resources, not Copilot. Test delegated Copilot execution only after that contract is extended.
 - [ ] Disable hooks or cancel a worker. Confirm no result integrates and the
   saved worktree/log/session remain available for inspection.
 - [ ] Interrupt the editor supervisor. Retry/cleanup must retain uncertain

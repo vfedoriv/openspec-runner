@@ -18,7 +18,7 @@ Copilot CLI also execute a managed feature reviewer. Final approval is not recor
 | Claude Code | 2.1.312 | `claude-haiku-5-5` | Implementation, verification, commit, accepted report, supervised exit, integration, and review passed. Observed model matches the request. |
 | Codex | 0.165.0 | `gpt-6-luna`, low effort | Passed implementation, verification, commit, accepted report, supervised exit, integration, and independent managed review through the corrected production launcher. |
 | Copilot CLI | 1.0.105 | `auto` | Implementation, verification, commit, accepted report, root stop, supervised exit, integration, and review passed with the diagnostic launch changes below. |
-| VS Code Copilot | VS Code 1.144.0; bundled Copilot Chat 0.72.0 | `Auto (copilot)` | Passed implementation, verification, commit, report, root stop, supervisor completion, and integration through the corrected production launcher. Runtime events confirm the exact generated worker agent and GPT-6 Luna tool calls. Real managed review remains pending. |
+| VS Code Copilot | VS Code 1.144.0; bundled Copilot Chat 0.72.0 | `Auto (copilot)` | Passed implementation, verification, commit, report, root stop, supervisor completion, and integration through the corrected production launcher. Runtime events confirm the exact generated worker agent and GPT-6 Luna tool calls. Managed review was pending at this stage; the [expanded November 4 record](LIVE_ACCEPTANCE_2026-11-04.md) later verified it. |
 
 Copilot's authenticated model picker offers only automatic routing for this
 account's Free plan. Explicit Luna and Haiku identifiers were rejected before

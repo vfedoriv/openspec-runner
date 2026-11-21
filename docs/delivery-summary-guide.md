@@ -1,5 +1,16 @@
 # Delivery summaries and presentations
 
+## Provider verification scope — 2026-11-21
+
+Deterministic brief and CLI handoff tests pass15/15, including malformed provider
+configuration, optional version, config-relative paths, missing/directory/symlink
+providers, asset references, source digest, narrative validation and fallback.
+The executable fixture marker proves provider configuration is read without
+invoking the provider. No production change was needed. Real provider outline,
+deck rendering and export compatibility remain BLOCKED/unverified; no provider
+was installed or executed. Optional editor discovery bridge remains DEFERRED.
+
+
 The runner automatically saves a basic summary after task integration, satisfaction
 of an unmanaged batch, managed feature completion, completed component receipt
 export, and shared feature completion. A coordinating agent then uses the installed

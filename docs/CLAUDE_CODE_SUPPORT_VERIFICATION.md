@@ -1,5 +1,27 @@
 # Claude Code live acceptance testing
 
+## Current scoped update — 2026-11-21
+
+Fresh native Linux Git/manual Claude2.1.329 `sonnet` workers with omitted and
+explicit-low effort passed matching session, accepted report, committed result,
+real supervisor exit0 and integration checks. Active resume command identity and
+report-before-exit integration rejection were observed in the explicit-low run.
+These are narrower than real-terminal detach/reattach and independently observed
+effective effort (still null/unverified). A later intentional blocked report →
+explicit new-attempt retry and invalid-model diagnostic are recorded separately
+in the [scenario matrix](ACCEPTANCE_MATRIX.md). A controlled child PATH with Codex absent also passed a fresh worker lifecycle.
+Child-isolated authentication rejection also PASS: exit1, no report, unchanged
+integration head and integration blocked (`/tmp/runner-claude-auth-7OhJHx`;
+see [durable acceptance evidence](verification/2026-11-21-acceptance.md)). Planner rationale PASS with actual versioned rules/catalog: routine Sonnet/H2 and durable concurrency/recovery Opus/H4, intentionally omitted effort. Full backend coverage remains OPEN; real-terminal detach/reattach remains BLOCKED.
+A fresh gates run observed both integration and cleanup rejection before real exit;
+that gate is now VERIFIED in the dated evidence.
+
+Prompt-free Claude2.1.329 root/actual-worker catalogs matched; historical
+SDK0.3.325 mismatch cause remains OPEN. Check the [model evidence](MODEL_DISCOVERY_VERIFICATION.md)
+and matrix for per-run versions/receipts. Checklist boxes below retain their
+historical scope; compound assertions remain unchecked where any gate is unrun.
+
+
 Status: the full checklist remains pending. A narrower authenticated Windows
 implementation, integration, and managed review passed; see the
 [real Windows acceptance record](REAL_WINDOWS_HARNESS_ACCEPTANCE.md).
@@ -34,8 +56,8 @@ Run these checks against an installed, authenticated Claude Code CLI in a dispos
 
 - [x] Exercise a denied permission and confirm actionable diagnostics and durable attempt state.
 - [ ] Exercise an unsuccessful worker report and an interrupted worker. Inspect each attempt and explicitly retry; verify there is no automatic resubmission.
-- [ ] Verify authentication and invalid-model failures produce actionable diagnostics without a successful task outcome.
-- [ ] Confirm integration and cleanup remain blocked until actual process exit is established, including when a report was already accepted.
+- [x] Verify authentication and invalid-model failures produce actionable diagnostics without a successful task outcome. Fresh Linux isolated cases are recorded in the dated acceptance evidence.
+- [x] Confirm integration and cleanup remain blocked until actual process exit is established, including when a report was already accepted. Fresh Linux gates run observed both rejections in the actual report-before-exit window.
 
 ## Optional cross-harness checks
 

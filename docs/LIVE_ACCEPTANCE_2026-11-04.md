@@ -110,10 +110,20 @@ was incomplete (missing `yoga-layout`); it was replaced with an isolated
 suite. No dependency or global-tool changes were made to this repository. The
 Linux copy and logs remain at `/tmp/openspec-live-linux.M3AIzw` in that WSL distro.
 
-## Remaining scope
+## Historical scope and later evidence
+
+The exclusions below describe these November 4 runs. Later native Windows
+[Codex acceptance](live-acceptance-guide.md#native-windows-run-on-2026-11-07)
+passed credential failure, automated exact-session resume, and final approval
+through archive. [Windows delegated acceptance](windows-delegation-guide.md#native-acceptance-on-2026-11-07)
+passed Codex/Claude with Git/manual resources. Interactive token recall and the
+full harness/backend matrix remain open. The [current backlog](maintenance-priorities.md)
+is authoritative for remaining work.
+
+## Scope of the November 4 runs
 
 These runs do not establish every harness/backend permutation, live interactive
 exact-session resume, authentication-failure handling, or clean final approval
-and archival. Windows delegated execution and shared Copilot assignments remain
-excluded by the [current contracts](DOCUMENTED_LIMITS.md#7-delegated-execution-has-narrower-support-than-local-workers).
+and archival. At that stage Windows delegated execution was excluded; shared Copilot assignments
+remain excluded by the [current contracts](DOCUMENTED_LIMITS.md#7-delegated-execution-has-narrower-support-than-local-workers).
 Do not treat the broader checklist as fully passed solely because these cases passed.

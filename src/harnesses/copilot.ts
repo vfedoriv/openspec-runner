@@ -1,9 +1,26 @@
 import { run } from "../system.js";
-import { dirname, resolve } from "node:path";
+import { accessSync, constants, statSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCommand } from "../platform-command.js";
 import { copilotRules, copilotRulesFile, resolveCopilotSettings } from "./copilot-settings.js";
 import type { HarnessAdapter, HarnessCapabilities } from "./types.js";
+
+// The SDK checks this path directly, rather than resolving a command through PATH.
+function copilotExecutable(cwd: string): string {
+  const command = resolveCommand({ executable: "copilot", args: [], cwd });
+  if (command.args.length) throw new Error("The SDK requires a directly executable Copilot CLI");
+  const candidates = isAbsolute(command.executable) ? [command.executable]
+    : (command.env.PATH ?? "").split(delimiter).map(directory => resolve(cwd, directory, command.executable));
+  for (const candidate of candidates) {
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch { /* Continue searching PATH for a usable executable. */ }
+  }
+  throw new Error("Copilot executable not found on PATH");
+}
 
 export async function copilotCapabilities(cwd = process.cwd()): Promise<HarnessCapabilities> {
   const features = { supervisedExecution: true, sessionOwnership: true, workerReports: true, inspection: true, callingSessionInheritance: false, modelDiscovery: false, exactResume: false, effort: false };
@@ -20,18 +37,27 @@ export const copilotHarness: HarnessAdapter = {
   async models(options) {
     const fallback = "Choose a selector from /model in your authenticated Copilot CLI";
     if (!options?.discover) return { harness: "copilot", status: "unavailable", exhaustive: false, reason: fallback };
+    const cancellation = new AbortController();
+    let interrupted: number | undefined;
+    const interrupt = (code: number) => { interrupted ??= code; cancellation.abort(); };
+    const sigint = () => interrupt(130), sigterm = () => interrupt(143);
+    process.on("SIGINT", sigint); process.on("SIGTERM", sigterm);
     try {
       const cwd = options.cwd ?? process.cwd();
-      const command = resolveCommand({ executable: "copilot", args: [], cwd });
-      if (command.args.length) throw new Error("The SDK requires a directly executable Copilot CLI");
+      const executable = copilotExecutable(cwd);
       const probe = fileURLToPath(new URL("./copilot-model-probe.js", import.meta.url));
       const { dashboardChild } = await import("../dashboard-action-runner.js");
-      const result = await dashboardChild(process.execPath, [probe, command.executable], cwd, AbortSignal.timeout(15_000));
+      const result = await dashboardChild(process.execPath, [probe, executable], cwd, AbortSignal.any([cancellation.signal, AbortSignal.timeout(15_000)]), false, undefined, true);
       const models: unknown = JSON.parse(result.stdout);
       if (!Array.isArray(models)) throw new Error("Unexpected Copilot catalog response");
       return { harness: "copilot", status: "available", exhaustive: false, models };
-    } catch {
-      return { harness: "copilot", status: "unavailable", exhaustive: false, reason: `Copilot catalog unavailable. ${fallback}.` };
+    } catch (error) {
+      const uncertain = error instanceof Error && error.message.includes("process termination is uncertain")
+        ? " Process termination is uncertain; inspect the discovery processes before retrying." : "";
+      if (interrupted) throw Object.assign(new Error(`Copilot catalog interrupted.${uncertain}`), { exitCode: interrupted });
+      return { harness: "copilot", status: "unavailable", exhaustive: false, reason: `Copilot catalog unavailable.${uncertain} ${fallback}.` };
+    } finally {
+      process.removeListener("SIGINT", sigint); process.removeListener("SIGTERM", sigterm);
     }
   },
   initialInvocation(settings, cwd, common, prompt) {

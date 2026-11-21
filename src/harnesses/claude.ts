@@ -216,15 +216,16 @@ export async function claudeModels(options?: { discover?: boolean; cwd?: string 
       const request = { type: "control_request", request_id: "catalog", request: { subtype: "initialize" } };
       const { stdout } = await dashboardChild("claude", [
         "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence",
-      ], options.cwd ?? process.cwd(), AbortSignal.timeout(15_000), false, Buffer.from(JSON.stringify(request) + "\n"));
-      for (const line of stdout.split("\n").filter(Boolean)) {
-        const message = JSON.parse(line);
+      ], options.cwd ?? process.cwd(), AbortSignal.timeout(15_000), false, Buffer.from(JSON.stringify(request) + "\n"), true);
+      // Validate the complete JSONL stream before trusting any successful response.
+      const messages = stdout.split("\n").filter(Boolean).map(line => JSON.parse(line));
+      for (const message of messages) {
         const response = message.type === "control_response" ? message.response : undefined;
         if (response?.request_id !== request.request_id || response.subtype !== "success") continue;
         const entries: unknown = response.response?.models;
         if (!Array.isArray(entries) || !entries.length) break;
-        const models = entries.flatMap(row => row && typeof row.value === "string" ? [{
-          model: row.value, displayName: row.displayName,
+        const models = entries.flatMap(row => row && typeof row.value === "string" && row.value.trim() && !/[\x00-\x1f\x7f]/.test(row.value) ? [{
+          model: row.value, displayName: row.displayName, ...(row.hidden === true ? { hidden: true } : {}),
           supportedReasoningEfforts: row.supportsEffort === false ? [] : row.supportedEffortLevels,
         }] : []);
         if (models.length) return { harness: "claude", status: "available", exhaustive: false, models };

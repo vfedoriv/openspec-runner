@@ -23,8 +23,10 @@ asynchronous inspection, import between mutation locks, and late reports during
 interrupted retirement. The three import/report review findings were reproduced
 with failing tests before their mutation gates were added.
 
-This does not enable native Windows delegated execution; its protected-context
-work remains deferred. Existing bindings remain readable. Local retirement adds
+This recovery stage did not enable native Windows delegated execution. Later
+[Windows delegated acceptance](windows-delegation-guide.md#native-acceptance-on-2026-11-07)
+verified Codex/Claude with Git/manual resources; other combinations require
+separate evidence. Existing bindings remain readable. Local retirement adds
 new binding phases and a retained journal; earlier runner versions reject these
 phases rather than safely operate the retired state.
 

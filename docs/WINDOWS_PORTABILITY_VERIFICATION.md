@@ -177,7 +177,10 @@ and dedicated runtimes were removed after verification; the original Herdr
 server was confirmed still running, and existing user sessions/settings remain
 intact.
 
-Live acceptance remains pending for each full row above: use separate
+Those historical rows do not describe the later authenticated results in
+[expanded acceptance](LIVE_ACCEPTANCE_2026-11-04.md) and
+[Windows delegation](windows-delegation-guide.md). Full backend-matrix acceptance
+remains incomplete: use separate
 disposable repositories and follow the Claude/Copilot verification guides.
 Record actual sessions, accepted reports, terminal results, acknowledged exits,
 review/repair/final approval, interruption, cancellation, exact resume where

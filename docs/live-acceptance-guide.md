@@ -1,5 +1,17 @@
 # Repeatable Codex acceptance
 
+## Current execution scope — 2026-11-21
+
+The [scenario matrix](ACCEPTANCE_MATRIX.md) separates fresh Linux Claude/Copilot
+Git/manual lifecycle evidence from historical Codex and Windows passes.
+Task6 extracted shared fixtures without changing the existing Codex version-1
+contract. No new interactive Codex token-recall or native Windows run occurred
+in this reconciliation. Those gates remain BLOCKED on the current noninteractive
+Linux host; historical automated resume does not satisfy interactive recall.
+Use each retained receipt's exact CLI/runtime versions; installed versions can
+change externally between runs.
+
+
 Run these checks from a runner source checkout after `pnpm run build`. They use
 the installed Codex and OpenSpec CLIs, Git, and a fresh repository under the
 system temporary directory for each invocation. Use an explicit model your

@@ -1,12 +1,14 @@
 import { delegatedContextTest as test } from "./helpers/native-support.mjs";
 import { test as portableTest } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync, lstatSync } from "node:fs";
 import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
 import { stringify } from "yaml";
 import { coordinationFixture } from "./helpers/coordination-fixture.mjs";
 import { git, executable } from "./helpers/feature-fixture.mjs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { gitHooksPath } from "../dist/platform-paths.js";
 import { collectDashboard } from "../dist/dashboard-reader.js";
 import { repository } from "../dist/system.js";
 import { stableDigest } from "../dist/coordination-state.js";
@@ -204,14 +206,23 @@ test("coordination rejects malformed and mismatched map entries using shared map
 test("coordination snapshot never writes files refs checks or worker tools", t => {
   const f = fixture(t); bind(f);
   const actualGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
+  const evidenceDir = mkdtempSync(join(tmpdir(), "dashboard-history-evidence-"));
+  t.after(() => rmSync(evidenceDir, { recursive: true, force: true }));
+  const evidence = join(evidenceDir, "history.jsonl");
+  const historyArgs = ["-c", `core.hooksPath=${gitHooksPath()}`, "log", "--first-parent", "--full-history",
+    "--diff-merges=first-parent", "--diff-filter=A", "--format=commit %H", "--name-only",
+    git(f.storeRoot, "rev-parse", "HEAD"), "--", "runner/features/feature/approvals"];
   executable(join(f.bin, "git"), `
-const cp = require('node:child_process');
+const cp = require('node:child_process'), fs = require('node:fs');
 const args = process.argv.slice(2), command = args[0] === '-c' ? args[2] : args[0];
-if (!['rev-parse','config','remote','rev-list','ls-tree','cat-file','merge-base'].includes(command) ||
+const historyRead = command === 'log' && JSON.stringify(args) === ${JSON.stringify(JSON.stringify(historyArgs))};
+if ((!historyRead && !['rev-parse','config','remote','rev-list','ls-tree','cat-file','merge-base'].includes(command)) ||
     (command === 'config' && !args.includes('--get')) || (command === 'remote' && !args.includes('get-url'))) {
   console.error('Forbidden Git operation ' + command); process.exit(2);
 }
-process.stdout.write(cp.execFileSync(${JSON.stringify(actualGit)}, args));
+const output = cp.execFileSync(${JSON.stringify(actualGit)}, args);
+if (historyRead) fs.appendFileSync(${JSON.stringify(evidence)}, JSON.stringify(args) + '\\n');
+process.stdout.write(output);
 `);
   for (const tool of ["codex", "claude", "openspec", "wt", "herdr"]) executable(join(f.bin, tool), "throw new Error('Collector called a worker or verification tool');");
   const tree = () => {
@@ -223,7 +234,18 @@ process.stdout.write(cp.execFileSync(${JSON.stringify(actualGit)}, args));
     };
     visit(f.dir); return files;
   };
-  const before = tree(), s = f.collect();
+  const before = tree();
+  for (const extra of [["--output=" + join(f.dir, "forbidden-log-output")], ["--ext-diff", "-p"], ["--textconv", "-p"]]) {
+    const args = [...historyArgs.slice(0, 3), ...extra, ...historyArgs.slice(3)];
+    const rejected = spawnSync(process.execPath, [join(f.bin, "git"), ...args], { cwd: f.storeRoot, encoding: "utf8" });
+    assert.equal(rejected.error, undefined);
+    assert.equal(rejected.status, 2);
+    assert.match(rejected.stderr, /Forbidden Git operation log/);
+  }
+  const s = f.collect();
+  const historyReads = readFileSync(evidence, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.ok(historyReads.length > 0, "collector must read authoritative approval history");
+  for (const args of historyReads) assert.deepEqual(args, historyArgs);
   assert.deepEqual(s.errors, []);
   assert.equal(s.assignments[0].status.phase, "assigned");
   assert.deepEqual(tree(), before);

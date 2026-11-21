@@ -124,3 +124,54 @@ for (const harness of ["codex", "claude", "copilot"]) test(`missing ${harness} e
   assert.match(result.reason, /not found|ENOENT|catalog unavailable/i);
   assert.deepEqual(result.entries.map(row => row.selector), harness === "claude" ? ["haiku", "sonnet", "opus"] : []);
 });
+
+test("unavailable and timed-out catalogs retain saved task, session and approval selectors", async () => {
+  const { catalogEntries } = await import("../dist/dashboard-catalog.js");
+  const snapshot = {
+    tasks: [{ harness: "claude", assignment: { model: "saved-task" } }],
+    sessions: [{ attempt: { agent: "claude", settings: { model: "saved-session" } } }],
+    features: [{ state: { approval: { implementation: { harness: "claude", model: "saved-role" }, review: { harness: "codex", model: "other-harness" } } } }],
+  };
+  for (const read of [async () => { throw Error("Action timed out"); }, async () => ({ harness: "claude", status: "unavailable", entries: [{selector:"configured",source:"configured"}] })]) {
+    const shown = [];
+    await loadPickerCatalog(new Map(), "claude", new AbortController().signal, read, result => shown.push(result));
+    assert.deepEqual(catalogEntries(shown.at(-1), snapshot, "claude").map(row => row.selector), [
+      ...(shown.at(-1) ? ["configured"] : []), "saved-task", "saved-session", "saved-role",
+    ]);
+  }
+});
+
+test("picker UI scopes cached catalogs by both cwd and harness", async () => {
+  const React = await import("react");
+  const { render } = await import("ink");
+  const { PassThrough, Writable } = await import("node:stream");
+  const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const { actionsFor, projectTarget } = await import("../dist/dashboard-actions.js");
+  const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+  const stdout = new Writable({write(_chunk, _encoding, done) {done();}});
+  stdout.isTTY = true; stdout.columns = 120; stdout.rows = 24;
+  const lifetime = new AbortController(), requests = [];
+  const snapshot = root => ({version:1,repository:{root},features:[],tasks:[],sessions:[],assignments:[],attention:[],errors:[],sources:{}});
+  const readCatalog = async (cwd, harness) => {
+    requests.push([cwd,harness]);
+    return {harness,status:"available",scope:cwd,entries:[{selector:`${cwd}-${harness}`,source:"discovered"}]};
+  };
+  const element = root => React.createElement(DashboardUi, {snapshot:snapshot(root),collector:{refresh(){}},lifetime:lifetime.signal,quit(){},readCatalog});
+  const instance = render(element("/first"), {stdin,stdout,stderr:stdout,interactive:true,exitOnCtrlC:false,patchConsole:false});
+  const flush = async () => {await new Promise(resolve=>setTimeout(resolve,50));await instance.waitUntilRenderFlush();};
+  const key = async value => {stdin.write(value);await flush();};
+  try {
+    await flush(); await key("g");
+    const index = actionsFor(snapshot("/first"),projectTarget).findIndex(action=>action.id==="project:models");
+    for(let i=0;i<index;i++) await key("\u001b[B");
+    await key("\r");
+    await key("\u001b[C");
+    await key("\u001b[D");
+    assert.deepEqual(requests, [["/first","codex"],["/first","claude"]]);
+    instance.rerender(element("/second")); await flush();
+    await key("\u001b[C");
+    assert.deepEqual(requests, [["/first","codex"],["/first","claude"],["/second","codex"],["/second","claude"]]);
+    instance.rerender(element("/first")); await flush();
+    assert.equal(requests.length,4,"returning to a fresh cwd/harness cache does not read again");
+  } finally {lifetime.abort();instance.unmount();instance.cleanup();stdin.destroy();}
+});

@@ -4,74 +4,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { init } from "../../dist/cli.js";
 import { Feature } from "../../dist/feature.js";
 import { getHarness } from "../../dist/harnesses/registry.js";
 import { Runner } from "../../dist/runner.js";
 import { git, run, shellCommand } from "../../dist/system.js";
 
-const change = "verify-runner";
-const task = "1.1";
+import { fixture, change, task } from "./acceptance-fixture.mjs";
 const usage = "node test/live/codex-acceptance.mjs <archive|credentials|resume> --model MODEL";
 
-function fixture(root, model) {
-  git(root, "init", "-b", "main");
-  git(root, "config", "user.name", "Runner Acceptance");
-  git(root, "config", "user.email", "runner-acceptance@example.invalid");
-  run("openspec", ["init", "--tools", "none", "--no-animation"], root, 30000);
-  init(root, "codex");
-  const directory = join(root, "openspec", "changes", change);
-  mkdirSync(join(directory, "specs", "greeting"), { recursive: true });
-  const write = (path, content) => writeFileSync(join(directory, path), content);
-  write("proposal.md", `## Why
-Exercise the runner in a disposable checkout.
-
-## What Changes
-- Add a deterministic greeting file.
-
-## Capabilities
-### New Capabilities
-- \`greeting\`: A deterministic greeting fixture.
-
-### Modified Capabilities
-None.
-
-## Impact
-Adds one text file.
-`);
-  write("design.md", `## Context
-A disposable acceptance fixture.
-
-## Goals / Non-Goals
-Verify one deterministic change.
-
-## Decisions
-Store the greeting as plain text.
-
-## Risks / Trade-offs
-The fixture exercises only one task.
-`);
-  write("specs/greeting/spec.md", `## Purpose
-Provide a deterministic greeting for checking the runner's implementation, review, and archive workflow.
-
-## ADDED Requirements
-### Requirement: Greeting file
-The checkout SHALL contain \`greeting.txt\` with the exact bytes HELLO followed by LF.
-
-#### Scenario: Read the greeting
-- **WHEN** \`greeting.txt\` is read
-- **THEN** its contents are \`HELLO\` followed by a single LF
-`);
-  write("tasks.md", "## 1. Greeting\n\n- [ ] 1.1 Create greeting.txt containing exactly HELLO followed by one LF. Verify its bytes with Node, commit, and report.\n");
-  write("execution.yaml", JSON.stringify({ version: 1, tasks: { [task]: { model, reasoningEffort: "low" } } }));
-  writeFileSync(join(root, ".gitattributes"), "*.txt text eol=lf\n");
-  writeFileSync(join(root, "openspec/runner.yaml"), JSON.stringify({
-    version: 1, defaultModel: model, worktrees: "git", terminal: "manual", cleanup: "manual",
-    verifyIntegration: [[process.execPath, "-e", "const fs = require('node:fs'); if (fs.readFileSync('greeting.txt', 'utf8') !== 'HELLO\\n') process.exit(1)"]],
-  }));
-  git(root, "add", ".");
-  git(root, "commit", "-m", "Prepare disposable acceptance fixture");
-}
 
 async function archive(root, model, runner) {
   const feature = new Feature(root);
