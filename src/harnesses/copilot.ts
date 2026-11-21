@@ -49,6 +49,16 @@ export const copilotHarness: HarnessAdapter = {
       const { dashboardChild } = await import("../dashboard-action-runner.js");
       const result = await dashboardChild(process.execPath, [probe, executable], cwd, AbortSignal.any([cancellation.signal, AbortSignal.timeout(15_000)]), false, undefined, true);
       const models: unknown = JSON.parse(result.stdout);
+      if (models && typeof models === "object" && "failure" in models) {
+        const reasons: Record<string, string> = {
+          compatibility: "Copilot SDK/runtime compatibility check failed.",
+          authentication: "Copilot authentication is required for model discovery.",
+          runtime: "Copilot discovery runtime or optional SDK is unavailable for this platform.",
+          unavailable: "Copilot catalog unavailable.",
+        };
+        const reason = typeof models.failure === "string" ? reasons[models.failure] : undefined;
+        return { harness: "copilot", status: "unavailable", exhaustive: false, reason: `${reason ?? reasons.unavailable} ${fallback}.` };
+      }
       if (!Array.isArray(models)) throw new Error("Unexpected Copilot catalog response");
       return { harness: "copilot", status: "available", exhaustive: false, models };
     } catch (error) {
