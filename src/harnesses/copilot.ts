@@ -49,23 +49,23 @@ export const copilotHarness: HarnessAdapter = {
       const { dashboardChild } = await import("../dashboard-action-runner.js");
       const result = await dashboardChild(process.execPath, [probe, executable], cwd, AbortSignal.any([cancellation.signal, AbortSignal.timeout(15_000)]), false, undefined, true);
       const models: unknown = JSON.parse(result.stdout);
-      if (models && typeof models === "object" && "failure" in models) {
-        const reasons: Record<string, string> = {
-          compatibility: "Copilot SDK/runtime compatibility check failed.",
-          authentication: "Copilot authentication is required for model discovery.",
-          runtime: "Copilot discovery runtime or optional SDK is unavailable for this platform.",
-          unavailable: "Copilot catalog unavailable.",
-        };
-        const reason = typeof models.failure === "string" ? reasons[models.failure] : undefined;
-        return { harness: "copilot", status: "unavailable", exhaustive: false, reason: `${reason ?? reasons.unavailable} ${fallback}.` };
-      }
       if (!Array.isArray(models)) throw new Error("Unexpected Copilot catalog response");
       return { harness: "copilot", status: "available", exhaustive: false, models };
     } catch (error) {
+      // Accept only our exact fixed-code failure envelope from a failed probe.
+      // dashboardChild has already cleaned residual processes before rejecting.
+      const failure = error instanceof Error
+        ? /^Action failed \(1\): \{"failure":"(compatibility|authentication|runtime|unavailable)"\}\s*$/.exec(error.message)?.[1] : undefined;
+      const reasons: Record<string, string> = {
+        compatibility: "Copilot SDK/runtime compatibility check failed.",
+        authentication: "Copilot authentication is required for model discovery.",
+        runtime: "Copilot discovery runtime or optional SDK is unavailable for this platform.",
+        unavailable: "Copilot catalog unavailable.",
+      };
       const uncertain = error instanceof Error && error.message.includes("process termination is uncertain")
         ? " Process termination is uncertain; inspect the discovery processes before retrying." : "";
       if (interrupted) throw Object.assign(new Error(`Copilot catalog interrupted.${uncertain}`), { exitCode: interrupted });
-      return { harness: "copilot", status: "unavailable", exhaustive: false, reason: `Copilot catalog unavailable.${uncertain} ${fallback}.` };
+      return { harness: "copilot", status: "unavailable", exhaustive: false, reason: `${failure ? reasons[failure] : reasons.unavailable}${uncertain} ${fallback}.` };
     } finally {
       process.removeListener("SIGINT", sigint); process.removeListener("SIGTERM", sigterm);
     }

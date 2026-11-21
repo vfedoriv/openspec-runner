@@ -37,5 +37,9 @@ try {
   if (!interrupted) console.log(JSON.stringify(models.map(model => ({ id: model.id, name: model.name }))));
 } catch (error) {
   // Only fixed codes cross the process boundary; SDK/provider diagnostics may contain secrets.
-  if (!interrupted) console.log(JSON.stringify({ failure: failureKind(error) }));
+  if (!interrupted) {
+    console.log(JSON.stringify({ failure: failureKind(error) }));
+    // Nonzero status makes the child boundary terminate any residual runtime.
+    process.exitCode = 1;
+  }
 }

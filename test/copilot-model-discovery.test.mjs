@@ -172,7 +172,7 @@ async function lifecycle(t, mode) {
       constructor(o){this.path=o.runtime.path;}
       async start(){this.child=spawn(this.path,[],{stdio:'ignore'}); while(!existsSync(${JSON.stringify(ready)})) await new Promise(r=>setTimeout(r,10)); if(${JSON.stringify(mode)}==='start-error') {while(!existsSync(${JSON.stringify(release)})) await new Promise(r=>setTimeout(r,10)); throw Error('start failed');}}
       async listModels(){while(${JSON.stringify(mode)}==='dashboard-abort'||!existsSync(${JSON.stringify(release)})) await new Promise(r=>setTimeout(r,10)); if(${JSON.stringify(mode)}==='list-error') throw Error('list failed'); if(${JSON.stringify(mode)}==='malformed') console.log('malformed'); return [{id:'fixture'}];}
-      async stop(){writeFileSync(${JSON.stringify(stopped)},'yes'); if(${JSON.stringify(mode)}.includes('stop-hang')) {setInterval(()=>{},1000); return new Promise(()=>{});} this.child.kill(); await new Promise(r=>this.child.once('exit',r)); if(${JSON.stringify(mode)}==='stop-error') return [Error('stop failed')]; return [];}
+      async stop(){writeFileSync(${JSON.stringify(stopped)},'yes'); if(${JSON.stringify(mode)}.includes('stop-hang')) {setInterval(()=>{},1000); return new Promise(()=>{});} if(${JSON.stringify(mode)}==='stop-orphan-error'){this.child.unref();return [Error('secret-provider-detail')];} this.child.kill(); await new Promise(r=>this.child.once('exit',r)); if(${JSON.stringify(mode)}==='stop-error') return [Error('stop failed')]; return [];}
     }
   `);
   const sentinel = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
@@ -197,10 +197,11 @@ async function lifecycle(t, mode) {
   if(mode.startsWith("SIG")) { assert.equal(result.code,mode.startsWith('SIGINT')?130:143,stderr); assert.equal(stdout.trim(),""); }
   if(mode==='normal') { assert.equal(result.code,0,stderr); assert.match(stdout,/fixture/); }
   if(mode.endsWith('error') || ['malformed','timeout','stop-hang','dashboard-abort'].includes(mode)) assert.doesNotMatch(stdout,/fixture/);
+  if(mode==='stop-orphan-error') { assert.match(stdout,/unavailable/); assert.doesNotMatch(stdout + stderr,/secret-provider-detail/); }
   if(mode==='dashboard-abort') assert.equal(result.code,1,stderr);
   assert.equal(existsSync(stopped),true,"cooperative SDK stop must run");
 }
-for(const mode of ['SIGINT','SIGTERM','normal','start-error','list-error','stop-error','malformed','timeout','dashboard-abort','stop-hang','SIGINT-stop-hang','SIGTERM-stop-hang']) test(`Copilot catalog cleans owned descendants: ${mode}`,{skip:process.platform!=='linux'},t=>lifecycle(t,mode));
+for(const mode of ['SIGINT','SIGTERM','normal','start-error','list-error','stop-error','stop-orphan-error','malformed','timeout','dashboard-abort','stop-hang','SIGINT-stop-hang','SIGTERM-stop-hang']) test(`Copilot catalog cleans owned descendants: ${mode}`,{skip:process.platform!=='linux'},t=>lifecycle(t,mode));
 
 // Inject only the boundary result; no Windows termination is claimed on Linux.
 test("Copilot discovery preserves safe process termination uncertainty", async t => {
