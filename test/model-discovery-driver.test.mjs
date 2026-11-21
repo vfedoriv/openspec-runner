@@ -147,3 +147,26 @@ setInterval(()=>{},1000);`);
   assert.equal(result.evidence.signal, "SIGKILL", "hard deadline never invokes a cooperative termination handler");
   assert.equal(observeProcess(sentinel.pid)?.createdAt, identities[0].started);
 });
+
+test("explicit interruption signal is validated and SIGTERM requires exit 143", () => {
+  assert.equal(parseArgs(["--agent","copilot","--cwd","/tmp","--interrupt","--interrupt-signal","SIGTERM"]).interruptSignal,"SIGTERM");
+  for(const signal of ["SIGKILL","TERM",""]) assert.throws(()=>parseArgs(["--agent","copilot","--cwd","/tmp","--interrupt","--interrupt-signal",signal]));
+  assert.throws(()=>parseArgs(["--agent","copilot","--cwd","/tmp","--interrupt-signal","SIGTERM"]));
+  const row={processObservationSupported:true,remainingBeforeCleanup:[],timedOut:false,overflow:false,interrupted:true,readinessObserved:true,exitCode:143,stdoutEmpty:true};
+  assert.equal(discoverySucceeded({interruptionRequested:true,interruptionSignal:"SIGTERM",scopes:[row]}),true);
+  assert.equal(discoverySucceeded({interruptionRequested:true,interruptionSignal:"SIGTERM",scopes:[{...row,exitCode:130}]}),false);
+});
+
+test("discovery retains provider label separately from selectors and unobserved runtime model", async t => {
+  const root=await mkdtemp(join(tmpdir(),"discovery-label-"));t.after(()=>rm(root,{recursive:true,force:true}));
+  const result=await runDiscovery({agent:"copilot",cwd:root},{evidenceRoot:root,invoke:async (_command,args)=>({stdout:args[0]==="--version"?"1.0.114":JSON.stringify({harness:"copilot",status:"available",scope:root,entries:[{selector:"opaque:auto",label:"Copilot Fusion",source:"discovered",effortSupport:"unsupported"}]}),evidence:{exitCode:0,processObservationSupported:true,remainingBeforeCleanup:[]}})});
+  assert.deepEqual(result.scopes[0].catalog.entries,[{selector:"opaque:auto",label:"Copilot Fusion",source:"discovered",effortSupport:"unsupported"}]);
+  assert.equal(result.requestedModel,null);assert.equal(result.observedModel,null);assert.equal(result.inferenceStarted,false);
+});
+
+test("bounded child delivers explicit SIGTERM after descendant readiness", async () => {
+  const result=await boundedChild(process.execPath,["-e",'require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});setInterval(()=>{},1000)'],{interrupt:true,interruptSignal:"SIGTERM",timeoutMs:1000});
+  assert.equal(result.evidence.readinessObserved,true);
+  assert.equal(result.evidence.signal,"SIGTERM");
+  assert.deepEqual(result.evidence.remainingBeforeCleanup,[]);
+});

@@ -92,3 +92,14 @@ test("CLI capability checks require prompt trust but not a reserved session flag
   assert.equal(missing.supported, false);
   assert.ok(missing.reasons.some(reason => reason.includes("--trust-folder")));
 });
+
+test("Copilot preserves requested auto or stale selectors without inferring a routed model or inheriting effort", () => {
+  const adapter=getHarness("copilot");
+  for(const model of ["auto","stale-premium","Opaque Model (Provider)"]) {
+    const settings=adapter.resolveSettings({parallel:false,dependsOn:[],model},undefined,{defaultModel:"auto"});
+    assert.equal(settings.model,model);
+    assert.equal(settings.requestedModel,model);
+    assert.equal(settings.effort,undefined);
+    for(const effort of ["low","high"]) assert.throws(()=>adapter.resolveSettings({parallel:false,dependsOn:[],model},{harness:"copilot",model:"auto",effort}),/Copilot effort is unsupported/);
+  }
+});

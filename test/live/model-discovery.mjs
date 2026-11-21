@@ -13,13 +13,14 @@ export function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
     if (key === "--interrupt") { if (result.interrupt) throw Error("Duplicate --interrupt"); result.interrupt = true; continue; }
-    const field = { "--agent": "agent", "--cwd": "cwd", "--worker-cwd": "workerCwd", "--timeout-ms": "timeoutMs" }[key];
+    const field = { "--agent": "agent", "--cwd": "cwd", "--worker-cwd": "workerCwd", "--timeout-ms": "timeoutMs", "--interrupt-signal": "interruptSignal" }[key];
     if (!field || !args[i + 1] || args[i + 1].startsWith("--")) throw Error(`Invalid argument ${key}`);
     if (seen.has(field)) throw Error(`Duplicate ${key}`);
     seen.add(field);
     result[field] = args[++i];
   }
   if (!["codex", "claude", "copilot"].includes(result.agent) || !result.cwd) throw Error("Require --agent codex|claude|copilot --cwd PATH");
+  if (result.interruptSignal !== undefined && (!result.interrupt || !["SIGINT", "SIGTERM"].includes(result.interruptSignal))) throw Error("Require --interrupt with SIGINT or SIGTERM");
   result.timeoutMs = Number(result.timeoutMs);
   if (!Number.isInteger(result.timeoutMs) || result.timeoutMs < 100 || result.timeoutMs > 120000) throw Error("Invalid timeout");
   result.cwd = resolve(result.cwd);
@@ -61,7 +62,8 @@ export function signalOwnedIdentity(identity, signal) {
   try { process.kill(identity.pid, signal); return true; } catch { return false; }
 }
 const delay = ms => new Promise(r => setTimeout(r, ms));
-export async function boundedChild(command, args, { cwd, timeoutMs = 25000, interrupt = false, interruptProbe = false } = {}) {
+export async function boundedChild(command, args, { cwd, timeoutMs = 25000, interrupt = false, interruptProbe = false, interruptSignal = "SIGINT" } = {}) {
+  if (!["SIGINT", "SIGTERM"].includes(interruptSignal)) throw Error("Invalid interruption signal");
   const start = Date.now();
   const child = spawn(command, args, { cwd, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", bytes = 0, overflow = false, error, done = false, code, signal;
@@ -116,7 +118,7 @@ export async function boundedChild(command, args, { cwd, timeoutMs = 25000, inte
     if (interrupt && !interrupted && ready) {
       interrupted = true;
       readiness = { elapsedMs: Date.now() - start, targetPid: child.pid, ...(probe ? { probePid: probe.pid, cliPids: descendants.filter(row => row.ppid === probe.pid).map(row => row.pid) } : {}) };
-      kill("SIGINT", interruptProbe);
+      kill(interruptSignal, interruptProbe);
     }
     if (Date.now() - start >= timeoutMs) { timedOut = true; await hardStop(); break; }
     await Promise.race([closed, delay(20)]);
@@ -137,25 +139,25 @@ function catalogEvidence(raw, expectedHarness, expectedCwd) {
   try { const value = JSON.parse(raw);
     if (!value || value.harness !== expectedHarness || value.scope !== expectedCwd || !["codex", "claude", "copilot"].includes(value.harness) || !["available", "partial", "unavailable"].includes(value.status) || typeof value.scope !== "string" || !Array.isArray(value.entries) || value.entries.length > 4096 ||
       value.fetchedAt !== undefined && (typeof value.fetchedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.fetchedAt) || !Number.isFinite(Date.parse(value.fetchedAt))) ||
-      value.entries.some(row => !row || typeof row.selector !== "string" || !row.selector.trim() || /[\x00-\x1f\x7f]/.test(row.selector) || !["discovered", "configured", "example", "saved"].includes(row.source) || row.effortSupport !== undefined && !["supported", "unsupported", "unknown"].includes(row.effortSupport) || row.efforts !== undefined && (!Array.isArray(row.efforts) || row.efforts.some(effort => typeof effort !== "string" || !/^[a-z][a-z0-9-]*$/.test(effort))))) return undefined;
+      value.entries.some(row => !row || row.label !== undefined && typeof row.label !== "string" || typeof row.selector !== "string" || !row.selector.trim() || /[\x00-\x1f\x7f]/.test(row.selector) || !["discovered", "configured", "example", "saved"].includes(row.source) || row.effortSupport !== undefined && !["supported", "unsupported", "unknown"].includes(row.effortSupport) || row.efforts !== undefined && (!Array.isArray(row.efforts) || row.efforts.some(effort => typeof effort !== "string" || !/^[a-z][a-z0-9-]*$/.test(effort))))) return undefined;
     return { harness: value.harness, status: value.status, scope: value.scope, fetchedAt: value.fetchedAt,
-    entries: (value.entries ?? []).map(row => ({ selector: sanitize(row.selector), source: row.source, effortSupport: row.effortSupport,
+    entries: (value.entries ?? []).map(row => ({ selector: sanitize(row.selector), ...(row.label !== undefined ? { label: sanitize(row.label) } : {}), source: row.source, effortSupport: row.effortSupport,
       ...(Array.isArray(row.efforts) ? { efforts: row.efforts.map(sanitize) } : {}) })) }; } catch { return undefined; }
 }
 export async function runDiscovery(options, dependencies = {}) {
   // Validate before creating evidence or spawning any process, including programmatic callers.
   const validated = parseArgs(["--agent", options.agent, "--cwd", options.cwd,
-    ...(options.workerCwd ? ["--worker-cwd", options.workerCwd] : []), "--timeout-ms", String(options.timeoutMs ?? 25000), ...(options.interrupt ? ["--interrupt"] : [])]);
+    ...(options.workerCwd ? ["--worker-cwd", options.workerCwd] : []), "--timeout-ms", String(options.timeoutMs ?? 25000), ...(options.interrupt ? ["--interrupt"] : []), ...(options.interruptSignal ? ["--interrupt-signal", options.interruptSignal] : [])]);
   const evidenceDir = await mkdtemp(join(dependencies.evidenceRoot ?? tmpdir(), "model-discovery-"));
   const invoke = dependencies.invoke ?? boundedChild;
   const version = await invoke(validated.agent, ["--version"], { cwd: validated.cwd, timeoutMs: Math.min(validated.timeoutMs, 10000) });
   const scopes = [];
   for (const cwd of [...new Set([validated.cwd, validated.workerCwd].filter(Boolean))]) {
-    const result = await invoke(process.execPath, [dependencies.runner ?? runner, "models", "--agent", validated.agent, "--catalog", "--json"], { cwd, timeoutMs: validated.timeoutMs, interrupt: validated.interrupt, interruptProbe: validated.agent === "copilot" });
+    const result = await invoke(process.execPath, [dependencies.runner ?? runner, "models", "--agent", validated.agent, "--catalog", "--json"], { cwd, timeoutMs: validated.timeoutMs, interrupt: validated.interrupt, interruptProbe: validated.agent === "copilot", interruptSignal: validated.interruptSignal ?? "SIGINT" });
     const catalog = catalogEvidence(result.stdout, validated.agent, cwd);
     scopes.push({ cwd, ...result.evidence, ...(result.evidence.processObservationSupported !== true ? { status: "BLOCKED", reason: "Owned process observation unavailable or unconfirmed" } : {}), catalog, validCatalog: catalog?.harness === validated.agent && catalog.status === "available" && catalog.scope === cwd && catalog.entries.some(x => x.source === "discovered") });
   }
-  const evidence = { evidenceDir, createdAt: new Date().toISOString(), agent: validated.agent, mode: "prompt-free-discovery", interruptionRequested: validated.interrupt, inferenceStarted: false,
+  const evidence = { evidenceDir, createdAt: new Date().toISOString(), agent: validated.agent, mode: "prompt-free-discovery", interruptionRequested: validated.interrupt, interruptionSignal: validated.interruptSignal ?? "SIGINT", inferenceStarted: false,
     requestedModel: null, observedModel: null, requestedEffort: null, observedEffort: null,
     version: { value: version.stdout.match(/\b\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?\b/)?.[0] ?? "unobserved", ...version.evidence }, scopes };
   await writeFile(join(evidenceDir, "result.json"), JSON.stringify(evidence, null, 2) + "\n");
@@ -163,7 +165,7 @@ export async function runDiscovery(options, dependencies = {}) {
 }
 export function discoverySucceeded(result) {
   return result.scopes.length > 0 && result.scopes.every(row => row.processObservationSupported === true && row.remainingBeforeCleanup.length === 0 && !row.timedOut && !row.overflow &&
-    (result.interruptionRequested ? row.interrupted && row.readinessObserved && row.exitCode === 130 && row.stdoutEmpty === true : row.validCatalog && row.exitCode === 0));
+    (result.interruptionRequested ? row.interrupted && row.readinessObserved && row.exitCode === (result.interruptionSignal === "SIGTERM" ? 143 : 130) && row.stdoutEmpty === true : row.validCatalog && row.exitCode === 0));
 }
 export async function main(args = process.argv.slice(2)) {
   const result = await runDiscovery(parseArgs(args));

@@ -75,8 +75,9 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   const activeCatalog = catalog?.harness === catalogHarness ? catalog : undefined;
   const modelEntries = catalogEntries(activeCatalog, snapshot, catalogHarness);
   const effortEntry = activeCatalog?.entries.find(entry => entry.selector === (roleValue?.model ?? preview?.input.model));
+  const effortUnavailable = catalogHarness === "copilot" || catalogHarness === "copilot-vscode" || effortEntry?.effortSupport === "unsupported";
   const choicesForField = modelField ? modelEntries.map(entry => entry.selector)
-    : effortField ? effortEntry?.efforts : edit === "launchAgent" ? harnessIds() : undefined;
+    : effortField ? effortUnavailable ? [] : effortEntry?.efforts : edit === "launchAgent" ? harnessIds() : undefined;
   const [fieldError, setFieldError] = useState("");
   const matches = modelField ? searchCatalog(modelEntries, text).map(entry => entry.selector)
     : choicesForField?.filter(value => value.toLowerCase().includes(text.toLowerCase())) ?? [];
@@ -209,13 +210,15 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
   const selectedChoice = choices.findIndex(choice => choice.value === picker?.choice);
   const matchingChoice = choices.findIndex(choice => choice.label.toLowerCase().includes(picker?.query.toLowerCase() ?? ""));
   const choiceIndex = Math.max(0, selectedChoice < 0 ? matchingChoice : selectedChoice);
+  const matchedModel = modelField ? modelEntries.find(entry => entry.selector === matches[catalogIndex ?? 0]) : undefined;
+  const onlyAdvertisedModel = matchedModel?.source === "discovered" && activeCatalog?.entries.filter(entry => entry.source === "discovered").length === 1;
   const selectionHint = [
-    matches.length ? `↑↓ ${matches[catalogIndex ?? 0]}` : "",
+    effortField && effortUnavailable ? "Effort unavailable" : "",
+    matches.length ? `${onlyAdvertisedModel ? "Only advertised choice:" : modelField && matches.length === 1 ? "Choice" : "↑↓"} ${matches[catalogIndex ?? 0]}${matchedModel?.label ? ` · ${matchedModel.label}` : ""}${matchedModel?.source ? ` · ${matchedModel.source}` : ""}` : "",
     modelField || effortField ? catalogNotice : "",
     effortField && roleValue?.harness === "codex" ? "Explicit effort required" : "",
     effortField && roleValue?.harness === "claude" ? "Blank uses Claude CLI default" : "",
-    effortField && !catalogNotice && !fieldError ? (effortEntry?.effortSupport === "unsupported" ? "Effort unavailable"
-      : !effortEntry?.efforts?.length ? "Effort support unknown" : "") : "",
+    effortField && !effortUnavailable && !catalogNotice && !fieldError && !effortEntry?.efforts?.length ? "Effort support unknown" : "",
   ].filter(Boolean).map(hint => ` · ${hint}`).join("");
   useInput((input, key) => {
     if (models) {
@@ -311,7 +314,7 @@ export function DashboardUi({ snapshot, collector, failure, quit, lifetime, read
         if (edit === "launchAgent" && value && !harnessIds().includes(value)) {
           setFieldError("Select a registered harness"); return;
         }
-        if (effortField && value && value !== ":inherit" && (effortEntry?.effortSupport === "unsupported" ||
+        if (effortField && value && value !== ":inherit" && (effortUnavailable ||
             effortEntry?.efforts?.length && !effortEntry.efforts.includes(value))) {
           setFieldError("Choose a supported effort or clear the field"); return;
         }

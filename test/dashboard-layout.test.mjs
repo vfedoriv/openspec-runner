@@ -411,3 +411,46 @@ test("bulk assignment review preserves bytes on Escape and saves only reviewed t
     lifetime.abort(); instance.unmount(); instance.cleanup(); stdin.destroy();
   }
 });
+
+for (const columns of [40,80]) for (const available of [true,false]) test(`Copilot keyboard confirmation at ${columns} columns with ${available ? "single Fusion choice" : "unavailable catalog"} clears Claude effort`, async () => {
+  const React = await import("react");
+  const { render } = await import("ink");
+  const { DashboardUi } = await import("../dist/dashboard-ui.js");
+  const { actionsFor } = await import("../dist/dashboard-actions.js");
+  const stdin = new PassThrough(); stdin.isTTY = true; stdin.setRawMode = () => stdin;
+  let output = "";
+  const stdout = new Writable({write(chunk,_,done){output += chunk.toString();done();}});
+  stdout.isTTY = true; stdout.columns = columns; stdout.rows = 28;
+  const lifetime = new AbortController(), calls = [];
+  const saved = {harness:"claude",model:"sonnet",effort:"low"};
+  const feature = {id:"local:demo",change:"demo",origin:"local",completed:0,total:1,taskIds:[],sessionIds:[],state:{phase:"awaiting-plan-approval",jobs:[],approval:{implementation:saved,review:saved,repair:saved,maxFixRounds:2}}};
+  const snapshot = {version:1,repository:{root:"/repo"},features:[feature],tasks:[],sessions:[],assignments:[],attention:[],errors:[],sources:{}};
+  const instance = render(React.createElement(DashboardUi,{snapshot,collector:{refresh(){}},lifetime:lifetime.signal,quit(){},
+    readCatalog:async (_,harness)=>({harness,status:available?"available":"unavailable",entries:available?[{selector:"auto",label:"Copilot Fusion",source:"discovered",effortSupport:"unsupported",efforts:["low","high"]}]:[]}),
+    runAction:async request=>{calls.push(request);return {text:"Review settings",...(!request.confirmation?{confirmation:"reviewed"}: {})};},
+  }),{stdin,stdout,stderr:stdout,interactive:true,exitOnCtrlC:false,patchConsole:false});
+  const key = async value=>{output="";stdin.write(value);await new Promise(r=>setTimeout(r,35));await instance.waitUntilRenderFlush();};
+  try {
+    await instance.waitUntilRenderFlush(); await key("\u001b[C");await key("\u001b[C");await key("a");
+    const index = actionsFor(snapshot,feature.id).findIndex(a=>a.id.endsWith(":managed-plan-settings"));
+    assert.ok(index>=0);for(let i=0;i<index;i++)await key("\u001b[B");await key("\r");
+    await key("\r");await key("\r"); // preserve implementation Claude low
+    for(let i=0;i<6;i++)await key("\x7f");await key("copilot");await key("\r");
+    if(available) {
+      assert.match(stripVTControlCharacters(output), columns === 80 ? /Only advertised choice: auto · Copilot Fusion/ : /Only adver/);
+      assert.doesNotMatch(stripVTControlCharacters(output), /↑↓ auto/);
+    }
+    if(available){await key("\u001b[B");await key("\r");}else{await key("auto");await key("\r");}
+    assert.match(stripVTControlCharacters(output),/Effort unavail/);
+    await key("high");await key("\r");
+    assert.match(stripVTControlCharacters(output),/Choose a supported ef/);
+    assert.equal(calls.length,0);
+    for(let i=0;i<4;i++)await key("\x7f");await key("\r"); // no effort
+    await key("\r");await key("\r");await key("\r");await key("\r");
+    assert.equal(calls.length,1);
+    assert.deepEqual(calls[0].input.roleSettings.review,{harness:"copilot",model:"auto",effort:undefined});
+    await key("\r");
+    assert.equal(calls[1].confirmation,"reviewed");
+    assert.deepEqual(calls[1].input,calls[0].input);
+  }finally{lifetime.abort();instance.unmount();instance.cleanup();stdin.destroy();}
+});

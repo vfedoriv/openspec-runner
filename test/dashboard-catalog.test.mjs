@@ -175,3 +175,27 @@ test("picker UI scopes cached catalogs by both cwd and harness", async () => {
     assert.equal(requests.length,4,"returning to a fresh cwd/harness cache does not read again");
   } finally {lifetime.abort();instance.unmount();instance.cleanup();stdin.destroy();}
 });
+
+test("single Fusion-labelled selector stays opaque, ignores Copilot effort metadata, and preserves stale saved choices", async () => {
+  const { registerHarness, getHarness } = await import("../dist/harnesses/registry.js");
+  const { modelCatalog } = await import("../dist/model-catalog.js");
+  const { catalogEntries, searchCatalog } = await import("../dist/dashboard-catalog.js");
+  const adapter = getHarness("copilot");
+  const original = adapter.models;
+  let label = "Copilot Fusion";
+  adapter.models = async () => ({status:"available",models:[{id:"opaque:auto",name:label,supportedReasoningEfforts:["low","high"],defaultReasoningEffort:"high",tier:"premium"}]});
+  try {
+    const catalog = await modelCatalog("copilot");
+    assert.equal(catalog.entries.length, 1);
+    assert.deepEqual(catalog.entries[0], {selector:"opaque:auto",label:"Copilot Fusion",source:"discovered",efforts:undefined,defaultEffort:undefined,effortSupport:"unsupported"});
+    assert.equal(searchCatalog(catalog.entries,"Fusion")[0].selector,"opaque:auto");
+    const entries = catalogEntries(catalog,{tasks:[{harness:"copilot",assignment:{model:"stale-premium"}}]},"copilot");
+    assert.deepEqual(entries.at(-1),{selector:"stale-premium",source:"saved"});
+    label = "Auto";
+    const renamed = await modelCatalog("copilot");
+    assert.equal(renamed.entries[0].selector,"opaque:auto");
+    assert.equal(renamed.entries[0].label,"Auto");
+    adapter.models = async () => ({status:"unavailable",models:[]});
+    assert.deepEqual((await modelCatalog("copilot")).entries,[]);
+  } finally { adapter.models = original; }
+});
