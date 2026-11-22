@@ -18,7 +18,7 @@ export function recoverCopilotLauncher(a: Attempt, proof = {
   if (proof.platform === "linux") {
     const worker = a.worker;
     try { validateLinuxWorker(worker); } catch { return; }
-    if (worker?.linuxStop && linuxStopIsGone(worker.linuxStop.receipt) && !!common && linuxBinding(a, common) === worker.linuxStop.binding &&
+    if (worker?.linuxStop && !!common && preparedCopilotStopIsGone(a, common) &&
         worker.exitedAt && worker.exitCode === null) {
       worker.launcher!.exitedAt ??= new Date().toISOString(); worker.launcher!.exitCode = null;
       delete worker.terminationUncertain;
@@ -104,6 +104,22 @@ function linuxBinding(a: Attempt, common: string): string | undefined {
       token: w.token, session: a.session, provenance: w.linuxIdentity, roots: [[w.pid,w.processStart],[w.launcher.pid,w.launcher.processStart]], report: a.report, lease: l });
   } catch { return undefined; }
 }
+/** Canonical semantic receipt: membership discovered only at the barrier is bound too. */
+function stopIntegrity(binding: string, receipt: import("../platform-process.js").LinuxStopReceipt): string {
+  const identity = (member: import("../platform-process.js").ProcessIdentity) => [member.pid, member.createdAt];
+  const p = receipt.provenance;
+  return hashRecovery({ binding, version: receipt.version,
+    provenance: [p.version, p.platform, p.machine, p.boot, p.namespace],
+    roots: receipt.roots.map(identity),
+    members: [...receipt.members].sort((a, b) => a.pid - b.pid).map(identity) });
+}
+export function preparedCopilotStopIsGone(a: Attempt, common: string): boolean {
+  try {
+    validateLinuxWorker(a.worker);
+    const stop = a.worker?.linuxStop;
+    return !!stop && linuxBinding(a, common) === stop.binding && linuxStopIsGone(stop.receipt);
+  } catch { return false; }
+}
 export function validateLinuxWorker(worker: WorkerReceipt | undefined): void {
   if (!worker) return;
   if ((worker.linuxNonce !== undefined && (typeof worker.linuxNonce !== "string" || !/^[a-f0-9-]{36}$/.test(worker.linuxNonce))) ||
@@ -113,6 +129,8 @@ export function validateLinuxWorker(worker: WorkerReceipt | undefined): void {
     throw new Error("Invalid Linux worker recovery evidence");
   if (worker.linuxStop) {
     const r = worker.linuxStop.receipt;
+    if (worker.linuxStop.integrity !== stopIntegrity(worker.linuxStop.binding, r))
+      throw new Error("Invalid Linux prepared receipt integrity");
     if (worker.processPlatform !== "linux" || hashRecovery(worker.linuxIdentity) !== hashRecovery(r.provenance) ||
         r.roots[0].pid !== worker.pid || r.roots[0].createdAt !== worker.processStart ||
         r.roots[1].pid !== worker.launcher?.pid || r.roots[1].createdAt !== worker.launcher?.processStart ||
@@ -131,9 +149,10 @@ export function prepareCopilotStop(a: Attempt, common: string, save: () => void,
     if (!linuxStopIsGone(w.linuxStop.receipt)) finishPreparedLinuxStop(w.linuxStop.receipt, timeoutMs);
   } else {
     prepareLinuxStop({ provenance: w.linuxIdentity, roots: [{pid:w.pid!,createdAt:w.processStart!}, {pid:w.launcher!.pid!,createdAt:w.launcher!.processStart!}],
-      retained: w.linuxObserved ?? [], timeoutMs, publish(receipt) {
-        if (linuxBinding(a, common) !== binding) throw new Error("Copilot binding changed during freeze");
-        w.linuxStop = {version:1,binding,receipt}; save();
+      retained: w.linuxObserved ?? [], timeoutMs,
+      validate() { if (linuxBinding(a, common) !== binding) throw new Error("Copilot binding changed during freeze"); },
+      publish(receipt) {
+        w.linuxStop = {version:1,binding,integrity:stopIntegrity(binding, receipt),receipt}; save();
       } });
   }
   w.exitedAt ??= new Date().toISOString(); w.exitCode = null; a.phase = "failed";

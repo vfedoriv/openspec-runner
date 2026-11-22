@@ -73,8 +73,10 @@ export async function superviseCopilot(
       const current = readHookLease(stateDir, a.id);
       if (current?.generation !== lease.generation) throw new Error("Copilot supervisor generation changed");
       if (!editor && process.platform === "linux") {
-        const observed = observeDescendants(process.pid, observeProcess(process.pid)?.createdAt);
-        if (observed) evidence(value => {
+        evidence(value => {
+          // Observation and ledger publication share the ordinary state lock.
+          const observed = observeDescendants(process.pid, observeProcess(process.pid)?.createdAt);
+          if (!observed) return;
           const ledger = new Map((value.worker!.linuxObserved ?? []).map(row => [row.pid, row]));
           for (const row of observed) {
             if (ledger.has(row.pid) && ledger.get(row.pid)!.createdAt !== row.createdAt) throw new Error("Observed owned PID reused");

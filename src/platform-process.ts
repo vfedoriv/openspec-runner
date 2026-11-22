@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, readlinkSync } from "node:fs";
+import { probeLinuxSignals, signalLinuxIdentity } from "./linux-signal.js";
 import { join } from "node:path";
 
 export interface ProcessIdentity { pid: number; createdAt: string; parentPid?: number; state?: string }
@@ -114,6 +115,12 @@ export function linuxProvenance(): LinuxProvenance | undefined {
     const machine = readFileSync("/etc/machine-id", "utf8").trim();
     const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     const namespace = readlinkSync("/proc/self/ns/pid");
+    if (readlinkSync("/proc/self") !== String(process.pid)) return undefined;
+    const status = readFileSync("/proc/self/status", "utf8").split("\n");
+    for (const name of ["Pid", "Tgid", "NSpid", "NStgid"]) {
+      const rows = status.filter(line => line.startsWith(`${name}:`));
+      if (rows.length !== 1 || new RegExp(`^${name}:[ \t]+${process.pid}[ \t]*$`).test(rows[0]) === false) return undefined;
+    }
     if (!/^[a-f0-9]{32}$/.test(machine) || !/^[a-f0-9-]{36}$/.test(boot) || !/^pid:\[\d+\]$/.test(namespace)) return undefined;
     return { version: 1, platform: "linux", machine, boot, namespace };
   } catch { return undefined; }
@@ -137,7 +144,7 @@ export function linuxStopIsGone(receipt: LinuxStopReceipt): boolean {
   const rows = snapshot();
   return !!rows && receipt.members.every(m => {
     const current = rows.find(r => r.pid === m.pid);
-    return !current || (current.createdAt === m.createdAt && current.state === "Z");
+    return !current || (current.createdAt === m.createdAt && linuxGroupState(m)?.state === "dead");
   });
 }
 const pauseLinux = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
@@ -146,11 +153,13 @@ const pauseLinux = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 
  */
 export function prepareLinuxStop(input: {
   provenance: LinuxProvenance | undefined; roots: ProcessIdentity[]; retained: ProcessIdentity[];
-  timeoutMs: number; publish: (receipt: LinuxStopReceipt) => void;
+  timeoutMs: number; validate?: () => void; publish: (receipt: LinuxStopReceipt) => void;
 }): LinuxStopReceipt {
   if (!validLinuxProvenance(input.provenance) || !sameProvenance(input.provenance, linuxProvenance()) ||
       !validLinuxMembers(input.roots) || input.roots.length !== 2 || !Number.isFinite(input.timeoutMs) || input.timeoutMs < 100 || input.timeoutMs > 10000)
     throw new Error("Linux cancellation lacks creation provenance or exact roots");
+  const deadline = Date.now() + input.timeoutMs;
+  probeLinuxSignals(input.provenance, deadline - Date.now());
   const ledger = new Map<number, ProcessIdentity>();
   for (const row of [...input.roots, ...input.retained]) {
     if (!validLinuxMembers([row]) || (ledger.has(row.pid) && ledger.get(row.pid)!.createdAt !== row.createdAt)) throw new Error("Conflicting Linux member identity");
@@ -158,46 +167,47 @@ export function prepareLinuxStop(input: {
   }
   const introduced = new Map<number, ProcessIdentity>();
   let published = false;
-  const deadline = Date.now() + input.timeoutMs;
   try {
     const initial = snapshot();
-    if (!initial || input.roots.some(r => !initial.some(c => c.pid === r.pid && c.createdAt === r.createdAt && c.state !== "Z")))
+    if (!initial || input.roots.some(r => !initial.some(c => c.pid === r.pid && c.createdAt === r.createdAt)))
       throw new Error("Linux roots disappeared before preparation");
+    retainLinuxDescendants(initial, ledger);
     let previous = "";
     while (Date.now() < deadline) {
       const rows = snapshot();
       if (!rows) throw new Error("Incomplete Linux process observation");
-      if (input.roots.some(root => !rows.some(row => row.pid === root.pid && row.createdAt === root.createdAt && row.state !== "Z")))
+      if (input.roots.some(root => !rows.some(row => row.pid === root.pid && row.createdAt === root.createdAt)))
         throw new Error("Linux roots disappeared before barrier publication");
       for (const member of ledger.values()) {
+        if (Date.now() >= deadline) throw new Error("Linux freeze deadline expired");
         const current = rows.find(r => r.pid === member.pid);
         if (current && current.createdAt !== member.createdAt) throw new Error("Linux PID reused");
       }
-      // Only currently matching identities seed ancestry, including retained detached members.
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const row of rows) {
-          const parent = ledger.get(row.parentPid!);
-          if (parent && rows.some(r => r.pid === parent.pid && r.createdAt === parent.createdAt) && !ledger.has(row.pid) && BigInt(row.createdAt) >= BigInt(parent.createdAt)) {
-            ledger.set(row.pid, row); changed = true;
-          }
-        }
-      }
+      retainLinuxDescendants(rows, ledger);
       if (ledger.has(process.pid)) throw new Error("Cancellation controller is inside the owned tree");
       let allStopped = true;
+      const groupKeys: string[] = [];
       for (const member of ledger.values()) {
+        if (Date.now() >= deadline) throw new Error("Linux freeze deadline expired");
         const current = rows.find(r => r.pid === member.pid);
-        if (!current || current.state === "Z") continue;
-        if (current.state === "T" || current.state === "t") continue;
+        if (!current) continue;
+        const group = linuxGroupState(member);
+        if (!group) throw new Error("Incomplete Linux thread-group observation");
+        groupKeys.push(group.key);
+        if (group.state === "dead") {
+          if (input.roots.some(root => root.pid === member.pid)) throw new Error("Linux root died before barrier publication");
+          continue;
+        }
+        if (group.state === "stopped") continue;
         allStopped = false;
         if (observeProcess(member.pid)?.createdAt !== member.createdAt) throw new Error("Identity changed before freeze");
-        process.kill(member.pid, "SIGSTOP");
+        signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now());
         introduced.set(member.pid, member);
       }
-      const key = JSON.stringify([...ledger.values()].map(r => [r.pid,r.createdAt]).sort((a,b) => Number(a[0])-Number(b[0])));
+      const key = JSON.stringify({ members: [...ledger.values()].map(r => [r.pid,r.createdAt]).sort((a,b) => Number(a[0])-Number(b[0])), groups: groupKeys.sort() });
       if (allStopped && key === previous) {
         const receipt: LinuxStopReceipt = { version: 1, provenance: input.provenance, roots: input.roots, members: [...ledger.values()] };
+        input.validate?.();
         published = true; input.publish(receipt);
         finishPreparedLinuxStop(receipt, Math.max(100, deadline - Date.now()));
         return receipt;
@@ -209,8 +219,10 @@ export function prepareLinuxStop(input: {
   } finally {
     // A publication exception is ambiguous (write may have succeeded): never resume.
     // Caller marks publication as committed before entering its atomic write callback.
+    const rollbackDeadline = Date.now() + input.timeoutMs;
     if (!published) for (const member of introduced.values()) {
-      if (observeProcess(member.pid)?.createdAt === member.createdAt) try { process.kill(member.pid, "SIGCONT"); } catch { /* Retain uncertainty. */ }
+      if (Date.now() >= rollbackDeadline) break;
+      try { signalLinuxIdentity(member, input.provenance, "SIGCONT", rollbackDeadline - Date.now()); } catch { /* Retain uncertainty. */ }
     }
   }
 }
@@ -220,22 +232,62 @@ export function finishPreparedLinuxStop(receipt: LinuxStopReceipt, timeoutMs = 3
   if (!validLinuxStop(receipt) || !sameProvenance(receipt.provenance, linuxProvenance()) ||
       !Number.isFinite(timeoutMs) || timeoutMs < 100 || timeoutMs > 10000)
     throw new Error("Invalid prepared Linux cancellation");
+  const deadline = Date.now() + timeoutMs;
+  probeLinuxSignals(receipt.provenance, deadline - Date.now());
   const rows = snapshot();
   if (!rows) throw new Error("Incomplete Linux termination observation; prepared receipt retained");
   for (const member of receipt.members) {
+    if (Date.now() >= deadline) throw new Error("Linux termination deadline expired; prepared receipt retained");
     const current = rows.find(row => row.pid === member.pid);
-    if (member.pid === process.pid || (current && (current.createdAt !== member.createdAt || !["T", "t", "Z"].includes(current.state!))))
+    if (member.pid === process.pid || (current && (current.createdAt !== member.createdAt || !["stopped", "dead"].includes(linuxGroupState(member)?.state ?? ""))))
       throw new Error("Prepared Linux member reused or resumed; cancellation uncertain");
   }
   for (const member of [...receipt.members].reverse()) {
+    if (Date.now() >= deadline) throw new Error("Linux termination deadline expired; prepared receipt retained");
     const observation = snapshot(member.pid);
     if (!observation) throw new Error("Incomplete Linux termination observation; prepared receipt retained");
     const current = observation.find(row => row.pid === member.pid);
-    if (current && (current.createdAt !== member.createdAt || !["T", "t", "Z"].includes(current.state!)))
+    if (current && (current.createdAt !== member.createdAt || !["stopped", "dead"].includes(linuxGroupState(member)?.state ?? "")))
       throw new Error("Prepared Linux identity changed or resumed before termination");
-    if (current && current.state !== "Z") process.kill(member.pid, "SIGKILL");
+    if (current && linuxGroupState(member)?.state !== "dead") signalLinuxIdentity(member, receipt.provenance, "SIGKILL", deadline - Date.now());
   }
-  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { if (linuxStopIsGone(receipt)) return; pauseLinux(); }
   throw new Error("Linux termination remains uncertain; prepared receipt retained");
+}
+
+/** Retain the first census too: a later PPID change must not erase ownership. */
+function retainLinuxDescendants(rows: ProcessIdentity[], ledger: Map<number, ProcessIdentity>): void {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      const parent = ledger.get(row.parentPid!);
+      if (parent && rows.some(current => current.pid === parent.pid && current.createdAt === parent.createdAt) &&
+          !ledger.has(row.pid) && BigInt(row.createdAt) >= BigInt(parent.createdAt)) {
+        ledger.set(row.pid, row);
+        changed = true;
+      }
+    }
+  }
+}
+
+/** Leader state alone never establishes group stop or death. Tracing stops reject. */
+function linuxGroupState(identity: ProcessIdentity): { state: "running" | "stopped" | "dead"; key: string } | undefined {
+  try {
+    const path = `/proc/${identity.pid}/task`;
+    const names = readdirSync(path).sort();
+    if (!names.length || names.some(name => !/^\d+$/.test(name))) return undefined;
+    const tasks = names.map(name => {
+      const text = readFileSync(`${path}/${name}/stat`, "utf8");
+      const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+      if (!/^[A-Za-z]$/.test(fields[0]) || !/^\d+$/.test(fields[19] ?? "") || fields[0] === "t") throw new Error("Uncertain thread observation");
+      return { pid: Number(name), createdAt: fields[19], state: fields[0] };
+    });
+    if (JSON.stringify(names) !== JSON.stringify(readdirSync(path).sort()) ||
+        tasks.find(task => task.pid === identity.pid)?.createdAt !== identity.createdAt ||
+        observeProcess(identity.pid)?.createdAt !== identity.createdAt) return undefined;
+    const state = tasks.every(task => task.state === "Z") ? "dead"
+      : tasks.every(task => task.state === "T" || task.state === "Z") ? "stopped" : "running";
+    return { state, key: JSON.stringify(tasks.map(task => [task.pid, task.createdAt])) };
+  } catch { return undefined; }
 }

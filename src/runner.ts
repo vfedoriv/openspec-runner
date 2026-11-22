@@ -39,7 +39,7 @@ import {
   type Plan,
 } from "./plan.js";
 import type { HarnessSettings, WorkerReceipt, StoreInvocationScope } from "./harnesses/types.js";
-import { prepareCopilotStop, validateLinuxWorker, completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
+import { preparedCopilotStopIsGone, prepareCopilotStop, validateLinuxWorker, completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
 import { getHarness } from "./harnesses/registry.js";
 import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt, type FeatureJob } from "./feature-state.js";
 import {
@@ -360,13 +360,15 @@ export class Runner {
     change: string,
     id: string,
     update: (attempt: TaskAttempt) => void,
+    skipUnchanged = false,
   ) {
     return this.lock(() => {
       const state = this.requireState(change),
         current = state.attempts.find((attempt) => attempt.id === id);
       if (!current) throw new Error(`Attempt is no longer registered: ${id}`);
+      const before = skipUnchanged ? JSON.stringify(current) : undefined;
       update(current);
-      this.save(state);
+      if (!skipUnchanged || JSON.stringify(current) !== before) this.save(state);
       return current;
     });
   }
@@ -908,6 +910,8 @@ export class Runner {
         throw new Error("Worker attempt is not ready; inspect before retrying");
       if (a.worker) {
         refreshCopilotEvidence(a, this.repo.common);
+        if (a.worker?.linuxStop && !preparedCopilotStopIsGone(a, this.repo.common))
+          throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
         if (a.agent === "copilot" && a.worker.exitedAt && a.worker.exitCode === null && !agentMayBeActive(a)) {
           a.phase = "failed";
           this.save(s);
@@ -960,7 +964,7 @@ export class Runner {
             if (current.agent === "copilot" && process.platform === "linux") current.worker!.linuxIdentity = linuxProvenance();
           });
         },
-        (update) => this.updateAttempt(change, id, update),
+        (update) => this.updateAttempt(change, id, update, true),
         this.invocationScope(change),
       );
     } catch (error) { failure = error; }

@@ -6,7 +6,7 @@ export interface WorkerReceipt {
   linuxNonce?: string;
   linuxIdentity?: import("../platform-process.js").LinuxProvenance;
   linuxObserved?: import("../platform-process.js").ProcessIdentity[];
-  linuxStop?: { version: 1; binding: string; receipt: import("../platform-process.js").LinuxStopReceipt };
+  linuxStop?: { version: 1; binding: string; integrity: string; receipt: import("../platform-process.js").LinuxStopReceipt };
   token: string;
   pid?: number;
   processStart?: string;

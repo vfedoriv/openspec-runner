@@ -7,7 +7,7 @@ import { observeProcess } from "../../dist/platform-process.js";
 
 export const copilotSettings = { harness: "copilot", model: "auto" };
 const moduleUrl = name => new URL(`../../dist/${name}.js`, import.meta.url).href;
-export async function recoveryFixture(t, managed = false) {
+export async function recoveryFixture(t, managed = false, options = {}) {
   const fixture = featureFixture(t, { unchecked: !managed });
   const { root, bin, dir, r, f } = fixture;
   mkdirSync(join(root, ".github/hooks"), { recursive: true });
@@ -34,6 +34,7 @@ if(process.argv.includes('--version')) { console.log('fixture'); process.exit(0)
  const cp=require('node:child_process');cp.execFileSync('git',['add','result.txt']);cp.execFileSync('git',['commit','-m','Complete task']);
  report.commit=cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();`}
  ${managed ? "f.report('demo',a.id,report)" : "r.report('demo',a.task,a.id,report)"};
+ await new Promise(resolve=>setTimeout(resolve,${options.pauseBeforeStopMs ?? 0}));
  const {observeProcess}=await import(${JSON.stringify(moduleUrl("platform-process"))});
  const parent=observeProcess(process.ppid),lock=r.repo.stateDir+'/lock.json';
  const pause=()=>new Promise(resolve=>setTimeout(resolve,10));
@@ -59,10 +60,14 @@ if(process.argv.includes('--version')) { console.log('fixture'); process.exit(0)
     fixture.approve({ ...featureSettings, review: copilotSettings });
     a = f.launch("demo", "review");
   } else a = r.launch("demo", ["1.1"], copilotSettings, undefined, false, undefined, "copilot")[0];
+  const saveLog = join(dir, "supervisor-saves.jsonl");
   const supervisor = spawn(process.execPath, ["--input-type=module", "-e", `
 import {Runner} from ${JSON.stringify(moduleUrl("runner"))};
 import {Feature} from ${JSON.stringify(moduleUrl("feature"))};
-await ${managed ? `new Feature(${JSON.stringify(root)}).worker('demo',${JSON.stringify(a.id)})` : `new Runner(${JSON.stringify(root)}).worker('demo','1.1',${JSON.stringify(a.id)})`};
+const owner = ${managed ? `new Feature(${JSON.stringify(root)})` : `new Runner(${JSON.stringify(root)})`};
+${options.instrumentSaves ? `const fs = await import('node:fs'), save = owner.save.bind(owner);
+owner.save = state => { fs.appendFileSync(${JSON.stringify(saveLog)},JSON.stringify(state)+'\\n'); return save(state); };` : ""}
+await ${managed ? `owner.worker('demo',${JSON.stringify(a.id)})` : `owner.worker('demo','1.1',${JSON.stringify(a.id)})`};
 `], { stdio: ["ignore", "pipe", "pipe"] });
   let output = "", launcherPid;
   supervisor.stdout.on("data", bytes => { output += bytes; }); supervisor.stderr.on("data", bytes => { output += bytes; });
@@ -79,5 +84,5 @@ await ${managed ? `new Feature(${JSON.stringify(root)}).worker('demo',${JSON.str
   const prepare = () => managed ? f.prepareCopilotStop("demo", a.id, { cancel: true }) : r.prepareCopilotStop("demo", "1.1", a.id, { cancel: true });
   const reconcile = () => managed ? f.recover("demo", a.id) : r.worker("demo", "1.1", a.id);
   const preview = () => managed ? f.jobPreview("demo", "review", true) : r.preview("demo", ["1.1"], copilotSettings, undefined, true, "copilot");
-  return { ...fixture, a, supervisor, current, prepare, reconcile, preview, statePath: managed ? join(r.repo.stateDir, "features", "demo.json") : r.path("demo") };
+  return { ...fixture, a, supervisor, current, prepare, reconcile, preview, saveLog, statePath: managed ? join(r.repo.stateDir, "features", "demo.json") : r.path("demo") };
 }

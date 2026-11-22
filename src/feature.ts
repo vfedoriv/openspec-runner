@@ -10,7 +10,7 @@ import { superviseWorker, type SupervisedSession } from "./worker.js";
 import { processStart } from "./processes.js";
 import { linuxProvenance, processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import { getHarness } from "./harnesses/registry.js";
-import { prepareCopilotStop, validateLinuxWorker, completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
+import { preparedCopilotStopIsGone, prepareCopilotStop, validateLinuxWorker, completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
 import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import { assertStoreCodeHistory, assertStoreCodeIndex } from "./store-submission.js";
@@ -115,8 +115,13 @@ export class Feature {
       throw new Error("Delegated integration reservation changed; inspect before recovery");
     return this.runner.execution ? { change: options.change, phase: "prepared", integration: r.integration } : this.status(options.change);
   }
-  private update(change: string, fn: (s: FeatureState) => void) {
-    return this.runner.lock(() => { const s = this.read(change); fn(s); this.save(s); return s; });
+  private update(change: string, fn: (s: FeatureState) => void, skipUnchanged = false) {
+    return this.runner.lock(() => {
+      const s = this.read(change), before = skipUnchanged ? JSON.stringify(s) : undefined;
+      fn(s);
+      if (!skipUnchanged || JSON.stringify(s) !== before) this.save(s);
+      return s;
+    });
   }
   start(change: string, adopt = false) {
     if (this.runner.execution) throw new Error("Store features enroll through an approved component assignment import");
@@ -408,12 +413,12 @@ export class Feature {
     }
     return { ...this.read(change).jobs.find(j => j.id === job.id)!, command: this.workerCommand(change, job) };
   }
-  private updateJob(change: string, id: string, fn: (j: FeatureJob) => void) {
+  private updateJob(change: string, id: string, fn: (j: FeatureJob) => void, skipUnchanged = false) {
     const s = this.update(change, s => {
       const j = s.jobs.find(j => j.id === id);
       if (!j) throw new Error("Unknown feature attempt");
       fn(j);
-    });
+    }, skipUnchanged);
     return s.jobs.find(j => j.id === id)!;
   }
   workerCommand(change: string, j: FeatureJob) {
@@ -489,7 +494,7 @@ export class Feature {
         this.runner.assertExecutionAuthority(change);
         const identity = processStart(pid);
         this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = identity; current.worker!.processPlatform = process.platform; if (current.agent === "copilot" && process.platform === "linux") current.worker!.linuxIdentity = linuxProvenance(); });
-      }, (fn: (current: SupervisedSession) => void) => { this.updateJob(change, id, fn); }, this.runner.invocationScope(change));
+      }, (fn: (current: SupervisedSession) => void) => { this.updateJob(change, id, fn, true); }, this.runner.invocationScope(change));
     } catch (error) { failure = error; }
     this.update(change, s => {
       const current = s.jobs.find(j => j.id === id)!;
@@ -525,6 +530,8 @@ export class Feature {
       const j = s.jobs.find(j => j.id === id);
       if (!j || j.phase === "integrated") throw new Error("No recoverable feature job");
       refreshCopilotEvidence(j, this.repo.common);
+      if (j.worker?.linuxStop && !preparedCopilotStopIsGone(j, this.repo.common))
+        throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
       if (j.agent === "copilot-vscode" && agentMayBeActive(j))
         throw new Error("Editor agent activity is uncertain; retain its worktree and inspect the saved chat");
       if (j.worker?.exitedAt) {

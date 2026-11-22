@@ -37,6 +37,8 @@ test("public Linux attempt cancellation retains failed evidence and permits a fr
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import cp from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { linuxStopIsGone } from "../dist/platform-process.js";
 
 for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "attempt"} preparation rejects stale bindings without changing state bytes`, { skip: process.platform !== "linux", timeout: 30000 }, async t => {
@@ -131,9 +133,9 @@ test("unprepared historical Linux roots remain blocked after disappearing", { sk
 });
 
 test("public Linux cancellation finishes partial exact termination through explicit continuation", { skip: process.platform !== "linux", timeout: 30000 }, async t=>{
- const x=await recoveryFixture(t),kill=process.kill;let signals=0;
- process.kill=function(pid,signal){if(signal==='SIGKILL'&&++signals===2)throw new Error('interrupted second termination');return kill.call(this,pid,signal)};
- try{assert.throws(x.prepare,/interrupted/)}finally{process.kill=kill}
+ const x=await recoveryFixture(t),execute=cp.execFileSync;let signals=0;
+ cp.execFileSync=function(command,args,options){if(command==='python3'&&JSON.parse(options.input).operation==='SIGKILL'&&++signals===2)throw new Error('interrupted second termination');return execute.call(this,command,args,options)};syncBuiltinESMExports();
+ try{assert.throws(x.prepare,/uncertain/)}finally{cp.execFileSync=execute;syncBuiltinESMExports()}
  const saved=x.current(),before=readFileSync(x.r.path('demo'),'utf8');
  assert.ok(saved.worker.linuxStop);assert.equal(saved.worker.exitedAt,undefined);
  assert.equal(linuxStopIsGone(saved.worker.linuxStop.receipt),false);
