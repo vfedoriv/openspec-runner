@@ -202,14 +202,20 @@ export async function recoveryScenario({ repo, runner, change, task, timeoutMs, 
       assert.ok(recovered.worker.linuxStop);
       assert.ok(processIsGone(supervisor.pid));
       const attempts = [summarize(recovered)];
-      let integration, freshRootStop;
+      let integration, freshRootStop, freshSupervisor;
       if (retry) {
         const [replacement] = runner.launch(change, [task], undefined, "HEAD", true);
-        const result = await runner.worker(change, task, replacement.id);
-        assert.equal(result.exitCode, 0);
+        const result = await boundedChild(process.execPath, [fileURLToPath(new URL("../../bin/openspec-runner.js", import.meta.url)), "worker", change, task, "--attempt", replacement.id, "--json"], { cwd: repo, timeoutMs: Math.min(timeoutMs - 10000, 120000) });
+        freshSupervisor = result.evidence;
+        assert.equal(freshSupervisor.exitCode, 0); assert.equal(freshSupervisor.signal, null);
+        assert.equal(freshSupervisor.processObservationSupported, true);
+        assert.equal(freshSupervisor.timedOut, false); assert.equal(freshSupervisor.overflow, false);
+        assert.equal(freshSupervisor.error, undefined); assert.deepEqual(freshSupervisor.remainingBeforeCleanup, []);
         const completed = runner.latest(runner.read(change), task);
         assert.notEqual(completed.id, recovered.id); assert.notEqual(completed.session, recovered.session);
         assertSuccessfulJob(completed);
+        assert.equal(completed.worker.pid, freshSupervisor.pid); assert.equal(completed.worker.processStart, freshSupervisor.started);
+        assert.equal(completed.worker.launcher?.exitCode, 0); assert.ok(completed.worker.launcher?.exitedAt);
         assert.equal(readHookLease(runner.repo.stateDir, completed.id)?.session, completed.session);
         freshRootStop = readHookLease(runner.repo.stateDir, completed.id);
         assert.ok(freshRootStop?.stoppedAt);
@@ -218,7 +224,7 @@ export async function recoveryScenario({ repo, runner, change, task, timeoutMs, 
         assert.equal(runner.read(change).attempts.find(a => a.id === recovered.id).phase, "failed");
         attempts.push(summarize(completed));
       }
-      save({ ...evidence, verified: true, proof: recovered.worker.linuxStop, allObservedGone: recovered.worker.linuxStop.receipt.members.every(m => processIsGone(m.pid)), supervisorObservedGone: true, integration, freshRootStop: freshRootStop ? { session: freshRootStop.session, stoppedAt: freshRootStop.stoppedAt, reportAccepted: freshRootStop.reportAccepted } : undefined, sentinelSurvived: observeProcess(sentinel.pid)?.createdAt === sentinel.createdAt, attempts });
+      save({ ...evidence, verified: true, proof: recovered.worker.linuxStop, allObservedGone: recovered.worker.linuxStop.receipt.members.every(m => processIsGone(m.pid)), supervisorObservedGone: true, integration, freshSupervisor, freshRootStop: freshRootStop ? { session: freshRootStop.session, stoppedAt: freshRootStop.stoppedAt, reportAccepted: freshRootStop.reportAccepted } : undefined, sentinelSurvived: observeProcess(sentinel.pid)?.createdAt === sentinel.createdAt, attempts });
     }
   } catch (error) {
     if (/Timed out waiting|Supervisor exited before|Could not suspend|Incomplete Linux|Linux cancellation|Linux process|Python.*pidfd/.test(error.message)) save({ status: "BLOCKED", reason: sanitize(error.message), variant: abrupt ? "SIGKILL-supervisor-before-root-stop" : "SIGSTOP-supervisor-before-root-stop-then-SIGKILL" });
@@ -270,6 +276,12 @@ export function validateRecoveryReceipt(receipt, options) {
     assert.equal(receipt.freshRootStop?.session, fresh.session); assert.ok(receipt.freshRootStop?.stoppedAt); assert.ok(receipt.freshRootStop?.reportAccepted);
     assertSuccessfulJob(fresh); assert.notEqual(fresh.report.commit, old.report.commit);
     assert.ok(fresh.worker.completion.at);
+    assert.equal(fresh.worker.launcher?.exitCode, 0); assert.ok(fresh.worker.launcher?.exitedAt);
+    const child = receipt.freshSupervisor; assert.ok(child);
+    assert.equal(child.exitCode, 0); assert.equal(child.signal, null);
+    assert.equal(child.processObservationSupported, true); assert.equal(child.timedOut, false); assert.equal(child.overflow, false);
+    assert.equal(child.error, undefined); assert.deepEqual(child.remainingBeforeCleanup, []);
+    assert.equal(child.pid, fresh.worker.pid); assert.equal(child.started, fresh.worker.processStart);
     assert.notDeepEqual([fresh.worker.pid, fresh.worker.processStart], [old.worker.pid, old.worker.processStart]);
     assert.notDeepEqual([fresh.worker.launcher?.pid, fresh.worker.launcher?.processStart], [old.worker.launcher.pid, old.worker.launcher.processStart]);
     assert.match(receipt.integration ?? "", /^[a-f0-9]{40,64}$/);

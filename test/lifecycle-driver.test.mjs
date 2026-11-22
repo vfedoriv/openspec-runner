@@ -197,10 +197,11 @@ test("recovery proof fixtures reject detached survivors, uncertainty and wrong s
   }
   assert.throws(() => validateRecoveryReceipt(receipt, { scenario: "recovery", retry: true }));
   const retried = structuredClone(receipt), at = new Date().toISOString();
-  retried.attempts.push({ id: "new", session: "new-session", identityConfirmed: true, observedSession: "new-session", report: { outcome: "completed", commit: "c".repeat(40) }, worker: { pid: 20, processStart: "20", launcher: { pid: 21, processStart: "21" }, exitedAt: at, exitCode: 0, completion: { source: "process-exit", session: "new-session", at } } });
+  retried.attempts.push({ id: "new", session: "new-session", identityConfirmed: true, observedSession: "new-session", report: { outcome: "completed", commit: "c".repeat(40) }, worker: { pid: 20, processStart: "20", launcher: { pid: 21, processStart: "21", exitedAt: at, exitCode: 0 }, exitedAt: at, exitCode: 0, completion: { source: "process-exit", session: "new-session", at } } });
+  retried.freshSupervisor = { pid: 20, started: "20", exitCode: 0, signal: null, processObservationSupported: true, timedOut: false, overflow: false, remainingBeforeCleanup: [] };
   retried.integration = "d".repeat(40); retried.freshRootStop = { session: "new-session", stoppedAt: at, reportAccepted: true };
   assert.doesNotThrow(() => validateRecoveryReceipt(retried, { scenario: "recovery", retry: true }));
-  for (const edit of [r => r.attempts[1].session = "old", r => r.attempts[1].worker.completion.source = "agent-stop", r => r.freshRootStop.session = "old", r => r.integration = undefined, r => r.attempts[0].phase = "integrated", r => r.attempts[1].worker = r.attempts[0].worker]) {
+  for (const edit of [r => r.freshSupervisor.exitCode = null, r => r.attempts[1].worker.launcher.exitCode = null, r => r.freshSupervisor.started = "wrong", r => r.attempts[1].session = "old", r => r.attempts[1].worker.completion.source = "agent-stop", r => r.freshRootStop.session = "old", r => r.integration = undefined, r => r.attempts[0].phase = "integrated", r => r.attempts[1].worker = r.attempts[0].worker]) {
     const bad = structuredClone(retried); edit(bad); assert.throws(() => validateRecoveryReceipt(bad, { scenario: "recovery", retry: true }));
   }
 });
