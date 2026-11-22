@@ -11,7 +11,8 @@ and copied into ignored working evidence before cleanup; scratch is not packaged
 
 ## Scope and versions
 
-Source/tests froze at `af44ca3`. Native Linux6.8.0-151-generic x86_64, Node24.16.0, pnpm11.7.0,
+Product source/dist froze at `af44ca3`; final acceptance driver/tests are at
+`8dc7e82` after the reviewed cleanup correction. Native Linux6.8.0-151-generic x86_64, Node24.16.0, pnpm11.7.0,
 Git2.43.0; existing Python3.10.19 supplies `os.pidfd_open` and
 `signal.pidfd_send_signal`. The project Node floor remains `>=22.13`.
 Optional `@microsoft/copilot-sdk@2.0.1` supports Node `^20.19.0 || >=22.12.0`.
@@ -37,7 +38,8 @@ separately checked historically, then deliberately not selected.
 | Task3 | `e25f724` → `ebfcb7e` | Opaque single choice, saved selector retention, no inferred entitlement/effort;47/47 focused; reviewed clean; real auto worker below |
 | Task4 | `ebfcb7e` → `6ec491c` | Canonical prepared Linux identity proof, public Runner/Feature APIs, optional pidfd signaling; reviewed clean after8 initial and3 follow-up findings;140 focused/138 pass/2 Windows skips |
 | Task5 | `6ec491c` → `af44ca3` | Freeze-before-census `b5412db`, strict absence follow-ups `89a67e8`/`af44ca3`; driver proof `0231870`, independent replacement `a8c6c1d`; reviewed clean;60/60 final native safety+driver tests |
-| Tasks6–7 | frozen `af44ca3` + documentation | Conditional gates, durable record and package checks; final whole-branch review is recorded separately below |
+| Final driver fix | `12b48a2` → `8dc7e82` | Post-publication cleanup keeps prepared supervisor frozen; actual public receipt/account-free regression,61/61 focused safety+driver PASS; scoped re-review PASS |
+| Tasks6–7 | product `af44ca3`, driver/tests `8dc7e82` + documentation | Conditional gates, durable record and package checks; whole-branch review and final verification below |
 
 The SDK1.0.34/protocol3 baseline against CLI1.0.114/protocol4 failed at start,
 before listModels: `SDK protocol version mismatch: SDK supports versions 3-3,
@@ -165,11 +167,16 @@ not the exact unidentified historical branch.
 
 ## Final stable-tree and distribution verification
 
-The coordinator ran `pnpm test` exactly once on the final stable source/tests
+The coordinator's pre-driver-fix checkpoint ran `pnpm test` on source/tests
 `af44ca3`: build included, actual exit0;743 total,719 pass,24 skipped,0 failed,
 0 cancelled,195512.850832ms. The24 skips are existing Windows/opt-in Windows
 checks; there were no optional-pidfd/native-cancellation capability skips.
-No broad repeat was run. The passing suite includes read-only configuration and
+After the reviewed driver correction, final `pnpm test` on `8dc7e82` exited0,
+build included:744 total,720 pass,24 skipped,0 failed,0 cancelled,
+203784.235025ms. The24 skips remain expected platform/opt-in Windows cases,
+with no native pidfd-capability skips. This supersedes the earlier checkpoint.
+The repeat was required by the new regression and driver change.
+The passing checkpoint includes read-only configuration and
 approval preview coverage: “approval previews are read-only and bind concrete
 settings, fingerprint and base”, “CLI plan/review previews and JSON status leave
 state unchanged”, and “coordination and component previews leave every file
@@ -233,10 +240,35 @@ production source/test changes or global settings were made.
 
 `python3 /tmp/copilot-markdown-check.py` checks seven changed documents, local file
 targets and Markdown heading anchors, and rejects ignored scratch targets.
-The seven-document check passed47 local targets/anchors; `git diff --check` passed before the documentation commit. Final
-whole-branch independent review is a coordinator gate after that commit; scoped
-Task1–5 reviews are complete. Native Windows and real GUI/terminal prerequisites
-remain BLOCKED on this host.
+The seven-document check passed47 local targets/anchors; `git diff --check` passed
+before the initial documentation commit. Whole-branch independent review covered
+`19a33bb..12b48a2`. The subsequently confirmed P2 was confined to acceptance-driver
+failure cleanup: after durable preparation followed by an exception, its old
+`finally` could send SIGCONT and invalidate the frozen barrier. Commit `8dc7e82`
+sets the preparation-invoked flag before calling the public API and permits
+cleanup SIGCONT only when preparation was never invoked. Exact owned termination
+cleanup remains available. The regression writes an actual canonical receipt
+through public Runner preparation before injecting the exception, then checks
+zero SIGCONT, no retry/PASS, sentinel survival and exact owned cleanup. Native
+red0/1 then green61/61 (20 driver+41 safety),34930.18035ms; final driver20/20,
+7364.154472ms. Scoped re-review `12b48a2..8dc7e82` PASS, no new findings. Product
+TypeScript, dist, protocol and receipt formats are unchanged. The real live PASS
+success path is unchanged, so no further inference was run.
+
+The nonblocking P3 suggestion to fail unexpected pidfd-capability skips on a
+known-capable CI host remains DEFERRED; no CI feature was added. The current
+native checkpoint had no such skips. Native Windows and real GUI/terminal
+prerequisites remain BLOCKED on this host.
+
+Final post-fix `pnpm pack --dry-run` exited0 in2865ms after the final suite
+completed, including its prepack build. Local links/anchors and diff checks were
+rerun for the two-document closure.
+
+The coordinator independently compared all172 unpacked JavaScript/declaration
+dist files against the checkout: zero hash mismatches, both Linux signal helper
+files present. The dated record was packaged and no `.superpowers` entry was
+present. Product distribution checks remain valid after the test-only driver fix;
+no disposable production-install repeat is needed.
 
 ## Recorded scope decisions
 

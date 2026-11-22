@@ -12,7 +12,8 @@
 
 ## Disposition — 2026-11-22
 
-Source/tests frozen at `af44ca3`. Tasks1–5 implemented and independently reviewed;
+Product source/dist frozen at `af44ca3`; final acceptance driver/tests at
+`8dc7e82`. Tasks1–5 implemented and independently reviewed;
 Tasks6–7 documentation/distribution verification records the final stable tree.
 See the [durable remediation record](../../verification/2026-11-22-copilot-remediation.md)
 for exact versions, commands, identities and limits. Checkboxes below close the
@@ -30,7 +31,11 @@ external or intentionally deferred support into a live PASS.
 - DEFERRED: paid non-auto/effort and optional VS Code discovery bridge. Editor
   live and native Windows checks remain BLOCKED on this Linux host.
 - UNSUPPORTED: Store-linked Copilot authority; existing validators unchanged.
-- Final whole-branch review remains a coordinator gate after documentation commit.
+- COMPLETED review: whole branch `19a33bb..12b48a2`, followed by confirmed P2
+  driver failure-cleanup correction `8dc7e82` and scoped re-review PASS with no
+  new findings. Product source/dist unchanged; no additional inference needed.
+- DEFERRED nonblocking P3: known-capable CI guard against unexpected pidfd
+  capability skips; current native checkpoint had no such skips.
 
 ## Decisions and boundaries
 
@@ -138,7 +143,7 @@ Context7 currently returns older `connection`/`forStdio` examples. Resolve/query
 - [x] Run `pnpm test` once on the final stable tree; diagnose named failures before broad repeats. Run `pnpm pack --dry-run`, check the optional SDK/runtime distribution and installed-package discovery from a disposable unpacked package, not just repository node_modules.
 - [x] Exercise normal catalog and readiness-synchronized SIGINT/SIGTERM through CLI JSON paths, then the Free/Fusion worker and recovery drivers. Verify configuration/approval dry-run remains read-only. Native Windows/GUI prerequisites unavailable here remain explicitly BLOCKED.
 - [x] Check documentation local links/anchors and `git diff --check`. Make catalog compatibility status current only after the selected v2 transport has passed; no placeholder protocol4 success based solely on the SDK version number.
-- [ ] Run final independent whole-branch code review over dependency changes, native runtime distribution, process ownership and persisted-state compatibility (scoped Task1–5 reviews complete; coordinator final review pending). Final report separates completed P0/P1 fixes, externally blocked live checks, intentionally deferred premium/editor support and unsupported Store authority.
+- [x] Run final independent whole-branch code review over dependency changes, native runtime distribution, process ownership and persisted-state compatibility (whole-branch review plus P2 driver cleanup fix8dc7e82 scoped re-review PASS; no new findings). Final report separates completed P0/P1 fixes, externally blocked live checks, intentionally deferred premium/editor support and unsupported Store authority.
 
 ## Delivery order and exit criteria
 
