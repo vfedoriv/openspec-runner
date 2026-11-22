@@ -8,6 +8,9 @@ import { armHookLease, copilotHookPath, readHookLease, validateCopilotHooks, typ
 import { prepareEditorAgent, editorPreparationCommands } from "./copilot-editor.js";
 import { run } from "../system.js";
 import { resolveCommand } from "../platform-command.js";
+import { resolveCopilotRuntime } from "./copilot-runtime.js";
+import { prepareStoreCopilotHooks } from "./copilot-store-hooks.js";
+import type { StoreInvocationScope } from "./types.js";
 import { observeProcess, observeDescendants, linuxProvenance, stopOwnedProcess, windowsTreeIsGone } from "../platform-process.js";
 
 export function copilotDecision(lease: HookLease | undefined, exit: number | null | undefined, editor: boolean): number | undefined {
@@ -21,14 +24,18 @@ export async function superviseCopilot(
   a: SupervisedSession & { id: string }, common: string, prompt: string,
   started: (pid: number) => void,
   evidence: (update: (current: SupervisedSession) => void) => void,
+  store?: StoreInvocationScope,
 ): Promise<number | null> {
-  const harness = getHarness(a.agent), editor = a.agent === "copilot-vscode", stateDir = resolve(common, "openspec-runner");
+  const harness = getHarness(a.agent), editor = a.agent === "copilot-vscode";
+  const { stateDir, reportsDir } = resolveCopilotRuntime({ common, worktree: a.path, store });
   if (!editor && a.expectedSession)
     throw new Error("Legacy Copilot attempt reserves a session; inspect its evidence and explicitly retry with a fresh attempt");
   const hook = resolve(a.path, copilotHookPath);
+  if (store) prepareStoreCopilotHooks({ worktree: a.path, attempt: a.id, scope: store });
   if (!existsSync(hook)) throw new Error("Copilot hooks are missing; run init --agent copilot or copilot-vscode and commit the installed hooks");
   validateCopilotHooks(readFileSync(hook, "utf8"));
   const mode = editor ? prepareEditorAgent({ worktree: a.path, attempt: a.id, model: a.settings.model,
+    store,
     hookFormat: a.settings.options?.hookFormat === "copilot" ? "copilot" : "vscode" }).mode : "";
   if (editor) for (const command of editorPreparationCommands(a.settings, a.path, mode))
     run(command.executable, command.args, command.cwd, 10000);
@@ -38,8 +45,8 @@ export async function superviseCopilot(
   const lease = armHookLease({ stateDir, attempt: a.id, harness: a.agent!, worktree: a.path, generation: a.worker!.token, nonce,
     ...(a.expectedSession ? { expectedSession: a.expectedSession } : {}) });
   if (!editor && process.platform === "linux") evidence(current => { current.worker!.linuxNonce = nonce; });
-  mkdirSync(resolve(dirname(a.path), "reports"), { recursive: true });
-  const invocation = harness.initialInvocation(a.settings, a.path, common, `${prompt}\n[openspec-runner:${a.id}:${nonce}]`, mode);
+  mkdirSync(reportsDir, { recursive: true });
+  const invocation = harness.initialInvocation(a.settings, a.path, common, `${prompt}\n[openspec-runner:${a.id}:${nonce}]`, mode, store);
   mkdirSync(dirname(a.worker!.log), { recursive: true });
   const log = openSync(a.worker!.log, "ax", 0o600);
   let child: ReturnType<typeof spawn> | undefined;

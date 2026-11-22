@@ -185,7 +185,7 @@ function harness(value: unknown, label: string) {
   keys(settings, ["harness", "model", "requestedModel", "effort", "reasoningEffort", "options", "observedModel", "sources"], label);
   text(settings.model, `${label}.model`);
   for (const key of ["harness", "requestedModel", "effort", "reasoningEffort", "observedModel"]) if (settings[key] !== undefined) text(settings[key], `${label}.${key}`);
-  if (settings.harness !== undefined && !["codex", "claude"].includes(settings.harness)) fail(`${label}.harness is unsupported`);
+  if (settings.harness !== undefined && !["codex", "claude", "copilot", "copilot-vscode"].includes(settings.harness)) fail(`${label}.harness is unsupported`);
   if (settings.sources !== undefined) for (const source of array(settings.sources, `${label}.sources`)) text(source, "setting source");
   if (settings.options !== undefined) {
     obj(settings.options, `${label}.options`); canonical(settings.options);

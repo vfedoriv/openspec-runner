@@ -29,7 +29,7 @@ export async function superviseWorker(
     throw new Error(`${harness.displayName} is not ready: ${capabilities.reasons.join("; ")}`);
   if (harness.lifecycle?.ownership === "hook") {
     if (!a.id || !evidence) throw new Error("Copilot supervision requires durable attempt evidence");
-    return superviseCopilot({ ...a, id: a.id }, common, prompt, started, evidence);
+    return superviseCopilot({ ...a, id: a.id }, common, prompt, started, evidence, store);
   }
   if (a.agent === "claude" && a.settings.effort && !capabilities.features.effort)
     throw new Error("Claude CLI does not advertise --effort; omit effort or install a compatible CLI");

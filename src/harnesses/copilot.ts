@@ -70,14 +70,15 @@ export const copilotHarness: HarnessAdapter = {
       process.removeListener("SIGINT", sigint); process.removeListener("SIGTERM", sigterm);
     }
   },
-  initialInvocation(settings, cwd, common, prompt) {
+  initialInvocation(settings, cwd, common, prompt, _session, store) {
     return { executable: "copilot", args: ["--model", settings.model, "--trust-folder", "-p", prompt, "--add-dir", common,
-      "--add-dir", resolve(dirname(cwd), "reports"),
+      "--add-dir", store?.runtimeDir ?? resolve(dirname(cwd), "reports"),
       ...((settings.options?.allowedTools as string[] | undefined) ?? []).flatMap(t => ["--allow-tool", t])], cwd };
   },
-  resumeInvocation(settings, cwd, _common, session) {
+  resumeInvocation(settings, cwd, _common, session, store) {
     if (!/^[a-zA-Z0-9_-]+$/.test(session)) throw new Error("Invalid Copilot session ID");
-    return { executable: "copilot", args: ["--resume", session, "--model", settings.model], cwd };
+    return { executable: "copilot", args: ["--resume", session, "--model", settings.model,
+      ...(store ? ["--add-dir", store.runtimeDir] : [])], cwd };
   },
   planningRules: (r, c) => copilotRules("copilot", r, c),
 };

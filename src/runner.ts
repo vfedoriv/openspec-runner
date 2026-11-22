@@ -295,7 +295,8 @@ export class Runner {
     const binding = readComponentBinding({ stateDir: this.repo.stateDir, change });
     if (!binding || binding.assignmentId !== scope.assignmentId) throw new Error("Store worker scope differs from its imported binding");
     return { root: scope.storeRoot, common: repository(scope.storeRoot).common,
-      runtimeDir: this.repo.stateDir, contextPaths: binding.contextPaths };
+      runtimeDir: this.repo.stateDir, contextPaths: binding.contextPaths,
+      selection: { ...scope, change } };
   }
   actionIdentity(change: string, executionDraft?: string): string {
     const plan = this.plan(change, executionDraft);
@@ -569,7 +570,7 @@ export class Runner {
         );
       if (retry && !old)
         throw new Error("retry requires an existing unsuccessful attempt");
-      if (old) refreshCopilotEvidence(old, this.repo.common);
+      if (old) refreshCopilotEvidence(old, this.repo.common, this.repo.stateDir);
       if (retry && old && agentMayBeActive(old))
         throw new Error("Retry requires the previous supervised worker to have stopped");
       if (
@@ -777,8 +778,8 @@ export class Runner {
       this.assertActionIdentity(change);
       const s = this.requireState(change), a = this.latest(s, task);
       if (options.cancel !== true || !a || a.id !== id) throw new Error("Cancellation requires the current exact attempt and explicit consent");
-      refreshCopilotEvidence(a, this.repo.common);
-      prepareCopilotStop(a, this.repo.common, () => this.save(s), options.timeoutMs);
+      refreshCopilotEvidence(a, this.repo.common, this.repo.stateDir);
+      prepareCopilotStop(a, this.repo.common, () => this.save(s), options.timeoutMs, this.repo.stateDir);
       return a;
     });
   }
@@ -909,9 +910,9 @@ export class Runner {
       if (!a || a.id !== id || !a.setupDone)
         throw new Error("Worker attempt is not ready; inspect before retrying");
       if (a.worker) {
-        refreshCopilotEvidence(a, this.repo.common);
+        refreshCopilotEvidence(a, this.repo.common, this.repo.stateDir);
         if (a.worker.linuxStop) {
-          if (!preparedCopilotStopIsGone(a, this.repo.common))
+          if (!preparedCopilotStopIsGone(a, this.repo.common, this.repo.stateDir))
             throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
           const exitedAt = new Date().toISOString();
           a.worker.exitedAt ??= exitedAt; a.worker.exitCode = null;
@@ -943,7 +944,7 @@ export class Runner {
           a.phase = "failed";
           a.error = "Worker supervisor disappeared without an accepted report; inspect the log and explicitly retry";
         }
-        refreshCopilotEvidence(a, this.repo.common);
+        refreshCopilotEvidence(a, this.repo.common, this.repo.stateDir);
         this.save(s);
         return { a, recovered: true };
       }
@@ -1000,7 +1001,7 @@ export class Runner {
         a = this.latest(s, task);
       if (!a || a.id !== id || !active(a) || !a.setupDone)
         throw new Error("Attempt is not ready to begin");
-      refreshCopilotEvidence(a, this.repo.common);
+      refreshCopilotEvidence(a, this.repo.common, this.repo.stateDir);
       const copilot = a.agent === "copilot" || a.agent === "copilot-vscode";
       const session = requestedSession ?? (copilot ? a.observedSession : a.agent === "codex" ? process.env.CODEX_THREAD_ID : undefined);
       if (copilot && (!a.worker || a.worker.exitedAt || !a.identityConfirmed || session !== a.observedSession))

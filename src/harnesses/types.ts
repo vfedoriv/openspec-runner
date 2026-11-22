@@ -81,6 +81,7 @@ export interface ManagedInvocationContext {
   store?: StoreInvocationScope;
 }
 export interface StoreInvocationScope {
+  selection?: { storeRoot: string; featureId: string; componentId: string; assignmentId: string; change: string };
   root: string;
   common: string;
   runtimeDir: string;

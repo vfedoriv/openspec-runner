@@ -71,6 +71,8 @@ openspec-runner component import FEATURE --store STORE --repository api \
 
 Run these from the API checkout or add `--root API`. Import seals pinned planning snapshots in the Store, creates a code integration worktree under the Store runtime, and binds the code clone to the assignment. No code-local `init` or skill installation is required. Workers receive absolute bundled skill paths and immutable context locations.
 
+Copilot CLI and VS Code Copilot Store workers create disposable, ignored hook files in their assigned linked worktrees. VS Code also uses an ignored per-attempt agent file to select the model. Existing tracked or conflicting runner hook files are rejected for inspection; user files are preserved. Hook callbacks carry explicit Store assignment selection and revalidate the imported binding before recording session evidence. Leases, accepted reports and recovery evidence use the component's Store runtime. Do not run code-local init to repair a Store worker; inspect its scoped assignment and diagnostic instead. VS Code exact chat resume remains unsupported. Native host verification is separate from simulated lifecycle tests; see the dated Copilot Store verification record.
+
 Execution commands use explicit scope:
 
 ```sh

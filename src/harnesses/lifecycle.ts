@@ -14,11 +14,11 @@ export function recoverCopilotLauncher(a: Attempt, proof = {
   platform: process.platform,
   processIsGone,
   treeIsGone: windowsTreeIsGone,
-}, common?: string): void {
+}, common?: string, stateDir?: string): void {
   if (proof.platform === "linux") {
     const worker = a.worker;
     try { validateLinuxWorker(worker); } catch { return; }
-    if (worker?.linuxStop && !!common && preparedCopilotStopIsGone(a, common) &&
+    if (worker?.linuxStop && !!common && preparedCopilotStopIsGone(a, common, stateDir) &&
         worker.exitedAt && worker.exitCode === null) {
       worker.launcher!.exitedAt ??= new Date().toISOString(); worker.launcher!.exitCode = null;
       delete worker.terminationUncertain;
@@ -42,14 +42,14 @@ export function recoverCopilotLauncher(a: Attempt, proof = {
   delete worker.terminationUncertain;
 }
 
-export function refreshCopilotEvidence(a: Attempt, common: string): void {
+export function refreshCopilotEvidence(a: Attempt, common: string, stateDir = resolve(common, "openspec-runner")): void {
   if (a.agent !== "copilot" && a.agent !== "copilot-vscode") return;
-  const lease = readHookLease(resolve(common, "openspec-runner"), a.id);
+  const lease = readHookLease(stateDir, a.id);
   if (!lease || lease.generation !== a.worker?.token || !lease.session) return;
   if (a.expectedSession && a.expectedSession !== lease.session) throw new Error("Copilot reserved session mismatch");
   a.observedSession = lease.session; a.identityConfirmed = true;
   if (lease.stoppedAt) a.terminalEvidence = { type: "agent-stop", metadata: { is_error: !!lease.error || !lease.reportAccepted } };
-  recoverCopilotLauncher(a, undefined, common);
+  recoverCopilotLauncher(a, undefined, common, stateDir);
 }
 
 export function completionProblem(a: Attempt): string | undefined {
@@ -87,9 +87,9 @@ export function agentMayBeActive(a: Attempt): boolean {
 
 const hashRecovery = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 /** Revalidate disk report + complete terminal lease, not merely flattened hook evidence. */
-function linuxBinding(a: Attempt, common: string): string | undefined {
+function linuxBinding(a: Attempt, common: string, stateDir = resolve(common, "openspec-runner")): string | undefined {
   try {
-    const w = a.worker, l = readHookLease(resolve(common, "openspec-runner"), a.id);
+    const w = a.worker, l = readHookLease(stateDir, a.id);
     if (a.agent !== "copilot" || w?.processPlatform !== "linux" || !w.pid || !w.processStart || !w.launcher?.pid || !w.launcher.processStart ||
         !validLinuxProvenance(w.linuxIdentity) || !a.session || !a.identityConfirmed || a.observedSession !== a.session ||
         !a.report || a.report.attempt !== a.id || a.report.session !== a.session || a.terminalEvidence?.type !== "agent-stop" || a.terminalEvidence.metadata?.is_error ||
@@ -98,7 +98,7 @@ function linuxBinding(a: Attempt, common: string): string | undefined {
     const times = [l.armedAt, l.boundAt, l.reportAt, l.stoppedAt].map(value => Date.parse(value ?? ""));
     if (times.some((time, index) => !Number.isFinite(time) || (index > 0 && time < times[index - 1]))) return undefined;
     if ("task" in a.report ? a.report.task !== ("task" in a ? a.task : undefined) : a.report.head !== a.base || a.report.fingerprint !== a.fingerprint) return undefined;
-    const disk = JSON.parse(readFileSync(resolve(common, "openspec-runner", "reports", `${a.id}.json`), "utf8"));
+    const disk = JSON.parse(readFileSync(resolve(stateDir, "reports", `${a.id}.json`), "utf8"));
     if (hashRecovery(disk) !== hashRecovery(a.report)) return undefined;
     return hashRecovery({ attempt: a.id, task: "task" in a ? a.task : undefined, fingerprint: a.fingerprint, base: a.base, path: realpathSync(a.path),
       token: w.token, session: a.session, provenance: w.linuxIdentity, roots: [[w.pid,w.processStart],[w.launcher.pid,w.launcher.processStart]], report: a.report, lease: l });
@@ -113,11 +113,11 @@ function stopIntegrity(binding: string, receipt: import("../platform-process.js"
     roots: receipt.roots.map(identity),
     members: [...receipt.members].sort((a, b) => a.pid - b.pid).map(identity) });
 }
-export function preparedCopilotStopIsGone(a: Attempt, common: string): boolean {
+export function preparedCopilotStopIsGone(a: Attempt, common: string, stateDir = resolve(common, "openspec-runner")): boolean {
   try {
     validateLinuxWorker(a.worker);
     const stop = a.worker?.linuxStop;
-    return !!stop && linuxBinding(a, common) === stop.binding && linuxStopIsGone(stop.receipt);
+    return !!stop && linuxBinding(a, common, stateDir) === stop.binding && linuxStopIsGone(stop.receipt);
   } catch { return false; }
 }
 export function validateLinuxWorker(worker: WorkerReceipt | undefined): void {
@@ -139,8 +139,8 @@ export function validateLinuxWorker(worker: WorkerReceipt | undefined): void {
   }
 }
 /** Explicit cancellation API; caller holds its normal state lock through durable publication. */
-export function prepareCopilotStop(a: Attempt, common: string, save: () => void, timeoutMs = 3000): void {
-  const binding = linuxBinding(a, common), w = a.worker;
+export function prepareCopilotStop(a: Attempt, common: string, save: () => void, timeoutMs = 3000, stateDir = resolve(common, "openspec-runner")): void {
+  const binding = linuxBinding(a, common, stateDir), w = a.worker;
   if (!binding || !w || w.completion || a.phase === "integrated") throw new Error("Copilot cancellation lacks exact session/report/root-stop binding");
   if (w.linuxStop) {
     if (w.linuxStop.binding !== binding) throw new Error("Prepared Linux binding changed");
@@ -150,11 +150,11 @@ export function prepareCopilotStop(a: Attempt, common: string, save: () => void,
   } else {
     prepareLinuxStop({ provenance: w.linuxIdentity, roots: [{pid:w.pid!,createdAt:w.processStart!}, {pid:w.launcher!.pid!,createdAt:w.launcher!.processStart!}],
       retained: w.linuxObserved ?? [], timeoutMs,
-      validate() { if (linuxBinding(a, common) !== binding) throw new Error("Copilot binding changed during freeze"); },
+      validate() { if (linuxBinding(a, common, stateDir) !== binding) throw new Error("Copilot binding changed during freeze"); },
       publish(receipt) {
         w.linuxStop = {version:1,binding,integrity:stopIntegrity(binding, receipt),receipt}; save();
       } });
   }
   w.exitedAt ??= new Date().toISOString(); w.exitCode = null; a.phase = "failed";
-  recoverCopilotLauncher(a, undefined, common); save();
+  recoverCopilotLauncher(a, undefined, common, stateDir); save();
 }

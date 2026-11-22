@@ -444,7 +444,7 @@ export class Feature {
   begin(change: string, id: string, session?: string) {
     this.runner.assertExecutionAuthority(change);
     return this.updateJob(change, id, j => {
-      refreshCopilotEvidence(j, this.repo.common);
+      refreshCopilotEvidence(j, this.repo.common, this.repo.stateDir);
       const copilot = j.agent === "copilot" || j.agent === "copilot-vscode";
       const identity = session ?? (copilot ? j.observedSession : j.agent === "codex" ? process.env.CODEX_THREAD_ID : undefined);
       if (copilot && (!j.identityConfirmed || identity !== j.observedSession)) throw new Error("Copilot begin requires observed hook identity");
@@ -518,8 +518,8 @@ export class Feature {
       const j = s.jobs.find(j => j.id === id);
       if (options.cancel !== true || !j || s.jobs.filter(other => other.role === j.role).at(-1)?.id !== id)
         throw new Error("Cancellation requires the current exact job and explicit consent");
-      refreshCopilotEvidence(j, this.repo.common);
-      prepareCopilotStop(j, this.repo.common, () => this.save(s), options.timeoutMs);
+      refreshCopilotEvidence(j, this.repo.common, this.repo.stateDir);
+      prepareCopilotStop(j, this.repo.common, () => this.save(s), options.timeoutMs, this.repo.stateDir);
       return j;
     });
   }
@@ -529,9 +529,9 @@ export class Feature {
       this.runner.assertActionIdentity(change);
       const j = s.jobs.find(j => j.id === id);
       if (!j || j.phase === "integrated") throw new Error("No recoverable feature job");
-      refreshCopilotEvidence(j, this.repo.common);
+      refreshCopilotEvidence(j, this.repo.common, this.repo.stateDir);
       if (j.worker?.linuxStop) {
-        if (!preparedCopilotStopIsGone(j, this.repo.common))
+        if (!preparedCopilotStopIsGone(j, this.repo.common, this.repo.stateDir))
           throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
         const exitedAt = now();
         j.worker.exitedAt ??= exitedAt; j.worker.exitCode = null;
@@ -562,7 +562,7 @@ export class Feature {
       } else if (j.worker || j.terminal.phase || j.session)
         throw new Error("Startup is ambiguous; inspect saved process/terminal evidence before recovery");
       j.phase = "failed";
-      recoverCopilotLauncher(j, undefined, this.repo.common);
+      recoverCopilotLauncher(j, undefined, this.repo.common, this.repo.stateDir);
       s.error = j.error = "Interrupted job; inspect retained resources and explicitly retry";
     });
   }

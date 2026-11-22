@@ -82,7 +82,7 @@ async function diagnose(cwd: string, selected?: string, planningProject?: string
       checks.push({ id: "model-selection", status: "unchecked", message: "Model selection depends on the task, a launch override, or a supported calling session." });
     }
   }
-  if (base && (harness.id === "copilot" || harness.id === "copilot-vscode")) inspect("copilot-hooks", () => {
+  if (base && !planningProject && (harness.id === "copilot" || harness.id === "copilot-vscode")) inspect("copilot-hooks", () => {
     const hooks = attempt(() => git(root, "show", `${base}:${copilotHookPath}`));
     if (!hooks) throw new Error(`Missing ${copilotHookPath} at the current base. Run openspec-runner init --agent ${harness.id} and commit the hooks.`);
     validateCopilotHooks(hooks);
