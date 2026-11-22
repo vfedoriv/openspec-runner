@@ -18,7 +18,7 @@ import { assertStoreBindingAuthority, resolveExecutionContext, type ExecutionCon
 import { loadSourcePlan } from "./planning-source.js";
 import { assertStoreCodeHistory, assertStoreCodeIndex } from "./store-submission.js";
 import { samePath } from "./platform-paths.js";
-import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
+import { linuxProvenance, processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import {
   atomic,
   json,
@@ -39,7 +39,7 @@ import {
   type Plan,
 } from "./plan.js";
 import type { HarnessSettings, WorkerReceipt, StoreInvocationScope } from "./harnesses/types.js";
-import { completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
+import { prepareCopilotStop, validateLinuxWorker, completionProblem, agentMayBeActive, refreshCopilotEvidence } from "./harnesses/lifecycle.js";
 import { getHarness } from "./harnesses/registry.js";
 import { readFeature, implementationGate, settingsIdentity, invalidateFeature, activeFeatureJobs, pinnedPrompt, type FeatureJob } from "./feature-state.js";
 import {
@@ -193,6 +193,7 @@ export function decodeState(raw: unknown): State {
       throw new Error("Invalid runner state attempt identity");
     if (attempt.agent !== undefined && attempt.harness !== undefined && attempt.agent !== attempt.harness)
       throw new Error(`Attempt has conflicting harness identities: ${attempt.id}`);
+    validateLinuxWorker(attempt.worker);
     return {
       ...attempt,
       agent: attempt.agent ?? attempt.harness ?? "codex",
@@ -768,6 +769,17 @@ export class Runner {
       };
     });
   }
+  prepareCopilotStop(change: string, task: string, id: string, options: { cancel: true; timeoutMs?: number }) {
+    this.assertExecutionAuthority(change);
+    return this.lock(() => {
+      this.assertActionIdentity(change);
+      const s = this.requireState(change), a = this.latest(s, task);
+      if (options.cancel !== true || !a || a.id !== id) throw new Error("Cancellation requires the current exact attempt and explicit consent");
+      refreshCopilotEvidence(a, this.repo.common);
+      prepareCopilotStop(a, this.repo.common, () => this.save(s), options.timeoutMs);
+      return a;
+    });
+  }
   recover(change: string, task: string) {
     this.assertExecutionAuthority(change);
     const prepared = this.lock(() => {
@@ -945,6 +957,7 @@ export class Runner {
             current.worker!.pid = pid;
             current.worker!.processStart = identity;
             current.worker!.processPlatform = process.platform;
+            if (current.agent === "copilot" && process.platform === "linux") current.worker!.linuxIdentity = linuxProvenance();
           });
         },
         (update) => this.updateAttempt(change, id, update),

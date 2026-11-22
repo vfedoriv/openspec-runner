@@ -3,6 +3,10 @@ import type { Assignment } from "../plan.js";
 export type HarnessId = string;
 
 export interface WorkerReceipt {
+  linuxNonce?: string;
+  linuxIdentity?: import("../platform-process.js").LinuxProvenance;
+  linuxObserved?: import("../platform-process.js").ProcessIdentity[];
+  linuxStop?: { version: 1; binding: string; receipt: import("../platform-process.js").LinuxStopReceipt };
   token: string;
   pid?: number;
   processStart?: string;

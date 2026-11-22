@@ -78,3 +78,23 @@ test("feature names cannot escape runtime storage and invalid state fails closed
   writeFileSync(featurePath(dir, "demo"), JSON.stringify({ version: 999, change: "demo", jobs: [] }));
   assert.throws(() => readFeature(dir, "demo"), /Invalid or unsupported/);
 });
+
+import { recoveryFixture } from "./helpers/copilot-recovery-fixture.mjs";
+import { Feature } from "../dist/feature.js";
+import { existsSync, readFileSync } from "node:fs";
+test("public Linux feature cancellation retains failed job and permits explicit new review", { skip: process.platform !== "linux", timeout: 30000 }, async t => {
+  const x = await recoveryFixture(t, true);
+  assert.throws(x.preview, /active/i);
+  x.prepare(); x.reconcile(); x.reconcile();
+  const j = x.current();
+  assert.equal(j.phase, "failed"); assert.equal(j.worker.exitCode, null); assert.equal(j.worker.launcher.exitCode, null);
+  assert.equal(j.worker.completion, undefined); assert.equal(j.session, 'session-'+j.id);
+  assert.ok(existsSync(j.path)); assert.ok(existsSync(j.worker.log));
+  x.preview(); const next = x.f.launch("demo", "review", true); assert.notEqual(next.id, j.id);
+  const before = JSON.stringify(x.f.read("demo"));
+  const old = new Feature(j.path);
+  assert.throws(() => old.report("demo",j.id,j.report), /current|job|superseded/i);
+  await assert.rejects(old.worker("demo",j.id), /current|job|started|ready|superseded/i);
+  assert.throws(x.prepare, /current exact/i);
+  assert.equal(JSON.stringify(x.f.read("demo")),before);
+});

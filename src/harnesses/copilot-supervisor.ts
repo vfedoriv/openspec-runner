@@ -8,7 +8,7 @@ import { armHookLease, copilotHookPath, readHookLease, validateCopilotHooks, typ
 import { prepareEditorAgent, editorPreparationCommands } from "./copilot-editor.js";
 import { run } from "../system.js";
 import { resolveCommand } from "../platform-command.js";
-import { observeProcess, stopOwnedProcess, windowsTreeIsGone } from "../platform-process.js";
+import { observeProcess, observeDescendants, linuxProvenance, stopOwnedProcess, windowsTreeIsGone } from "../platform-process.js";
 
 export function copilotDecision(lease: HookLease | undefined, exit: number | null | undefined, editor: boolean): number | undefined {
   if (!editor && exit === undefined) return undefined;
@@ -37,6 +37,7 @@ export async function superviseCopilot(
   const nonce = randomUUID();
   const lease = armHookLease({ stateDir, attempt: a.id, harness: a.agent!, worktree: a.path, generation: a.worker!.token, nonce,
     ...(a.expectedSession ? { expectedSession: a.expectedSession } : {}) });
+  if (!editor && process.platform === "linux") evidence(current => { current.worker!.linuxNonce = nonce; });
   mkdirSync(resolve(dirname(a.path), "reports"), { recursive: true });
   const invocation = harness.initialInvocation(a.settings, a.path, common, `${prompt}\n[openspec-runner:${a.id}:${nonce}]`, mode);
   mkdirSync(dirname(a.worker!.log), { recursive: true });
@@ -53,7 +54,8 @@ export async function superviseCopilot(
     child.once("spawn", () => {
       try {
         if (!editor) childIdentity = observeProcess(child!.pid!)?.createdAt;
-        evidence(current => { current.worker!.launcher = { pid: child!.pid, processStart: childIdentity }; });
+        evidence(current => { current.worker!.launcher = { pid: child!.pid, processStart: childIdentity };
+          if (!editor && process.platform === "linux" && current.worker!.linuxIdentity && JSON.stringify(current.worker!.linuxIdentity) !== JSON.stringify(linuxProvenance())) throw new Error("Launcher creation provenance changed"); });
         if (invocation.stdin !== undefined) child!.stdin!.end(invocation.stdin);
       } catch (error) { failure = error as Error; }
     });
@@ -70,6 +72,17 @@ export async function superviseCopilot(
       if (failure) throw failure;
       const current = readHookLease(stateDir, a.id);
       if (current?.generation !== lease.generation) throw new Error("Copilot supervisor generation changed");
+      if (!editor && process.platform === "linux") {
+        const observed = observeDescendants(process.pid, observeProcess(process.pid)?.createdAt);
+        if (observed) evidence(value => {
+          const ledger = new Map((value.worker!.linuxObserved ?? []).map(row => [row.pid, row]));
+          for (const row of observed) {
+            if (ledger.has(row.pid) && ledger.get(row.pid)!.createdAt !== row.createdAt) throw new Error("Observed owned PID reused");
+            ledger.set(row.pid, row);
+          }
+          value.worker!.linuxObserved = [...ledger.values()];
+        });
+      }
       const decision = copilotDecision(current, exit, editor);
       if (decision !== undefined) {
         if (current.session) evidence(value => {

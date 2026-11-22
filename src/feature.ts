@@ -8,9 +8,9 @@ import { atomic, clean, git, json, run, shellCommand, quote, attempt, workerRunn
 import { createWorktree, startTerminal, terminalAdapter } from "./adapters.js";
 import { superviseWorker, type SupervisedSession } from "./worker.js";
 import { processStart } from "./processes.js";
-import { processIsGone, windowsTreeIsGone } from "./platform-process.js";
+import { linuxProvenance, processIsGone, windowsTreeIsGone } from "./platform-process.js";
 import { getHarness } from "./harnesses/registry.js";
-import { completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
+import { prepareCopilotStop, validateLinuxWorker, completionProblem, agentMayBeActive, refreshCopilotEvidence, recoverCopilotLauncher } from "./harnesses/lifecycle.js";
 import { safeSummary } from "./summary-service.js";
 import type { HarnessSettings } from "./harnesses/types.js";
 import { assertStoreCodeHistory, assertStoreCodeIndex } from "./store-submission.js";
@@ -454,6 +454,8 @@ export class Feature {
   report(change: string, id: string, report: FeatureReport) {
     this.runner.assertExecutionAuthority(change);
     return this.updateJob(change, id, j => {
+      if (this.read(change).jobs.filter(other => other.role === j.role).at(-1)?.id !== id)
+        throw new Error("Feature job was superseded; retain historical evidence");
       validateFeatureReport(report, j.role);
       if ((!j.report && (j.phase !== "running" || j.worker?.exitedAt)) || !j.session || this.repo.root !== j.path ||
           report.attempt !== id || report.session !== j.session || report.head !== j.base || report.fingerprint !== j.fingerprint)
@@ -486,7 +488,7 @@ export class Feature {
       exitCode = await superviseWorker(j, this.repo.common, this.prompt(change, j), pid => {
         this.runner.assertExecutionAuthority(change);
         const identity = processStart(pid);
-        this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = identity; current.worker!.processPlatform = process.platform; });
+        this.updateJob(change, id, current => { current.worker!.pid = pid; current.worker!.processStart = identity; current.worker!.processPlatform = process.platform; if (current.agent === "copilot" && process.platform === "linux") current.worker!.linuxIdentity = linuxProvenance(); });
       }, (fn: (current: SupervisedSession) => void) => { this.updateJob(change, id, fn); }, this.runner.invocationScope(change));
     } catch (error) { failure = error; }
     this.update(change, s => {
@@ -502,6 +504,19 @@ export class Feature {
     });
     if (failure) throw failure;
     return { attempt: id, exitCode, log: j.worker!.log };
+  }
+  prepareCopilotStop(change: string, id: string, options: { cancel: true; timeoutMs?: number }) {
+    this.runner.assertExecutionAuthority(change);
+    return this.runner.lock(() => {
+      this.runner.assertActionIdentity(change);
+      const s = this.read(change); this.current(s);
+      const j = s.jobs.find(j => j.id === id);
+      if (options.cancel !== true || !j || s.jobs.filter(other => other.role === j.role).at(-1)?.id !== id)
+        throw new Error("Cancellation requires the current exact job and explicit consent");
+      refreshCopilotEvidence(j, this.repo.common);
+      prepareCopilotStop(j, this.repo.common, () => this.save(s), options.timeoutMs);
+      return j;
+    });
   }
   recover(change: string, id: string) {
     // This never replays dispatch. A fresh attempt requires an explicit --retry.
@@ -532,7 +547,7 @@ export class Feature {
       } else if (j.worker || j.terminal.phase || j.session)
         throw new Error("Startup is ambiguous; inspect saved process/terminal evidence before recovery");
       j.phase = "failed";
-      recoverCopilotLauncher(j);
+      recoverCopilotLauncher(j, undefined, this.repo.common);
       s.error = j.error = "Interrupted job; inspect retained resources and explicitly retry";
     });
   }

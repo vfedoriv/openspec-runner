@@ -1,3 +1,4 @@
+import { validateLinuxWorker } from "./harnesses/lifecycle.js";
 import { existsSync, readdirSync, readFileSync, lstatSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -175,9 +176,11 @@ export function readFeature(stateDir: string, change: string): FeatureState | un
     throw new Error("Invalid or unsupported feature state");
   if ((runtime && (!s.delegated || stableDigest({ value: s.delegated }) !== stableDigest({ value: delegationForBinding({ stateDir, binding: runtime }) }))) || (!runtime && s.delegated))
     throw new Error("Feature delegation is missing or mismatched with independent component binding");
+  for (const job of s.jobs) validateLinuxWorker(job.worker);
   return s;
 }
 export function saveFeature(stateDir: string, s: FeatureState) {
+  for (const job of s.jobs) validateLinuxWorker(job.worker);
   atomic(featurePath(stateDir, s.change), s);
 }
 export function activeFeatureJobs(stateDir: string) {
