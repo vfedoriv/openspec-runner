@@ -9,18 +9,56 @@ unknown or incomplete observation is BLOCKED and cannot satisfy acceptance.
 Reviewed deterministic driver focus passes28/28, including exact-identity cleanup,
 late-fork forced-deadline regression and unrelated sentinel survival.
 
-Current prompt-free catalogs: Codex available8, Claude available5; Copilot
-CLI1.0.114/SDK1.0.34 discovery is compatibility BLOCKED (server protocol4 versus
-SDK protocol3 at client.start, before listModels). Earlier CLI1.0.112 discovery
-and CLI1.0.114 worker/archive passes remain independently scoped. No upgrade was
-performed; compatible versions and discovery recheck remain required. See the
-[durable record](verification/2026-11-21-acceptance.md).
+## Current disposition — 2026-11-22
 
-Final integrated verification: build and `pnpm test` PASS (645 total,621 pass,
-24 native Windows skips,0 fail/cancel); package dry-run and local Markdown
-link/anchor/diff checks PASS. These checks do not close remaining live rows.
+The optional SDK is now `@microsoft/copilot-sdk@2.0.1`. On native Linux,
+installed Copilot CLI1.0.114 successfully initialized protocol4 through explicit
+spawned stdio in `coding-agent` mode. Discovery uses the absolute installed worker
+executable and caller cwd/inherited configuration; there is no implicit in-process,
+remote-server or bundled-runtime fallback. Prompt-free normal discovery PASS:
+`auto` / `Auto`, effort unsupported. Readiness-synchronized SIGINT130 and SIGTERM143
+both left empty success stdout and no observed owned survivors. No session or
+inference was created by these probes. See the [2026-11-22 remediation record](verification/2026-11-22-copilot-remediation.md).
 
-## Fresh Linux rows — 2026-11-21
+The Free-account `auto` worker and a fresh prepared late-stop Linux recovery plus
+explicit independent retry PASS. The old attempt remains failed with worker and
+launcher null exit and no completion receipt; only the distinct replacement has
+real OS0, launcher0, matching report/root stop/process-exit receipt and integration
+of exact `HELLO\n` bytes. Separate abrupt supervisor loss before root stop is
+BLOCKED safely: no report, proof, completion or retry is invented. Historical
+unprepared records remain blocked. These bounded observations do not establish
+containment of arbitrary previously unseen daemonization.
+
+`Copilot Fusion` is the user's CLI display label; the SDK independently returned
+`auto` / `Auto`. Neither this label nor `auto` identifies a concrete routed model.
+Paid non-auto and explicit effort live acceptance are DEFERRED for this Free
+account. Runner effort remains unsupported. Optional VS Code discovery bridge is
+DEFERRED; authenticated editor and native Windows reruns remain BLOCKED here.
+Store-linked Copilot authority remains UNSUPPORTED by the unchanged validators.
+
+## Historical integrated checkpoint — 2026-11-21
+
+Build and `pnpm test` passed645 total/621 pass/24 native Windows skips/0 fail/cancel;
+package dry-run and local Markdown checks passed. Those results predate this
+remediation. Earlier CLI1.0.112 discovery passes and SDK1.0.34/CLI1.0.114 protocol
+mismatch remain historical evidence in the [November21 record](verification/2026-11-21-acceptance.md).
+
+## Fresh Linux rows — 2026-11-22
+
+| Harness/source | Scenario | Request / observation | Gate | Evidence |
+|---|---|---|---|---|
+| SDK2.0.1 / installed CLI1.0.114 protocol4 | prompt-free CLI JSON catalog | auto / Auto; effort unsupported | PASS | normal4258ms/exit0, no inference, no observed owned survivors |
+| Same source | readiness-synchronized SIGINT / SIGTERM | empty success stdout; process observation supported | PASS | child130/339ms; child143/217ms; no observed owned survivors |
+| Copilot CLI1.0.114, Git/manual | prepared suspended-supervisor late report/root stop, then SIGKILL, explicit fresh retry | auto; concrete routed model unobserved | PASS | old failed/null/no completion; distinct independent worker OS0/launcher0/receipt/integration `f89f7ef`;71672ms |
+| Same source | abrupt SIGKILL before report/root stop | auto, no retry | BLOCKED (expected safe failure) | no report/proof/completion; retry blocked;12979ms; no observed owned survivors |
+| Free account | paid non-auto / explicit effort | unavailable account capability | DEFERRED | No premium probes or upgrade required; effort unsupported |
+| Copilot editor | optional discovery bridge / authenticated editor | exact profile/host/consent/session evidence unavailable | DEFERRED / BLOCKED | CLI receipts do not close editor gates |
+| Store-linked Copilot | shared assignment authority | unchanged Codex/Claude-only schema | UNSUPPORTED | Separate compatibility/authority design required |
+| Native Windows | current catalog / prepared recovery | Linux host | BLOCKED | No native Windows live execution claimed |
+
+Exact identities, commands, versions and scope are in the [2026-11-22 remediation record](verification/2026-11-22-copilot-remediation.md).
+
+## Historical Linux rows — 2026-11-21
 
 | OS | Harness/version | Worktree/terminal | Scenario | Request / observation | Gate | Evidence |
 |---|---|---|---|---|---|---|

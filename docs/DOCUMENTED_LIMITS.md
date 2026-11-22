@@ -10,6 +10,44 @@ Shared recovery notes reflect `a826c6b` plus the retirement and nested-archive
 changes recorded in [shared recovery verification](SHARED_RECOVERY_VERIFICATION.md).
 See the [maintenance priorities](maintenance-priorities.md) for recommended next work.
 
+## Copilot remediation boundaries — 2026-11-22
+
+Current Linux CLI catalog and prepared late-stop recovery evidence is in the
+[dated remediation record](verification/2026-11-22-copilot-remediation.md).
+The optional SDK2.0.1 uses explicit spawned installed CLI1.0.114/protocol4;
+there is no implicit runtime or remote fallback. Its current account catalog is
+`auto` / `Auto` with effort unsupported. The user label Copilot Fusion does not
+prove a concrete routed model. Saved opaque selectors are retained without
+silently replacing rejected choices or inventing account entitlement.
+
+Prepared Linux stop is available programmatically through the public Runner and
+Feature APIs, with no new CLI command. It requires the existing optional Python3
+stdlib pidfd APIs, coherent Linux PID/procfs namespace and strict kernel-bound
+handles. Missing/unsupported helper, unreadable observations, uncertain identity,
+reuse or incomplete proof fail closed for explicit stop. Ordinary worker startup
+and discovery do not require this helper. Old unprepared records remain blocked.
+A valid proof acknowledges failed/null exits and allows only an explicit fresh
+retry; it never creates successful completion for the stopped old attempt.
+Bounded census evidence does not promise arbitrary previously unobserved daemon
+containment. Abrupt supervisor loss without report/root stop/proof remains blocked.
+
+Paid non-auto and explicit effort acceptance are DEFERRED for the current Free
+account. A separate entitled-account capability decision must verify advertised
+selector/effort, actual startup invocation and independently observed setting
+before effort can be enabled. Historical omitted-effort records keep their
+meaning; CLI help alone does not authorize adding effort fields.
+
+Store-linked Copilot remains UNSUPPORTED by the current schema. A separate design
+must cover old Codex/Claude records, authority and approval hashing, import/context
+protection, retirement/replacement, review/repair, submission receipts and
+mixed-version readers. An SDK upgrade does not expand shared authority.
+
+The optional VS Code discovery bridge remains DEFERRED. It requires exact
+profile/extension-host identity, consent granted and denied, requested versus
+observed selector, existing-chat ownership and completion receipts. CLI passes
+supply no editor proof. Current authenticated editor and native Windows live
+checks remain BLOCKED on this Linux host.
+
 ## Terms
 
 | Term | Meaning |

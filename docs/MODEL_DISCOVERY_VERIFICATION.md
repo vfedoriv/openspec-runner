@@ -7,7 +7,34 @@ fixture passes do not establish live provider compatibility.
 The active backlog is [the verification coverage plan](superpowers/plans/2026-11-20-verification-coverage.md).
 The old plan was removed after its completed steps were separated from its evidence.
 
-## Current disposition — 2026-11-21
+## Current disposition — 2026-11-22
+
+The optional SDK is now `@microsoft/copilot-sdk@2.0.1`. On native Linux,
+installed Copilot CLI1.0.114 successfully initialized protocol4 through explicit
+spawned stdio in `coding-agent` mode. Discovery uses the absolute installed worker
+executable and caller cwd/inherited configuration; there is no implicit in-process,
+remote-server or bundled-runtime fallback. Prompt-free normal discovery PASS:
+`auto` / `Auto`, effort unsupported. Readiness-synchronized SIGINT130 and SIGTERM143
+both left empty success stdout and no observed owned survivors. No session or
+inference was created by these probes. See the [2026-11-22 remediation record](verification/2026-11-22-copilot-remediation.md).
+
+The Free-account `auto` worker and a fresh prepared late-stop Linux recovery plus
+explicit independent retry PASS. The old attempt remains failed with worker and
+launcher null exit and no completion receipt; only the distinct replacement has
+real OS0, launcher0, matching report/root stop/process-exit receipt and integration
+of exact `HELLO\n` bytes. Separate abrupt supervisor loss before root stop is
+BLOCKED safely: no report, proof, completion or retry is invented. Historical
+unprepared records remain blocked. These bounded observations do not establish
+containment of arbitrary previously unseen daemonization.
+
+`Copilot Fusion` is the user's CLI display label; the SDK independently returned
+`auto` / `Auto`. Neither this label nor `auto` identifies a concrete routed model.
+Paid non-auto and explicit effort live acceptance are DEFERRED for this Free
+account. Runner effort remains unsupported. Optional VS Code discovery bridge is
+DEFERRED; authenticated editor and native Windows reruns remain BLOCKED here.
+Store-linked Copilot authority remains UNSUPPORTED by the unchanged validators.
+
+## Historical disposition — 2026-11-21
 
 The November 14/20 observations below remain historical evidence. The Copilot
 path and interrupted-discovery failures have since been corrected and verified
@@ -48,7 +75,7 @@ reruns remain BLOCKED on this Linux host.
   catalog. Copilot effective effort remains unverified; runner effort rejection
   remains intentional. Optional editor bridge is DEFERRED.
 
-Current primary recheck: Codex available8, Claude available5; Copilot catalog
+Historical primary recheck (2026-11-21): Codex available8, Claude available5; Copilot catalog
 compatibility BLOCKED. Ambient CLI1.0.114 protocol4 disagrees with pinned SDK1.0.34
 protocol3 during client.start, before listModels. This is not an authentication
 failure. Earlier CLI1.0.112 discovery passes remain version-specific; no upgrade
@@ -63,7 +90,7 @@ observations, not portable artifacts or guaranteed future files. Installed CLI
 versions changed externally; use each row's version. Integrated604-pass/24-skip
 suite and `pnpm pack --dry-run` exit0 are checkpoints; the suite predates the
 Copilot protocol fix and later Task6 extensions. Final v3 results supersede these
-checkpoints; unavailable Copilot discovery remains independently BLOCKED.
+checkpoints; Copilot discovery was independently BLOCKED at that checkpoint.
 
 ## Windows execution notes
 

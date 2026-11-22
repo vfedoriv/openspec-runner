@@ -1,31 +1,30 @@
 # Remaining maintenance work
 
-Reconciled on 2026-11-21. This is the current backlog; the
+Reconciled on 2026-11-22. This is the current backlog; the
 [verification coverage plan](superpowers/plans/2026-11-20-verification-coverage.md)
 records implementation status per step. The [scenario matrix](ACCEPTANCE_MATRIX.md)
 records exact host/harness/backend gates. Historical counts are not current results.
 
+The completed Linux Copilot milestone is scoped in the [Copilot remediation plan](superpowers/plans/2026-11-21-copilot-remediation.md), including the current Free/Fusion-only account constraint. Completed scoped Linux evidence is recorded in the [remediation record](verification/2026-11-22-copilot-remediation.md); deferred and external gates remain below.
+
 ## Required environment and live gates
 
-- BLOCKED: current Copilot catalog compatibility. Ambient CLI1.0.114 uses protocol4;
-  pinned SDK1.0.34 supports protocol3 (expects CLI1.0.112). Start fails before
-  listModels; this does not establish authentication failure. Restore compatible
-  versions through a separately scoped tooling/dependency change and recheck
-  prompt-free discovery. No upgrade was performed in this plan.
 - BLOCKED: unsupported/unknown driver process observation. The observer supports
   Linux only; incomplete evidence cannot produce acceptance PASS.
 
 - BLOCKED: native Windows final dashboard/imported-binding, byte/directory,
   effort-switch/bulk-confirmation and process-tree reruns. This host is Linux.
   Preserve earlier Windows passes at their original versions and scope.
-- BLOCKED: non-auto Copilot picker/SDK/worker comparison; current SDK catalog
-  exposes only auto. Runtime selected model and effective effort cannot be inferred
-  from that selector. Runner effort rejection remains intentional.
+- DEFERRED: paid non-auto Copilot picker/SDK/worker and explicit effort acceptance
+  on this Free account. Current catalog exposes only auto/Auto. Concrete routed
+  model and effective effort remain unobserved; runner effort stays unsupported.
 - OPEN: independently observed Claude effective effort and historical SDK 0.3.325
   alias discrepancy cause. Fresh SDK/CLI agreement does not explain that old failure.
 - BLOCKED by unavailable real terminal: interactive Codex token recall and real-terminal
   exact-session detach/reattach. Automated command comparison is narrower evidence.
-- BLOCKED: end-to-end Copilot Linux late-stop retry. The observed SIGSTOP-before-root-stop then SIGKILL case retained failed/null exit and rejected integration/cleanup; the intentional stale-launcher ownership guard blocks retry preview. No guard bypass is authorized by this evidence.
+- BLOCKED: historical unprepared Linux records and abrupt-before-stop recovery
+  without affirmative proof. New prepared late-stop recovery plus explicit fresh
+  retry PASS; old failed/null attempts gain no successful completion receipt.
 - OPEN: unrun harness/worktree/terminal combinations. Selected Git/manual Linux
   passes establish no blanket backend support.
 
@@ -35,9 +34,19 @@ Optional VS Code discovery bridge remains DEFERRED. Presentation configuration,
 brief/export and non-invocation coverage passes deterministically (15/15); actual
 provider outline/deck rendering remains BLOCKED/unverified without an available,
 authorized provider. No provider or bridge was installed for acceptance.
-Shared Copilot records remain OUT OF SCOPE pending a separate compatibility plan.
+Store-linked Copilot authority remains UNSUPPORTED pending a separate compatibility plan.
 
-## Completed corrections and evidence
+## Completed remediation — 2026-11-22
+
+SDK2.0.1 with explicit installed CLI1.0.114 spawned transport passes actual
+protocol4 initialization and prompt-free auto/Auto discovery. SIGINT130/SIGTERM143
+leave empty success stdout/no observed owned survivors. Free auto worker and
+prepared Linux late-stop plus distinct real-exit retry/integration PASS. The
+separate abrupt-before-stop check remains safe BLOCKED. Optional existing Python
+pidfd support is required only for explicit prepared Linux stop; unsupported
+helpers fail closed. See the [dated remediation record](verification/2026-11-22-copilot-remediation.md).
+
+## Historical completed corrections and evidence
 
 Copilot executable-path discovery and Linux owned-probe cleanup are corrected;
 Claude catalog protocol/hidden metadata/raw selector safety is covered. A later

@@ -1,25 +1,37 @@
 # Copilot worker verification
 
-## Current scoped update — 2026-11-21
+## Current disposition — 2026-11-22
 
-Native Linux normal-PATH prompt-free discovery and readiness-synchronized
-top-level SIGINT cleanup now PASS; prior path/leak failures remain historical
-in [model discovery evidence](MODEL_DISCOVERY_VERIFICATION.md). The SDK catalog
-exposed only `auto`; non-auto picker/worker parity is BLOCKED, effective model/effort
-is not inferred, and runner effort remains unsupported.
+The optional SDK is now `@microsoft/copilot-sdk@2.0.1`. On native Linux,
+installed Copilot CLI1.0.114 successfully initialized protocol4 through explicit
+spawned stdio in `coding-agent` mode. Discovery uses the absolute installed worker
+executable and caller cwd/inherited configuration; there is no implicit in-process,
+remote-server or bundled-runtime fallback. Prompt-free normal discovery PASS:
+`auto` / `Auto`, effort unsupported. Readiness-synchronized SIGINT130 and SIGTERM143
+both left empty success stdout and no observed owned survivors. No session or
+inference was created by these probes. See the [2026-11-22 remediation record](verification/2026-11-22-copilot-remediation.md).
 
-Current catalog recheck is compatibility BLOCKED: ambient CLI1.0.114 protocol4
-versus pinned SDK1.0.34 protocol3, rejected at client.start before listModels.
-This does not establish authentication failure. Earlier CLI1.0.112 catalog and
-CLI1.0.114 worker/archive passes remain independently scoped. No upgrade was
-performed; compatible versions and prompt-free recheck remain required.
+The Free-account `auto` worker and a fresh prepared late-stop Linux recovery plus
+explicit independent retry PASS. The old attempt remains failed with worker and
+launcher null exit and no completion receipt; only the distinct replacement has
+real OS0, launcher0, matching report/root stop/process-exit receipt and integration
+of exact `HELLO\n` bytes. Separate abrupt supervisor loss before root stop is
+BLOCKED safely: no report, proof, completion or retry is invented. Historical
+unprepared records remain blocked. These bounded observations do not establish
+containment of arbitrary previously unseen daemonization.
 
-Fresh Git/manual `auto` worker session/report/real-exit/integration, exact active
-attach command, report-before-exit rejection and separate cancellation/positive
-archive checks are recorded in the [scenario matrix](ACCEPTANCE_MATRIX.md).
-A separate genuine blocking-review → repair → fresh review → explicit archive also PASS, with exact tracked greeting/policy bytes at repaired integration and archive heads. The observed Linux SIGSTOP-supervisor-before-root-stop then SIGKILL case safely retained failed/null exit/no completion and rejected integration/cleanup; end-to-end retry is BLOCKED by the intentional stale-launcher ownership guard. No recovery PASS or bypass follows. Native Windows reruns and unavailable real-terminal/editor interaction remain BLOCKED independently. Optional discovery bridge is DEFERRED. Installed CLI versions varied between runs; each receipt records its own version.
+`Copilot Fusion` is the user's CLI display label; the SDK independently returned
+`auto` / `Auto`. Neither this label nor `auto` identifies a concrete routed model.
+Paid non-auto and explicit effort live acceptance are DEFERRED for this Free
+account. Runner effort remains unsupported. Optional VS Code discovery bridge is
+DEFERRED; authenticated editor and native Windows reruns remain BLOCKED here.
+Store-linked Copilot authority remains UNSUPPORTED by the unchanged validators.
 
-
+Before any support expansion, apply the
+[conditional capability and authority gates](DOCUMENTED_LIMITS.md#copilot-remediation-boundaries--2026-11-22):
+entitled-account startup/effective-setting evidence for effort, a separate shared
+authority compatibility design for Store-linked Copilot, and exact editor
+profile/host/consent/chat-completion evidence for a discovery bridge.
 
 Copilot CLI and VS Code Copilot are distinct harnesses: `copilot` and
 `copilot-vscode`. Both execute implementation, review, and repair workers.
