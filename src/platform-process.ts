@@ -144,7 +144,7 @@ export function linuxStopIsGone(receipt: LinuxStopReceipt): boolean {
   const rows = snapshot();
   return !!rows && receipt.members.every(m => {
     const current = rows.find(r => r.pid === m.pid);
-    return !current || (current.createdAt === m.createdAt && linuxGroupState(m)?.state === "dead");
+    return !current || (current.createdAt === m.createdAt && ["dead", "absent"].includes(linuxGroupState(m)?.state ?? ""));
   });
 }
 const pauseLinux = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
@@ -166,7 +166,20 @@ export function prepareLinuxStop(input: {
     ledger.set(row.pid, row);
   }
   const introduced = new Map<number, ProcessIdentity>();
-  const absentNonroot = (member: ProcessIdentity) => !input.roots.some(root => root.pid === member.pid) && snapshot(member.pid)?.length === 0;
+  const isRoot = (member: ProcessIdentity) => input.roots.some(root => root.pid === member.pid);
+  const freshMember = (member: ProcessIdentity): ProcessIdentity | undefined => {
+    const rows = snapshot(member.pid);
+    if (!rows) throw new Error("Incomplete Linux identity observation");
+    const fresh = rows[0];
+    if ((fresh && fresh.createdAt !== member.createdAt) || (!fresh && isRoot(member))) throw new Error("Identity changed before freeze");
+    return fresh;
+  };
+  const goneNonroot = (member: ProcessIdentity): boolean => {
+    if (isRoot(member)) return false;
+    const rows = snapshot(member.pid);
+    if (!rows) return false;
+    return rows.length === 0 || (rows[0].createdAt === member.createdAt && ["dead", "absent"].includes(linuxGroupState(member)?.state ?? ""));
+  };
   let published = false;
   try {
     const initial = snapshot();
@@ -196,11 +209,13 @@ export function prepareLinuxStop(input: {
         // identity first so ordinary thread churn cannot invalidate the census.
         // Caller-stopped, zombie and tracing leaders retain strict group checks.
         if (["R", "S", "D", "I"].includes(current.state ?? "")) {
-          const fresh = observeProcess(member.pid);
-          if (!fresh && absentNonroot(member)) { allStopped = false; continue; }
-          if (fresh?.createdAt !== member.createdAt) throw new Error("Identity changed before freeze");
+          const fresh = freshMember(member);
+          if (!fresh) { allStopped = false; continue; }
           if (["R", "S", "D", "I"].includes(fresh.state ?? "")) {
-            signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now());
+            if (signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now()) === "gone") {
+              if (!goneNonroot(member)) throw new Error("Identity uncertain after freeze");
+              allStopped = false; continue;
+            }
             introduced.set(member.pid, member);
             allStopped = false;
             continue;
@@ -208,6 +223,10 @@ export function prepareLinuxStop(input: {
         }
         const group = linuxGroupState(member);
         if (!group) throw new Error("Incomplete Linux thread-group observation");
+        if (group.state === "absent") {
+          if (input.roots.some(root => root.pid === member.pid)) throw new Error("Linux root disappeared before barrier publication");
+          allStopped = false; continue;
+        }
         groupKeys.push(group.key);
         if (group.state === "dead") {
           if (input.roots.some(root => root.pid === member.pid)) throw new Error("Linux root died before barrier publication");
@@ -215,10 +234,12 @@ export function prepareLinuxStop(input: {
         }
         if (group.state === "stopped") continue;
         allStopped = false;
-        const fresh = observeProcess(member.pid);
-        if (!fresh && absentNonroot(member)) { allStopped = false; continue; }
-        if (fresh?.createdAt !== member.createdAt) throw new Error("Identity changed before freeze");
-        signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now());
+        const fresh = freshMember(member);
+        if (!fresh) { allStopped = false; continue; }
+        if (signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now()) === "gone") {
+          if (!goneNonroot(member)) throw new Error("Identity uncertain after freeze");
+          allStopped = false; continue;
+        }
         introduced.set(member.pid, member);
       }
       const key = JSON.stringify({ members: [...ledger.values()].map(r => [r.pid,r.createdAt]).sort((a,b) => Number(a[0])-Number(b[0])), groups: groupKeys.sort() });
@@ -256,7 +277,7 @@ export function finishPreparedLinuxStop(receipt: LinuxStopReceipt, timeoutMs = 3
   for (const member of receipt.members) {
     if (Date.now() >= deadline) throw new Error("Linux termination deadline expired; prepared receipt retained");
     const current = rows.find(row => row.pid === member.pid);
-    if (member.pid === process.pid || (current && (current.createdAt !== member.createdAt || !["stopped", "dead"].includes(linuxGroupState(member)?.state ?? ""))))
+    if (member.pid === process.pid || (current && (current.createdAt !== member.createdAt || !["stopped", "dead", "absent"].includes(linuxGroupState(member)?.state ?? ""))))
       throw new Error("Prepared Linux member reused or resumed; cancellation uncertain");
   }
   for (const member of [...receipt.members].reverse()) {
@@ -265,9 +286,9 @@ export function finishPreparedLinuxStop(receipt: LinuxStopReceipt, timeoutMs = 3
     if (!observation) throw new Error("Incomplete Linux termination observation; prepared receipt retained");
     const current = observation.find(row => row.pid === member.pid);
     const group = current ? linuxGroupState(member) : undefined;
-    if (current && (current.createdAt !== member.createdAt || !group || !["stopped", "dead"].includes(group.state)))
+    if (current && (current.createdAt !== member.createdAt || !group || !["stopped", "dead", "absent"].includes(group.state)))
       throw new Error("Prepared Linux identity changed or resumed before termination");
-    if (current && group!.state !== "dead") signalLinuxIdentity(member, receipt.provenance, "SIGKILL", deadline - Date.now());
+    if (current && group!.state !== "dead" && group!.state !== "absent") signalLinuxIdentity(member, receipt.provenance, "SIGKILL", deadline - Date.now());
   }
   while (Date.now() < deadline) { if (linuxStopIsGone(receipt)) return; pauseLinux(); }
   throw new Error("Linux termination remains uncertain; prepared receipt retained");
@@ -290,7 +311,7 @@ function retainLinuxDescendants(rows: ProcessIdentity[], ledger: Map<number, Pro
 }
 
 /** Leader state alone never establishes group stop or death. Tracing stops reject. */
-function linuxGroupState(identity: ProcessIdentity): { state: "running" | "stopped" | "dead"; key: string } | undefined {
+function linuxGroupState(identity: ProcessIdentity): { state: "running" | "stopped" | "dead" | "absent"; key: string } | undefined {
   try {
     const path = `/proc/${identity.pid}/task`;
     const names = readdirSync(path).sort();
@@ -302,10 +323,19 @@ function linuxGroupState(identity: ProcessIdentity): { state: "running" | "stopp
       return { pid: Number(name), createdAt: fields[19], state: fields[0] };
     });
     if (JSON.stringify(names) !== JSON.stringify(readdirSync(path).sort()) ||
-        tasks.find(task => task.pid === identity.pid)?.createdAt !== identity.createdAt ||
-        observeProcess(identity.pid)?.createdAt !== identity.createdAt) return undefined;
+        tasks.find(task => task.pid === identity.pid)?.createdAt !== identity.createdAt) return undefined;
+    const current = snapshot(identity.pid);
+    if (!current) return undefined;
+    if (current.length === 0) return { state: "absent", key: JSON.stringify([identity.pid, identity.createdAt, "absent"]) };
+    if (current[0].createdAt !== identity.createdAt) return undefined;
     const state = tasks.every(task => task.state === "Z") ? "dead"
       : tasks.every(task => task.state === "T" || task.state === "Z") ? "stopped" : "running";
     return { state, key: JSON.stringify(tasks.map(task => [task.pid, task.createdAt])) };
-  } catch { return undefined; }
+  } catch (error: any) {
+    // Only a definite missing procfs entry plus an independent complete census
+    // establishes absence. Unreadable or inconsistent groups remain uncertain.
+    if (["ENOENT", "ESRCH"].includes(error.code) && snapshot(identity.pid)?.length === 0)
+      return { state: "absent", key: JSON.stringify([identity.pid, identity.createdAt, "absent"]) };
+    return undefined;
+  }
 }

@@ -48,27 +48,38 @@ try:
     if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
         raise RuntimeError('unsupported')
     pid = os.getpid() if request['operation'] == 'probe' else request['identity']['pid']
-    fd = os.pidfd_open(pid, 0)
+    if request['operation'] not in ('probe', 'SIGSTOP', 'SIGCONT', 'SIGKILL'):
+        raise RuntimeError('unsupported')
+    try:
+        fd = os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        if request['operation'] == 'probe':
+            raise
+        print(json.dumps({'result': 'gone'}))
+        sys.exit(0)
     try:
         check_view(request['provenance'])
         if request['operation'] == 'probe':
             signal.pidfd_send_signal(fd, 0, None, 0)
             result = 'ready'
         else:
-            if identity(pid) != request['identity']['createdAt']:
-                raise RuntimeError('identity')
             poller = select.poll()
             poller.register(fd, select.POLLIN)
-            if poller.poll(0):
+            try:
+                if identity(pid) != request['identity']['createdAt']:
+                    raise RuntimeError('identity')
+                if poller.poll(0):
+                    result = 'gone'
+                else:
+                    operation = request['operation']
+                    if operation != 'SIGSTOP':
+                        group_stopped(pid)
+                    signal.pidfd_send_signal(fd, getattr(signal, operation), None, 0)
+                    result = 'sent'
+            except (FileNotFoundError, ProcessLookupError):
+                if not poller.poll(0):
+                    raise
                 result = 'gone'
-            else:
-                operation = request['operation']
-                if operation not in ('SIGSTOP', 'SIGCONT', 'SIGKILL'):
-                    raise RuntimeError('unsupported')
-                if operation != 'SIGSTOP':
-                    group_stopped(pid)
-                signal.pidfd_send_signal(fd, getattr(signal, operation), None, 0)
-                result = 'sent'
     finally:
         os.close(fd)
     print(json.dumps({'result': result}))
@@ -96,6 +107,8 @@ function invoke(operation: string, provenance: LinuxProvenance, identity?: Proce
 export function probeLinuxSignals(provenance: LinuxProvenance, timeoutMs = 1000): void {
   if (invoke("probe", provenance, undefined, timeoutMs) !== "ready") throw new Error(diagnostic);
 }
-export function signalLinuxIdentity(identity: ProcessIdentity, provenance: LinuxProvenance, signal: "SIGSTOP" | "SIGCONT" | "SIGKILL", timeoutMs = 1000): void {
-  invoke(signal, provenance, identity, timeoutMs);
+export function signalLinuxIdentity(identity: ProcessIdentity, provenance: LinuxProvenance, signal: "SIGSTOP" | "SIGCONT" | "SIGKILL", timeoutMs = 1000): "sent" | "gone" {
+  const result = invoke(signal, provenance, identity, timeoutMs);
+  if (result !== "sent" && result !== "gone") throw new Error(diagnostic);
+  return result;
 }

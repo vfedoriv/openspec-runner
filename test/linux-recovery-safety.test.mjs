@@ -303,3 +303,99 @@ for(const kind of ['root-absent','nonroot-EACCES','nonroot-EIO','nonroot-reused'
   assert.throws(()=>p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(){published=true}}),/Identity changed|roots disappeared|observation/);
   assert.equal(published,false);assert.equal(kills,0);
 });
+
+for(const boundary of ['before-open','after-open'])test(`Linux freeze proves a retained exit ${boundary} pidfd startup`,pidfd,async t=>{
+  const reaper=spawn('python3',['-I','-S','-c','import subprocess,sys,time\nc=subprocess.Popen([sys.executable,"-I","-S","-c","import time;time.sleep(60)"]);print(c.pid,flush=True);c.wait();time.sleep(60)'],{stdio:['ignore','pipe','ignore']});
+  t.after(()=>{try{reaper.kill('SIGKILL')}catch{}});
+  const [output]=await once(reaper.stdout,'data'),member=p.observeProcess(Number(output.toString().trim()));
+  t.after(()=>{if(p.observeProcess(member.pid)?.createdAt===member.createdAt)try{process.kill(member.pid,'SIGKILL')}catch{}});
+  const roots=await children(t),execute=cp.execFileSync;let triggered=false,published=false;
+  const marker=join(fs.mkdtempSync(join(tmpdir(),'pidfd-boundary-')),'opened');
+  cp.execFileSync=function(command,args,options){
+    if(command==='python3'){
+      const request=JSON.parse(options.input);
+      if(request.operation==='SIGSTOP'&&request.identity.pid===member.pid){
+        triggered=true;
+        if(boundary==='before-open'){process.kill(member.pid,'SIGKILL');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,40);}
+        else {
+          const killer=spawn('python3',['-I','-S','-c',`import os,signal,time\nend=time.monotonic()+2\nwhile not os.path.exists(${JSON.stringify(marker)}) and time.monotonic()<end: time.sleep(.001)\nassert os.path.exists(${JSON.stringify(marker)})\nwith open('/proc/${member.pid}/stat') as f: text=f.read()\nassert text[text.rfind(')')+2:].split()[19]==${JSON.stringify(member.createdAt)}\nos.kill(${member.pid},signal.SIGKILL)`],{stdio:'ignore'});
+          t.after(()=>{try{killer.kill('SIGKILL')}catch{}});
+          args=[...args];args[3]=args[3].replace(/^([ ]*)fd = os.pidfd_open\(pid, 0\)$/m,(_,indent)=>`${indent}fd = os.pidfd_open(pid, 0)\n${indent}with open(${JSON.stringify(marker)},'w') as marker: marker.write(str(fd))\n${indent}import time; time.sleep(.15)`);
+        }
+      }
+    }
+    return execute.call(this,command,args,options);
+  };syncBuiltinESMExports();t.after(()=>{cp.execFileSync=execute;syncBuiltinESMExports()});
+  const receipt=p.prepareLinuxStop({provenance:p.linuxProvenance(),roots,retained:[member],timeoutMs:3000,publish(){published=true}});
+  assert.ok(triggered);assert.ok(published);assert.ok(receipt.members.some(m=>m.pid===member.pid));assert.ok(p.linuxStopIsGone(receipt));
+  if(boundary==='after-open')assert.match(fs.readFileSync(marker,'utf8'),/^\d+$/,'Kernel pidfd opened before target exited');
+});
+
+for(const boundary of ["task-open","identity-recheck"])test(`Linux barrier combines busy threads with a reaped stopped retained member at ${boundary}`,pidfd,async t=>{
+  const reaper=spawn('python3',['-I','-S','-c','import subprocess,sys,time\nc=subprocess.Popen([sys.executable,"-I","-S","-c","import time;time.sleep(60)"]);print(c.pid,flush=True);c.wait();time.sleep(60)'],{stdio:['ignore','pipe','ignore']});
+  t.after(()=>{try{reaper.kill('SIGKILL')}catch{}});
+  const [output]=await once(reaper.stdout,'data'),member=p.observeProcess(Number(output.toString().trim()));
+  t.after(()=>{if(p.observeProcess(member.pid)?.createdAt===member.createdAt)try{process.kill(member.pid,'SIGKILL')}catch{}});
+  const churn=spawn('python3',['-I','-S','-c','import threading,time\nwhile True:\n t=threading.Thread(target=lambda: time.sleep(.0001));t.start();t.join()'],{stdio:'ignore'});
+  await once(churn,'spawn');t.after(()=>{try{churn.kill('SIGKILL')}catch{}});
+  const [launcher]=await children(t,1),root=p.observeProcess(churn.pid);let triggered=false,published=false,stoppedScans=0,memberTaskReads=0;
+  mockBuiltin(t,'readdirSync',original=>function(path,...args){
+    if(path===`/proc/${member.pid}/task`&&!triggered&&++memberTaskReads===(boundary==='task-open'?1:2)){
+      assert.equal(p.observeProcess(member.pid)?.state,'T');triggered=true;
+      const rows=boundary==='identity-recheck'?original.call(this,path,...args):undefined;
+      process.kill(member.pid,'SIGKILL');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,40);
+      if(rows)return rows;
+    }
+    if(path===`/proc/${root.pid}/task`&&triggered)stoppedScans++;
+    return original.call(this,path,...args);
+  });
+  const receipt=p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(value){published=true;assert.ok(stoppedScans>=4);assert.ok(value.members.some(m=>m.pid===member.pid))}});
+  assert.ok(triggered&&published);assert.ok(p.linuxStopIsGone(receipt));
+});
+
+for(const kind of ['ENOENT-alive','ESRCH-reused','ENOENT-unreadable','EACCES-absent','EIO-absent'])test(`Linux group disappearance rejects ${kind} uncertainty`,pidfd,async t=>{
+  const [root,launcher,member]=await children(t,3);process.kill(member.pid,'SIGSTOP');await new Promise(r=>setTimeout(r,20));let failing=false,published=false;
+  mockBuiltin(t,'readdirSync',original=>function(path,...args){
+    if(path===`/proc/${member.pid}/task`){failing=true;throw Object.assign(new Error('group observation failed'),{code:kind.split('-')[0]});}
+    return original.call(this,path,...args);
+  });
+  mockBuiltin(t,'readFileSync',original=>function(path,...args){
+    if(failing&&path===`/proc/${member.pid}/stat`){
+      if(kind.endsWith('unreadable')||kind.endsWith('absent'))throw Object.assign(new Error('identity unavailable'),{code:kind.endsWith('unreadable')?'EIO':'ENOENT'});
+      if(kind.endsWith('reused')){const text=original.call(this,path,...args),at=text.lastIndexOf(')')+2,fields=text.slice(at).split(' ');fields[19]=String(BigInt(fields[19])+1n);return text.slice(0,at)+fields.join(' ');}
+    }
+    return original.call(this,path,...args);
+  });
+  assert.throws(()=>p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(){published=true}}),/Incomplete Linux thread-group observation/);
+  assert.equal(published,false);
+});
+
+for(const rootGone of [true,false])test(`Linux caller rejects helper gone with ${rootGone?'root':'live nonroot'} identity`,pidfd,async t=>{
+  const [root,launcher,member]=await children(t,3),target=rootGone?root:member,execute=cp.execFileSync;let published=false;
+  cp.execFileSync=function(command,args,options){
+    if(command==='python3'){const request=JSON.parse(options.input);if(request.operation==='SIGSTOP'&&request.identity.pid===target.pid)return JSON.stringify({result:'gone'});}
+    return execute.call(this,command,args,options);
+  };syncBuiltinESMExports();t.after(()=>{cp.execFileSync=execute;syncBuiltinESMExports()});
+  assert.throws(()=>p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(){published=true}}),/Identity uncertain after freeze/);
+  assert.equal(published,false);
+});
+
+test("Linux freeze retains an unreaped exact all-zombie nonroot after pidfd gone",pidfd,async t=>{
+  const [root,launcher,member]=await children(t,3),execute=cp.execFileSync;let triggered=false,published=false;
+  cp.execFileSync=function(command,args,options){
+    if(command==='python3'){const request=JSON.parse(options.input);if(request.operation==='SIGSTOP'&&request.identity.pid===member.pid){triggered=true;process.kill(member.pid,'SIGKILL');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,40);assert.equal(p.observeProcess(member.pid)?.state,'Z');}}
+    return execute.call(this,command,args,options);
+  };syncBuiltinESMExports();t.after(()=>{cp.execFileSync=execute;syncBuiltinESMExports()});
+  const receipt=p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(value){published=true;assert.ok(value.members.some(m=>m.pid===member.pid&&m.createdAt===member.createdAt))}});
+  assert.ok(triggered&&published);assert.ok(p.linuxStopIsGone(receipt));
+});
+
+for(const code of ['EACCES','EIO'])test(`Linux freeze never erases transient ${code} with later absence`,pidfd,async t=>{
+  const [root,launcher,member]=await children(t,3);let reads=0,published=false;
+  mockBuiltin(t,'readFileSync',original=>function(path,...args){
+    if(path===`/proc/${member.pid}/stat`&&++reads>=3)throw Object.assign(new Error('transient observation failure'),{code:reads===3?code:'ENOENT'});
+    return original.call(this,path,...args);
+  });
+  assert.throws(()=>p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(){published=true}}),/Incomplete Linux identity observation/);
+  assert.equal(published,false);assert.equal(reads,3);
+});
