@@ -530,8 +530,16 @@ export class Feature {
       const j = s.jobs.find(j => j.id === id);
       if (!j || j.phase === "integrated") throw new Error("No recoverable feature job");
       refreshCopilotEvidence(j, this.repo.common);
-      if (j.worker?.linuxStop && !preparedCopilotStopIsGone(j, this.repo.common))
-        throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
+      if (j.worker?.linuxStop) {
+        if (!preparedCopilotStopIsGone(j, this.repo.common))
+          throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
+        const exitedAt = now();
+        j.worker.exitedAt ??= exitedAt; j.worker.exitCode = null;
+        j.worker.launcher!.exitedAt ??= exitedAt; j.worker.launcher!.exitCode = null;
+        delete j.worker.terminationUncertain;
+        j.phase = "failed";
+        return;
+      }
       if (j.agent === "copilot-vscode" && agentMayBeActive(j))
         throw new Error("Editor agent activity is uncertain; retain its worktree and inspect the saved chat");
       if (j.worker?.exitedAt) {

@@ -247,9 +247,10 @@ export function finishPreparedLinuxStop(receipt: LinuxStopReceipt, timeoutMs = 3
     const observation = snapshot(member.pid);
     if (!observation) throw new Error("Incomplete Linux termination observation; prepared receipt retained");
     const current = observation.find(row => row.pid === member.pid);
-    if (current && (current.createdAt !== member.createdAt || !["stopped", "dead"].includes(linuxGroupState(member)?.state ?? "")))
+    const group = current ? linuxGroupState(member) : undefined;
+    if (current && (current.createdAt !== member.createdAt || !group || !["stopped", "dead"].includes(group.state)))
       throw new Error("Prepared Linux identity changed or resumed before termination");
-    if (current && linuxGroupState(member)?.state !== "dead") signalLinuxIdentity(member, receipt.provenance, "SIGKILL", deadline - Date.now());
+    if (current && group!.state !== "dead") signalLinuxIdentity(member, receipt.provenance, "SIGKILL", deadline - Date.now());
   }
   while (Date.now() < deadline) { if (linuxStopIsGone(receipt)) return; pauseLinux(); }
   throw new Error("Linux termination remains uncertain; prepared receipt retained");

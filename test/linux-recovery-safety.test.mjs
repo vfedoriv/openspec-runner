@@ -7,6 +7,8 @@ import { syncBuiltinESMExports } from "node:module";
 const p = await import(process.env.TASK4_PLATFORM_MODULE ?? new URL("../dist/platform-process.js", import.meta.url).href);
 const { validateLinuxWorker } = await import(process.env.TASK4_LIFECYCLE_MODULE ?? new URL("../dist/harnesses/lifecycle.js", import.meta.url).href);
 import { recoveryFixture } from "./helpers/copilot-recovery-fixture.mjs";
+import { linuxPidfdOptions } from "./helpers/linux-pidfd-support.mjs";
+const pidfd = { ...linuxPidfdOptions, timeout: 30000 };
 const linux = { skip: process.platform !== "linux", timeout: 30000 };
 async function children(t, count=2) {
   const result=Array.from({length:count},()=>spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}));
@@ -19,7 +21,7 @@ function mockBuiltin(t, name, fn) {
   t.after(()=>{fs[name]=original;syncBuiltinESMExports()});
 }
 
-test("initial Linux census retains a child visible only before reparenting",linux,async t=>{
+test("initial Linux census retains a child visible only before reparenting",pidfd,async t=>{
   const [root,launcher,child]=await children(t,3);let reads=0;
   mockBuiltin(t,'readFileSync',original=>function(path,...args){
     const value=original.call(this,path,...args);
@@ -55,7 +57,7 @@ test("Linux proof rejects zombie leader with runnable sibling and per-thread tra
   assert.equal(p.linuxStopIsGone(receipt),false);state='t';assert.equal(p.linuxStopIsGone(receipt),false);
 });
 
-test("known prepublication validation failure rolls back introduced stops",linux,async t=>{
+test("known prepublication validation failure rolls back introduced stops",pidfd,async t=>{
   const roots=await children(t);let published=false;
   assert.throws(()=>p.prepareLinuxStop({provenance:p.linuxProvenance(),roots,retained:[],timeoutMs:3000,
     validate(){throw new Error('binding changed before publication')},publish(){published=true}}),/binding changed/);
@@ -64,7 +66,7 @@ test("known prepublication validation failure rolls back introduced stops",linux
   assert.ok(roots.every(r=>p.observeProcess(r.pid)?.state!=='T'));
 });
 
-for(const managed of [false,true])test(`prepared ${managed?'feature':'runner'} partial reconciliation preserves exact saved bytes`,linux,async t=>{
+for(const managed of [false,true])test(`prepared ${managed?'feature':'runner'} partial reconciliation preserves exact saved bytes`,pidfd,async t=>{
   const x=await recoveryFixture(t,managed),owner=managed?x.f:x.r,save=owner.save.bind(owner);
   owner.save=s=>{save(s);throw new Error('after durable receipt')};assert.throws(x.prepare,/durable/);owner.save=save;
   process.kill(x.current().worker.pid,'SIGKILL');await new Promise(resolve=>setTimeout(resolve,60));
@@ -74,7 +76,7 @@ for(const managed of [false,true])test(`prepared ${managed?'feature':'runner'} p
   x.prepare();await x.reconcile();x.preview();
 });
 
-test("canonical prepared integrity rejects truncating a barrier-only member",linux,async t=>{
+test("canonical prepared integrity rejects truncating a barrier-only member",pidfd,async t=>{
   const x=await recoveryFixture(t),[child]=await children(t,1),original=fs.readFileSync;let seen=0;
   fs.readFileSync=function(path,...args){const value=original.call(this,path,...args);
     if(path===`/proc/${child.pid}/stat`&&seen++<2){const at=value.lastIndexOf(')')+2,fields=value.slice(at).split(' ');fields[1]=String(x.current().worker.launcher.pid);return value.slice(0,at)+fields.join(' ')}return value};syncBuiltinESMExports();
@@ -108,7 +110,7 @@ test("pidfd signals reject wrong identity, missing Python and unavailable pidfd 
   assert.ok(p.observeProcess(sentinel.pid));
 });
 
-test("exact Linux signals use pidfds without Node numeric signal fallback",linux,async t=>{
+test("exact Linux signals use pidfds without Node numeric signal fallback",pidfd,async t=>{
   const [sentinel]=await children(t,1),provenance=p.linuxProvenance(),kill=process.kill;
   process.kill=()=>{throw new Error('numeric signal forbidden')};
   try{
@@ -141,7 +143,7 @@ test("supervisor Linux census happens inside the evidence lock callback",linux,a
   assert.ok(inside>=2);assert.equal(outside,1);
 });
 
-test("pidfd cancellation kills an actual zombie leader's stopped live sibling threads",linux,async t=>{
+test("pidfd cancellation kills an actual zombie leader's stopped live sibling threads",pidfd,async t=>{
   const source=`import ctypes, threading, time\ndef run():\n    while True: time.sleep(0.1)\nthreading.Thread(target=run).start()\nctypes.CDLL(None).pthread_exit(None)\n`;
   const threaded=spawn('python3',['-I','-S','-c',source],{stdio:'ignore'});
   await once(threaded,'spawn');t.after(()=>{try{threaded.kill('SIGKILL')}catch{}});
@@ -186,7 +188,7 @@ test("Node and pidfd helper reject malformed, missing and multi-entry namespace 
   assert.ok(p.observeProcess(sentinel.pid));
 });
 
-test("public binding recheck failure resumes launcher while preserving caller-stopped supervisor",linux,async t=>{
+test("public binding recheck failure resumes launcher while preserving caller-stopped supervisor",pidfd,async t=>{
   const x=await recoveryFixture(t),a=x.current(),original=fs.readFileSync;let reads=0;
   const lease=join(x.r.repo.stateDir,'hooks',`${a.id}.json`),before=original(x.statePath,'utf8');
   fs.readFileSync=function(path,...args){const value=original.call(this,path,...args);
@@ -195,4 +197,29 @@ test("public binding recheck failure resumes launcher while preserving caller-st
   await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(original(x.statePath,'utf8'),before);assert.equal(x.current().worker.linuxStop,undefined);
   assert.equal(p.observeProcess(a.worker.pid).state,'T');assert.notEqual(p.observeProcess(a.worker.launcher.pid).state,'T');
+});
+
+for(const managed of [false,true])test(`prepared ${managed?'feature':'runner'} all-zombie supervisor acknowledges without generic PID guard`,pidfd,async t=>{
+  const x=await recoveryFixture(t,managed),owner=managed?x.f:x.r,save=owner.save.bind(owner);let saves=0;
+  owner.save=state=>{if(++saves===2)throw new Error('interrupted acknowledgement');return save(state)};
+  assert.throws(x.prepare,/interrupted acknowledgement/);owner.save=save;
+  const before=x.current();assert.equal(p.observeProcess(before.worker.pid)?.state,'Z');
+  const execute=cp.execFileSync;let signals=0;
+  cp.execFileSync=function(command,args,options){if(command==='python3'&&JSON.parse(options.input).operation!=='probe')signals++;return execute.call(this,command,args,options)};syncBuiltinESMExports();
+  try{await x.reconcile()}finally{cp.execFileSync=execute;syncBuiltinESMExports()}
+  const after=x.current();assert.equal(signals,0);assert.equal(after.phase,'failed');assert.equal(after.report.outcome,'completed');
+  assert.equal(after.worker.exitCode,null);assert.equal(after.worker.launcher.exitCode,null);assert.ok(after.worker.launcher.exitedAt);
+  assert.equal(after.worker.completion,undefined);assert.equal(after.session,before.session);x.preview();
+});
+
+test("termination sends no further signal after a late observed group failure",pidfd,async t=>{
+  const roots=await children(t),provenance=p.linuxProvenance();let receipt;
+  assert.throws(()=>p.prepareLinuxStop({provenance,roots,retained:[],timeoutMs:3000,publish(value){receipt=value;throw new Error('published interruption')}}),/published interruption/);
+  const path=`/proc/${receipt.members.at(-1).pid}/task`,read=fs.readdirSync,execute=cp.execFileSync;
+  let reads=0,failed=false,signalsAfterFailure=0;
+  fs.readdirSync=function(target,...args){if(target===path&&++reads>=5){failed=true;throw Object.assign(new Error('denied'),{code:'EACCES'})}return read.call(this,target,...args)};
+  cp.execFileSync=function(command,args,options){if(command==='python3'&&JSON.parse(options.input).operation==='SIGKILL'&&failed)signalsAfterFailure++;return execute.call(this,command,args,options)};syncBuiltinESMExports();
+  try{assert.throws(()=>p.finishPreparedLinuxStop(receipt,1000),/uncertain|observation|deadline/)}
+  finally{fs.readdirSync=read;cp.execFileSync=execute;syncBuiltinESMExports()}
+  assert.equal(failed,true);assert.equal(signalsAfterFailure,0);
 });

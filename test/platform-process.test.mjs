@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { linuxPidfdOptions } from "./helpers/linux-pidfd-support.mjs";
 const processes = await import("../dist/platform-process.js").catch(() => ({}));
 
 test("Windows retains uncertainty for a vanished parent with a detached child", { skip: process.platform !== "win32", timeout: 30000 }, async t => {
@@ -30,7 +31,7 @@ test("native process identity rejects a reused identity and confirms owned termi
   assert.equal(result.uncertain, false);
 });
 
-test("Linux frozen-tree receipt requires creation provenance and durably publishes before kill", { skip: process.platform !== "linux", timeout: 15000 }, async t => {
+test("Linux frozen-tree receipt requires creation provenance and durably publishes before kill", { ...linuxPidfdOptions, timeout: 15000 }, async t => {
   assert.equal(typeof processes.linuxProvenance, "function");
   assert.equal(typeof processes.prepareLinuxStop, "function");
   const children = [0,1].map(() => spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {stdio:"ignore"}));
@@ -46,7 +47,7 @@ test("Linux frozen-tree receipt requires creation provenance and durably publish
 // Exercise observation races without replacing the production cancellation API.
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-test("Linux barrier rejects roots disappearing after initial census", { skip: process.platform !== "linux" }, async t => {
+test("Linux barrier rejects roots disappearing after initial census", { ...linuxPidfdOptions }, async t => {
   const children = [0, 1].map(() => spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" }));
   await Promise.all(children.map(c => once(c, "spawn")));
   const roots = children.map(c => processes.observeProcess(c.pid));
@@ -64,7 +65,7 @@ test("Linux barrier rejects roots disappearing after initial census", { skip: pr
   } finally { fs.readFileSync = original; syncBuiltinESMExports(); }
 });
 
-test("Linux termination rejects unreadable exact member observation after publication", { skip: process.platform !== "linux" }, async t => {
+test("Linux termination rejects unreadable exact member observation after publication", { ...linuxPidfdOptions }, async t => {
   const children = [0, 1].map(() => spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" }));
   await Promise.all(children.map(c => once(c, "spawn")));
   const roots = children.map(c => processes.observeProcess(c.pid));
@@ -83,7 +84,7 @@ test("Linux termination rejects unreadable exact member observation after public
   } finally { fs.readFileSync = original; syncBuiltinESMExports(); }
 });
 
-test("Linux freeze rollback resumes only controller-stopped members on observation failure", { skip: process.platform !== "linux" }, async t => {
+test("Linux freeze rollback resumes only controller-stopped members on observation failure", { ...linuxPidfdOptions }, async t => {
   const children=[0,1].map(()=>spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}));
   await Promise.all(children.map(c=>once(c,'spawn')));
   t.after(()=>{for(const c of children)try{c.kill('SIGKILL')}catch{}});
@@ -102,7 +103,7 @@ test("Linux freeze rollback resumes only controller-stopped members on observati
   assert.ok(!['T','t'].includes(processes.observeProcess(roots[1].pid)?.state));
 });
 
-test("Linux barrier retains a previously observed child after it reparents", { skip: process.platform !== "linux", timeout: 15000 }, async t=>{
+test("Linux barrier retains a previously observed child after it reparents", { ...linuxPidfdOptions, timeout: 15000 }, async t=>{
   const parent=spawn(process.execPath,['-e',`const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});console.log(c.pid);process.stdin.once('data',()=>process.exit(0));`],{stdio:['pipe','pipe','ignore']});
   const [bytes]=await once(parent.stdout,'data'),pid=Number(bytes.toString()),identity=processes.observeProcess(pid);
   t.after(()=>{try{process.kill(pid,'SIGKILL')}catch{}try{parent.kill('SIGKILL')}catch{}});

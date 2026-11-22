@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { linuxPidfdOptions } from "./helpers/linux-pidfd-support.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -82,7 +83,7 @@ test("feature names cannot escape runtime storage and invalid state fails closed
 import { recoveryFixture } from "./helpers/copilot-recovery-fixture.mjs";
 import { Feature } from "../dist/feature.js";
 import { existsSync, readFileSync } from "node:fs";
-test("public Linux feature cancellation retains failed job and permits explicit new review", { skip: process.platform !== "linux", timeout: 30000 }, async t => {
+test("public Linux feature cancellation retains failed job and permits explicit new review", { ...linuxPidfdOptions, timeout: 30000 }, async t => {
   const x = await recoveryFixture(t, true);
   assert.throws(x.preview, /active/i);
   x.prepare(); x.reconcile(); x.reconcile();

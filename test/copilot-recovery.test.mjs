@@ -1,3 +1,4 @@
+import { linuxPidfdOptions } from "./helpers/linux-pidfd-support.mjs";
 import {test} from "node:test";import assert from "node:assert/strict";
 import * as lifecycle from "../dist/harnesses/lifecycle.js";
 const attempt=()=>({agent:"copilot",phase:"failed",session:"root",observedSession:"root",identityConfirmed:true,terminalEvidence:{type:"agent-stop"},worker:{pid:101,processStart:"2026-11-04T00:00:00Z",processPlatform:"win32",exitedAt:"2026-11-04T00:01:00Z",exitCode:null,terminationUncertain:true,launcher:{pid:102,processStart:"2026-11-04T00:00:01Z"}}});
@@ -15,7 +16,7 @@ test("Copilot recovery retains live, uncertain, reused and foreign-platform proc
 import { recoveryFixture, copilotSettings } from "./helpers/copilot-recovery-fixture.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { Runner, decodeState } from "../dist/runner.js";
-test("public Linux attempt cancellation retains failed evidence and permits a fresh exact retry", { skip: process.platform !== "linux", timeout: 30000 }, async t => {
+test("public Linux attempt cancellation retains failed evidence and permits a fresh exact retry", { ...linuxPidfdOptions, timeout: 30000 }, async t => {
  const x = await recoveryFixture(t);
  assert.throws(x.preview, /active|worker|running|attempt/i);
  x.prepare();
@@ -62,7 +63,7 @@ for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "atte
  });
 });
 
-for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "attempt"} interrupted acknowledgement recovers from durable receipt`, { skip: process.platform !== "linux", timeout: 30000 }, async t => {
+for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "attempt"} interrupted acknowledgement recovers from durable receipt`, { ...linuxPidfdOptions, timeout: 30000 }, async t => {
  const x = await recoveryFixture(t,managed), owner=managed?x.f:x.r, save=owner.save.bind(owner);
  let calls=0;
  owner.save = state => { if(++calls===2) throw new Error('injected acknowledgement save failure'); return save(state); };
@@ -74,7 +75,7 @@ for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "atte
  assert.equal(x.current().worker.completion,undefined); assert.equal(x.current().phase,'failed');
 });
 
-for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "attempt"} failed publication never sends terminal signals`, { skip: process.platform !== "linux", timeout: 30000 }, async t => {
+for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "attempt"} failed publication never sends terminal signals`, { ...linuxPidfdOptions, timeout: 30000 }, async t => {
  const x = await recoveryFixture(t,managed), owner=managed?x.f:x.r, save=owner.save.bind(owner);
  const before=JSON.stringify(managed?x.f.read('demo'):x.r.read('demo'));
  owner.save=()=>{throw new Error('injected receipt failure')};
@@ -84,7 +85,7 @@ for (const managed of [false,true]) test(`public Linux ${managed ? "job" : "atte
  assert.throws(x.preview,/active|worker|running|attempt/i);
 });
 
-test("Linux generated receipt truth table rejects uncertainty and truncated retained identities", { skip: process.platform !== "linux", timeout: 30000 }, async t => {
+test("Linux generated receipt truth table rejects uncertainty and truncated retained identities", { ...linuxPidfdOptions, timeout: 30000 }, async t => {
  const x=await recoveryFixture(t); x.prepare(); const a=x.current(), original=a.worker.linuxStop.receipt;
  assert.equal(linuxStopIsGone(original),true); lifecycle.validateLinuxWorker(a.worker);
  for(const mutate of [
@@ -107,7 +108,7 @@ test("Linux generated receipt truth table rejects uncertainty and truncated reta
  }
 });
 
-for (const managed of [false,true]) test(`public Linux ${managed?"job":"attempt"} resumes explicit cancellation after durable publication interruption`, { skip: process.platform !== "linux", timeout: 30000 }, async t => {
+for (const managed of [false,true]) test(`public Linux ${managed?"job":"attempt"} resumes explicit cancellation after durable publication interruption`, { ...linuxPidfdOptions, timeout: 30000 }, async t => {
  const x=await recoveryFixture(t,managed),owner=managed?x.f:x.r,save=owner.save.bind(owner);
  owner.save=state=>{save(state);throw new Error('interrupted after durable receipt')};
  assert.throws(x.prepare,/interrupted/);owner.save=save;
@@ -128,11 +129,11 @@ test("unprepared historical Linux roots remain blocked after disappearing", { sk
  await x.reconcile();assert.throws(x.preview,/stopped|active|worker|attempt/i);
  assert.equal(x.current().worker.linuxStop,undefined);assert.equal(x.current().worker.completion,undefined);
  assert.equal(x.current().worker.launcher.exitedAt,undefined);
- const before=readFileSync(x.r.path('demo'),'utf8');assert.throws(x.prepare,/roots disappeared/i);
+ const before=readFileSync(x.r.path('demo'),'utf8');assert.throws(x.prepare,/roots disappeared|Python 3.*pidfd/i);
  assert.equal(readFileSync(x.r.path('demo'),'utf8'),before);
 });
 
-test("public Linux cancellation finishes partial exact termination through explicit continuation", { skip: process.platform !== "linux", timeout: 30000 }, async t=>{
+test("public Linux cancellation finishes partial exact termination through explicit continuation", { ...linuxPidfdOptions, timeout: 30000 }, async t=>{
  const x=await recoveryFixture(t),execute=cp.execFileSync;let signals=0;
  cp.execFileSync=function(command,args,options){if(command==='python3'&&JSON.parse(options.input).operation==='SIGKILL'&&++signals===2)throw new Error('interrupted second termination');return execute.call(this,command,args,options)};syncBuiltinESMExports();
  try{assert.throws(x.prepare,/uncertain/)}finally{cp.execFileSync=execute;syncBuiltinESMExports()}
@@ -144,7 +145,7 @@ test("public Linux cancellation finishes partial exact termination through expli
  x.prepare();await x.reconcile();x.preview();assert.equal(x.current().worker.exitCode,null);
 });
 
-test("public Linux explicit continuation rejects externally resumed prepared members", { skip: process.platform !== "linux", timeout: 30000 }, async t=>{
+test("public Linux explicit continuation rejects externally resumed prepared members", { ...linuxPidfdOptions, timeout: 30000 }, async t=>{
  const x=await recoveryFixture(t),save=x.r.save.bind(x.r);
  x.r.save=state=>{save(state);throw new Error('interrupted after durable receipt')};
  assert.throws(x.prepare,/interrupted/);x.r.save=save;

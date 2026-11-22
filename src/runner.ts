@@ -910,8 +910,17 @@ export class Runner {
         throw new Error("Worker attempt is not ready; inspect before retrying");
       if (a.worker) {
         refreshCopilotEvidence(a, this.repo.common);
-        if (a.worker?.linuxStop && !preparedCopilotStopIsGone(a, this.repo.common))
-          throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
+        if (a.worker.linuxStop) {
+          if (!preparedCopilotStopIsGone(a, this.repo.common))
+            throw new Error("Prepared Linux cancellation remains uncertain; retain unchanged state");
+          const exitedAt = new Date().toISOString();
+          a.worker.exitedAt ??= exitedAt; a.worker.exitCode = null;
+          a.worker.launcher!.exitedAt ??= exitedAt; a.worker.launcher!.exitCode = null;
+          delete a.worker.terminationUncertain;
+          a.phase = "failed";
+          this.save(s);
+          return { a, recovered: true };
+        }
         if (a.agent === "copilot" && a.worker.exitedAt && a.worker.exitCode === null && !agentMayBeActive(a)) {
           a.phase = "failed";
           this.save(s);
