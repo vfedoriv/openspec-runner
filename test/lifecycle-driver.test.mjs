@@ -168,3 +168,52 @@ test("verified lifecycle receipt cannot pass without affirmative process observa
     if (supported !== true) assert.match(result.reason, /process observation/i);
   }
 });
+
+test("recovery permits explicit retry but rejects an unproved verified receipt", async () => {
+  const { parseLifecycleArgs, runLifecycle } = await import("./live/lifecycle-acceptance.mjs");
+  const { writeFileSync } = await import("node:fs");
+  assert.equal(parseLifecycleArgs(["recovery", "--model", "auto", "--infer", "--cancel", "--retry"], "copilot").retry, true);
+  for (const scenario of ["recovery", "recovery-abrupt"]) {
+    const result = await runLifecycle({ agent: "copilot", scenario, model: "auto", infer: true, cancel: true }, { invoke: async (_, args) => {
+      writeFileSync(join(args[2], "receipt.json"), JSON.stringify({ scenario, verified: true }));
+      return { evidence: { exitCode: 0, remainingBeforeCleanup: [], processObservationSupported: true } };
+    } });
+    assert.equal(result.status, "FAIL");
+  }
+});
+
+test("recovery proof fixtures reject detached survivors, uncertainty and wrong signal variants", async () => {
+  const { validateRecoveryReceipt } = await import("./live/lifecycle-scenarios.mjs");
+  const supervisor = { pid: 10, createdAt: "10" }, launcher = { pid: 11, createdAt: "11" };
+  const proof = { version: 1, binding: "a".repeat(64), integrity: "b".repeat(64), receipt: { version: 1, provenance: { version: 1, platform: "linux", machine: "a".repeat(32), boot: "b".repeat(36), namespace: "pid:[1]" }, roots: [supervisor, launcher], members: [supervisor, launcher] } };
+  const receipt = { variant: "SIGSTOP-supervisor-before-root-stop-then-SIGKILL", acceptedLateReport: true, supervisorSignal: "SIGKILL", supervisorExitCode: null, supervisorObservedGone: true, launcherObservedGone: true, allObservedGone: true, sentinelSurvived: true, retryBlocked: false, noSuccessfulReceipt: true, rootSession: "old", supervisor, launcher, proof, attempts: [{ id: "old", session: "old", identityConfirmed: true, observedSession: "old", phase: "failed", report: { outcome: "completed" }, worker: { exitCode: null, linuxStop: proof } }] };
+  const { createHash } = await import("node:crypto");
+  const p = proof.receipt.provenance;
+  proof.integrity = createHash("sha256").update(JSON.stringify({ binding: proof.binding, version: 1, provenance: [p.version,p.platform,p.machine,p.boot,p.namespace], roots: [[10,"10"],[11,"11"]], members: [[10,"10"],[11,"11"]] })).digest("hex");
+  Object.assign(receipt.attempts[0].worker, { processPlatform: "linux", linuxIdentity: p, linuxNonce: "a".repeat(36), linuxObserved: [supervisor, launcher], exitedAt: new Date().toISOString(), pid: 10, processStart: "10", launcher: { pid: 11, processStart: "11", exitCode: null, exitedAt: new Date().toISOString() } });
+  assert.doesNotThrow(() => validateRecoveryReceipt(receipt, { scenario: "recovery" }));
+  for (const edit of [r => r.proof.integrity = "f".repeat(64), r => r.attempts[0].identityConfirmed = false, r => r.attempts[0].observedSession = "other", r => r.attempts[0].worker.launcher.exitCode = 0, r => r.attempts[0].worker.linuxObserved.push({ pid: 12, createdAt: "12" }), r => r.supervisorSignal = "SIGTERM", r => r.variant = "SIGKILL-supervisor-before-root-stop", r => { r.proof.receipt.members.push({ pid: 12, createdAt: "linux:12" }); r.allObservedGone = false; }, r => r.allObservedGone = undefined, r => r.launcherObservedGone = false, r => r.supervisorObservedGone = undefined, r => r.sentinelSurvived = false, r => r.proof.receipt.members = [supervisor], r => r.attempts[0].worker.completion = { source: "process-exit" }]) {
+    const bad = structuredClone(receipt); edit(bad); assert.throws(() => validateRecoveryReceipt(bad, { scenario: "recovery" }));
+  }
+  assert.throws(() => validateRecoveryReceipt(receipt, { scenario: "recovery", retry: true }));
+  const retried = structuredClone(receipt), at = new Date().toISOString();
+  retried.attempts.push({ id: "new", session: "new-session", identityConfirmed: true, observedSession: "new-session", report: { outcome: "completed", commit: "c".repeat(40) }, worker: { pid: 20, processStart: "20", launcher: { pid: 21, processStart: "21" }, exitedAt: at, exitCode: 0, completion: { source: "process-exit", session: "new-session", at } } });
+  retried.integration = "d".repeat(40); retried.freshRootStop = { session: "new-session", stoppedAt: at, reportAccepted: true };
+  assert.doesNotThrow(() => validateRecoveryReceipt(retried, { scenario: "recovery", retry: true }));
+  for (const edit of [r => r.attempts[1].session = "old", r => r.attempts[1].worker.completion.source = "agent-stop", r => r.freshRootStop.session = "old", r => r.integration = undefined, r => r.attempts[0].phase = "integrated", r => r.attempts[1].worker = r.attempts[0].worker]) {
+    const bad = structuredClone(retried); edit(bad); assert.throws(() => validateRecoveryReceipt(bad, { scenario: "recovery", retry: true }));
+  }
+});
+
+
+test("recovery cleans its unrelated sentinel when launch rejects", { skip: process.platform !== "linux" }, async () => {
+  const cp = await import("node:child_process"), { syncBuiltinESMExports } = await import("node:module");
+  const { recoveryScenario } = await import("./live/lifecycle-scenarios.mjs");
+  const { processIsGone } = await import("../dist/platform-process.js");
+  const original = cp.default.spawn; let sentinel;
+  cp.default.spawn = function(...args) { sentinel = original.apply(this, args); return sentinel; }; syncBuiltinESMExports();
+  try {
+    await assert.rejects(recoveryScenario({ runner: { launch() { throw Error("launch rejected"); } }, timeoutMs: 20000, save() {} }), /launch rejected/);
+    assert.ok(sentinel); assert.equal(processIsGone(sentinel.pid), true);
+  } finally { cp.default.spawn = original; syncBuiltinESMExports(); if (sentinel && !processIsGone(sentinel.pid)) sentinel.kill("SIGKILL"); }
+});

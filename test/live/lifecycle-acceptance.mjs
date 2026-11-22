@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { boundedChild, sanitize } from "./model-discovery.mjs";
-import { credentialFreeEnvironment, isAuthenticationRejection, plannerScenario, repairScenario, recoveryScenario } from "./lifecycle-scenarios.mjs";
+import { credentialFreeEnvironment, isAuthenticationRejection, plannerScenario, repairScenario, recoveryScenario, validateRecoveryReceipt } from "./lifecycle-scenarios.mjs";
 import { fixture, change, task } from "./acceptance-fixture.mjs";
 import { Runner } from "../../dist/runner.js";
 import { Feature } from "../../dist/feature.js";
@@ -16,7 +16,7 @@ import { git, shellCommand } from "../../dist/system.js";
 export function parseLifecycleArgs(args, agent) {
   if (!["claude", "copilot"].includes(agent)) throw Error("Unsupported lifecycle harness");
   const result = { agent, scenario: args[0], timeoutMs: 180000, infer: false, approve: false, cancel: false, retry: false };
-  if (!["worker", "archive", "invalid-model", "cancel", "retry", "hooks-disabled", "gates", "auth", "planner", "repair", "recovery"].includes(result.scenario)) throw Error("Require worker|archive|invalid-model|cancel|retry");
+  if (!["worker", "archive", "invalid-model", "cancel", "retry", "hooks-disabled", "gates", "auth", "planner", "repair", "recovery", "recovery-abrupt"].includes(result.scenario)) throw Error("Require worker|archive|invalid-model|cancel|retry");
   const seen = new Set();
   for (let i = 1; i < args.length; i++) {
     const key = args[i];
@@ -30,10 +30,10 @@ export function parseLifecycleArgs(args, agent) {
   }
   result.timeoutMs = Number(result.timeoutMs);
   if (!result.infer || !result.model?.trim() || !Number.isSafeInteger(result.timeoutMs) || result.timeoutMs < 100 || result.timeoutMs > 600000) throw Error("Require --model MODEL --infer and bounded timeout");
-  if (result.approve !== (["archive", "repair"].includes(result.scenario)) || result.cancel !== (["cancel", "recovery"].includes(result.scenario)) || result.retry !== (result.scenario === "retry")) throw Error("Scenario requires matching explicit --approve, --cancel or --retry opt-in");
+  if (result.approve !== (["archive", "repair"].includes(result.scenario)) || result.cancel !== (["cancel", "recovery", "recovery-abrupt"].includes(result.scenario)) || (!["recovery"].includes(result.scenario) && result.retry !== (result.scenario === "retry"))) throw Error("Scenario requires matching explicit --approve, --cancel or --retry opt-in");
   if (result.scenario === "hooks-disabled" && agent !== "copilot") throw Error("Hooks scenario requires Copilot");
   if (["auth", "planner"].includes(result.scenario) && agent !== "claude") throw Error("Scenario requires Claude");
-  if (["repair", "recovery"].includes(result.scenario) && agent !== "copilot") throw Error("Scenario requires Copilot");
+  if (["repair", "recovery", "recovery-abrupt"].includes(result.scenario) && agent !== "copilot") throw Error("Scenario requires Copilot");
   if (agent === "copilot" && result.effort) throw Error("Copilot effort unsupported");
   return result;
 }
@@ -57,7 +57,7 @@ export async function runLifecycle(options, dependencies = {}) {
     } else if (finite && child.evidence.exitCode === 0) {
       const receipt = JSON.parse(readFileSync(join(root, "receipt.json"), "utf8"));
       if (receipt.scenario === validated.scenario && receipt.verified === false && ["OPEN", "BLOCKED"].includes(receipt.status)) { result.status = receipt.status; result.receipt = receipt; }
-      if (receipt.scenario === validated.scenario && receipt.verified === true) { result.status = "PASS"; result.receipt = receipt; }
+      if (receipt.scenario === validated.scenario && receipt.verified === true) { if (["recovery", "recovery-abrupt"].includes(validated.scenario)) validateRecoveryReceipt(receipt, validated); result.status = "PASS"; result.receipt = receipt; }
     }
   } catch (error) { result.error = sanitize(error.message); }
   writeFileSync(join(root, "result.json"), JSON.stringify(result, null, 2));
@@ -68,7 +68,7 @@ export function isModelRejection(text) {
 }
 function attemptEvidence(a) {
   return { id: a.id, agent: a.agent, phase: a.phase, session: a.session, observedSession: a.observedSession, identityConfirmed: a.identityConfirmed,
-    report: a.report ? { outcome: a.report.outcome, commit: a.report.commit } : null, worker: a.worker ? { pid: a.worker.pid, processStart: a.worker.processStart, launcher: a.worker.launcher, startedAt: a.worker.startedAt, exitedAt: a.worker.exitedAt, exitCode: a.worker.exitCode, completion: a.worker.completion } : null, commit: a.report?.commit };
+    report: a.report ? { outcome: a.report.outcome, commit: a.report.commit } : null, worker: a.worker ? { pid: a.worker.pid, processStart: a.worker.processStart, launcher: a.worker.launcher, startedAt: a.worker.startedAt, exitedAt: a.worker.exitedAt, exitCode: a.worker.exitCode, completion: a.worker.completion, linuxStop: a.worker.linuxStop, linuxIdentity: a.worker.linuxIdentity, linuxNonce: a.worker.linuxNonce, linuxObserved: a.worker.linuxObserved, processPlatform: a.worker.processPlatform } : null, commit: a.report?.commit };
 }
 async function execute(root) {
   const options = JSON.parse(readFileSync(join(root, "request.json"), "utf8"));
@@ -92,7 +92,7 @@ async function execute(root) {
     Object.assign(process.env, environment);
   }
   if (options.scenario === "planner") { save(await plannerScenario({ repo, common: runner.repo.common, model: options.model, timeoutMs: options.timeoutMs })); return; }
-  if (options.scenario === "recovery") { await recoveryScenario({ repo, runner, change, task, timeoutMs: options.timeoutMs, save, summarize: attemptEvidence }); return; }
+  if (["recovery", "recovery-abrupt"].includes(options.scenario)) { await recoveryScenario({ repo, runner, change, task, timeoutMs: options.timeoutMs, retry: options.retry, abrupt: options.scenario === "recovery-abrupt", save, summarize: attemptEvidence }); return; }
   let feature;
   if (options.approve) {
     feature = new Feature(repo);
