@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { linuxPidfdOptions } from "./helpers/linux-pidfd-support.mjs";
 
 test("lifecycle scenarios validate before creating evidence or invoking children", async () => {
   const { parseLifecycleArgs, runLifecycle } = await import("./live/lifecycle-acceptance.mjs");
@@ -217,4 +218,40 @@ test("recovery cleans its unrelated sentinel when launch rejects", { skip: proce
     await assert.rejects(recoveryScenario({ runner: { launch() { throw Error("launch rejected"); } }, timeoutMs: 20000, save() {} }), /launch rejected/);
     assert.ok(sentinel); assert.equal(processIsGone(sentinel.pid), true);
   } finally { cp.default.spawn = original; syncBuiltinESMExports(); if (sentinel && !processIsGone(sentinel.pid)) sentinel.kill("SIGKILL"); }
+});
+
+
+test("recovery never resumes a supervisor after public preparation publishes then throws", { ...linuxPidfdOptions, timeout: 30000 }, async t => {
+  const { recoveryFixture } = await import("./helpers/copilot-recovery-fixture.mjs");
+  const { recoveryScenario } = await import("./live/lifecycle-scenarios.mjs");
+  const { observeProcess, processIsGone } = await import("../dist/platform-process.js");
+  const cp = await import("node:child_process"), { syncBuiltinESMExports } = await import("node:module"), fs = await import("node:fs");
+  const x = await recoveryFixture(t, false, { driverControlled: true });
+  const originalSpawn = cp.default.spawn, originalKill = process.kill, originalSave = x.r.save.bind(x.r);
+  const supervisor = observeProcess(x.supervisor.pid), launcher = { pid: x.current().worker.launcher.pid, createdAt: x.current().worker.launcher.processStart };
+  let preparationStarted = false, published = false, resumedAfterPrepare = 0, launches = 0, sentinel, sentinelSurvived = false;
+  const saved = [];
+  x.r.save = state => { originalSave(state); if (state.attempts.some(a => a.worker?.linuxStop)) { published = true; throw Error("fault after durable prepared receipt"); } };
+  cp.default.spawn = function(command, args, ...rest) {
+    if (command === process.execPath && args[0]?.endsWith("/bin/openspec-runner.js")) return x.supervisor;
+    const child = originalSpawn.call(this, command, args, ...rest);
+    if (command === process.execPath && args[0] === "-e") sentinel = observeProcess(child.pid);
+    return child;
+  };
+  process.kill = function(pid, signal) {
+    if (pid === supervisor.pid && signal === "SIGCONT" && preparationStarted) resumedAfterPrepare++;
+    if (pid === sentinel?.pid && signal === "SIGTERM") sentinelSurvived = observeProcess(pid)?.createdAt === sentinel.createdAt;
+    return originalKill.call(this, pid, signal);
+  }; syncBuiltinESMExports();
+  const runner = { repo: x.r.repo, launch() { launches++; return [x.current()]; }, read: x.r.read.bind(x.r), latest: x.r.latest.bind(x.r), integrate: x.r.integrate.bind(x.r), cleanup: x.r.cleanup.bind(x.r),
+    prepareCopilotStop() { preparationStarted = true; return x.prepare(); }, preview() { throw Error("retry must not be reached"); } };
+  try {
+    await assert.rejects(recoveryScenario({ repo: x.root, runner, change: "demo", task: "1.1", timeoutMs: 25000, retry: true,
+      save(evidence) { saved.push(evidence); if (evidence.pausedAt) fs.writeFileSync(x.reportGate, "ready"); }, summarize: a => ({ id: a.id }) }), /fault after durable prepared receipt/);
+  } finally { cp.default.spawn = originalSpawn; process.kill = originalKill; syncBuiltinESMExports(); x.r.save = originalSave; }
+  assert.ok(published); assert.ok(x.current().worker.linuxStop, "Public preparation actually saved its receipt");
+  assert.equal(resumedAfterPrepare, 0); assert.equal(launches, 1); assert.ok(saved.every(e => e.verified !== true));
+  assert.ok(sentinelSurvived); assert.ok(processIsGone(sentinel.pid));
+  assert.ok(processIsGone(supervisor.pid)); assert.ok(processIsGone(launcher.pid));
+  assert.ok(x.current().worker.linuxStop.receipt.members.every(m => processIsGone(m.pid)));
 });

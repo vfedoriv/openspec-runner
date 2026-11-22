@@ -124,7 +124,7 @@ export function signalOwned(identity, signal) {
 }
 export async function recoveryScenario({ repo, runner, change, task, timeoutMs, retry = false, abrupt = false, save, summarize }) {
   if (process.platform !== "linux") { save({ status: "BLOCKED", reason: "Exact SIGSTOP-supervisor variant requires Linux" }); return; }
-  let sentinelChild, sentinel, child, supervisor, launcher, paused = false;
+  let sentinelChild, sentinel, child, supervisor, launcher, paused = false, preparationInvoked = false;
   try {
     sentinelChild = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
     sentinel = observeProcess(sentinelChild.pid);
@@ -183,6 +183,7 @@ export async function recoveryScenario({ repo, runner, change, task, timeoutMs, 
     assert.ok(Date.parse(stopped.stoppedAt) >= Date.parse(pausedAt));
     assert.throws(() => runner.integrate(change, [task]));
     assert.throws(() => runner.cleanup(change, [task]));
+    preparationInvoked = true;
     runner.prepareCopilotStop(change, task, attempt.id, { cancel: true, timeoutMs: 10000 }); paused = false;
     await Promise.race([closedPromise, delay(3000)]); assert.ok(closed);
     assert.equal(exitSignal, "SIGKILL");
@@ -234,7 +235,7 @@ export async function recoveryScenario({ repo, runner, change, task, timeoutMs, 
     if (sentinel) {
       await stopOwnedProcess({ ...sentinel, timeoutMs: 3000 });
     } else sentinelChild?.kill("SIGKILL");
-    if (paused && supervisor && observeProcess(supervisor.pid)?.createdAt === supervisor.createdAt) signalOwned(supervisor, "SIGCONT");
+    if (paused && !preparationInvoked && supervisor && observeProcess(supervisor.pid)?.createdAt === supervisor.createdAt) signalOwned(supervisor, "SIGCONT");
     if (supervisor && !processIsGone(supervisor.pid) && observeProcess(supervisor.pid)?.createdAt === supervisor.createdAt) await stopOwnedProcess({ ...supervisor, timeoutMs: 3000 });
     if (launcher && !processIsGone(launcher.pid) && observeProcess(launcher.pid)?.createdAt === launcher.createdAt) await stopOwnedProcess({ ...launcher, timeoutMs: 3000 });
     assert.ok(sentinelSurvived, "Unrelated sentinel must survive");

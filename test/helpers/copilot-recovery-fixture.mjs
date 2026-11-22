@@ -14,6 +14,7 @@ export async function recoveryFixture(t, managed = false, options = {}) {
   writeFileSync(join(root, ".github/hooks/openspec-runner.json"), JSON.stringify({ hooks: { UserPromptSubmit: [], Stop: [] } }));
   git(root, "add", "."); git(root, "commit", "-m", "Install fixture hooks");
   const ready = join(dir, "root-stopped");
+  const reportGate = join(dir, "allow-report");
   executable(join(bin, "copilot"), `
 if(process.argv.includes('--help')) { console.log('--model --trust-folder --prompt --add-dir --allow-tool'); process.exit(0); }
 if(process.argv.includes('--version')) { console.log('fixture'); process.exit(0); }
@@ -28,6 +29,7 @@ if(process.argv.includes('--version')) { console.log('fixture'); process.exit(0)
  const event=kind=>({kind,session,cwd:process.cwd(),at:new Date().toISOString(),...(kind==='prompt'?{prompt}:{})});
  recordHook({stateDir:r.repo.stateDir,event:event('prompt')});
  ${managed ? "f.begin('demo',a.id,session)" : "r.begin('demo',a.task,a.id,session)"};
+ ${options.driverControlled ? `while(!fs.existsSync(${JSON.stringify(reportGate)}))await new Promise(resolve=>setTimeout(resolve,10));` : ""}
  const report={attempt:a.id,session,outcome:'completed',summary:'Stopped fixture',verification:['Verified fixture'],
    ${managed ? "head:a.base,fingerprint:a.fingerprint" : "task:a.task"}};
  ${managed ? "report.findings=[];" : `fs.writeFileSync('result.txt','completed fixture\\n');
@@ -77,12 +79,13 @@ await ${managed ? `owner.worker('demo',${JSON.stringify(a.id)})` : `owner.worker
     try { supervisor.kill("SIGKILL"); } catch {}
   });
   const deadline = Date.now() + 15000;
-  while (!existsSync(ready) && Date.now() < deadline && supervisor.exitCode === null) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.ok(existsSync(ready), `fake Copilot did not stop root: ${output}; ${existsSync(current()?.worker?.log ?? '') ? readFileSync(current().worker.log,'utf8') : ''}`);
+  const fixtureReady = () => options.driverControlled ? !!current()?.session : existsSync(ready);
+  while (!fixtureReady() && Date.now() < deadline && supervisor.exitCode === null) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(fixtureReady(), `fake Copilot did not reach readiness: ${output}; ${existsSync(current()?.worker?.log ?? '') ? readFileSync(current().worker.log,'utf8') : ''}`);
   launcherPid = current().worker.launcher.pid;
-  assert.equal(observeProcess(supervisor.pid)?.state, "T");
+  if (!options.driverControlled) assert.equal(observeProcess(supervisor.pid)?.state, "T");
   const prepare = () => managed ? f.prepareCopilotStop("demo", a.id, { cancel: true }) : r.prepareCopilotStop("demo", "1.1", a.id, { cancel: true });
   const reconcile = () => managed ? f.recover("demo", a.id) : r.worker("demo", "1.1", a.id);
   const preview = () => managed ? f.jobPreview("demo", "review", true) : r.preview("demo", ["1.1"], copilotSettings, undefined, true, "copilot");
-  return { ...fixture, a, supervisor, current, prepare, reconcile, preview, saveLog, statePath: managed ? join(r.repo.stateDir, "features", "demo.json") : r.path("demo") };
+  return { ...fixture, a, supervisor, current, prepare, reconcile, preview, saveLog, reportGate, statePath: managed ? join(r.repo.stateDir, "features", "demo.json") : r.path("demo") };
 }
