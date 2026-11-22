@@ -166,6 +166,7 @@ export function prepareLinuxStop(input: {
     ledger.set(row.pid, row);
   }
   const introduced = new Map<number, ProcessIdentity>();
+  const absentNonroot = (member: ProcessIdentity) => !input.roots.some(root => root.pid === member.pid) && snapshot(member.pid)?.length === 0;
   let published = false;
   try {
     const initial = snapshot();
@@ -196,6 +197,7 @@ export function prepareLinuxStop(input: {
         // Caller-stopped, zombie and tracing leaders retain strict group checks.
         if (["R", "S", "D", "I"].includes(current.state ?? "")) {
           const fresh = observeProcess(member.pid);
+          if (!fresh && absentNonroot(member)) { allStopped = false; continue; }
           if (fresh?.createdAt !== member.createdAt) throw new Error("Identity changed before freeze");
           if (["R", "S", "D", "I"].includes(fresh.state ?? "")) {
             signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now());
@@ -213,7 +215,9 @@ export function prepareLinuxStop(input: {
         }
         if (group.state === "stopped") continue;
         allStopped = false;
-        if (observeProcess(member.pid)?.createdAt !== member.createdAt) throw new Error("Identity changed before freeze");
+        const fresh = observeProcess(member.pid);
+        if (!fresh && absentNonroot(member)) { allStopped = false; continue; }
+        if (fresh?.createdAt !== member.createdAt) throw new Error("Identity changed before freeze");
         signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now());
         introduced.set(member.pid, member);
       }

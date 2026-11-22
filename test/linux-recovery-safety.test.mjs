@@ -262,3 +262,44 @@ for(const code of ['EACCES','EIO'])test(`Linux freeze rejects ${code} task censu
   assert.equal(published,false);assert.equal(kills,0);
   assert.ok(roots.every(r=>p.observeProcess(r.pid)?.createdAt===r.createdAt));
 });
+
+test("Linux freeze retains a reaped nonroot and restarts the stopped barrier",pidfd,async t=>{
+  const rootChild=spawn('python3',['-I','-S','-c','import subprocess,sys,time\nc=subprocess.Popen([sys.executable,"-I","-S","-c","import time;time.sleep(60)"]);print(c.pid,flush=True);c.wait();time.sleep(60)'],{stdio:['ignore','pipe','ignore']});
+  t.after(()=>{try{rootChild.kill('SIGKILL')}catch{}});
+  const [output]=await once(rootChild.stdout,'data'),member=p.observeProcess(Number(output.toString().trim()));
+  const [launcher]=await children(t,1),root=p.observeProcess(rootChild.pid);
+  let memberReads=0,postAbsenceRootScans=0,published=false;
+  mockBuiltin(t,'readFileSync',original=>function(path,...args){
+    const value=original.call(this,path,...args);
+    if(path===`/proc/${member.pid}/stat`&&++memberReads===2){process.kill(member.pid,'SIGKILL');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,40);}
+    return value;
+  });
+  mockBuiltin(t,'readdirSync',original=>function(path,...args){
+    if(path===`/proc/${root.pid}/task`&&p.processIsGone(member.pid))postAbsenceRootScans++;
+    return original.call(this,path,...args);
+  });
+  const receipt=p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(value){
+    published=true;assert.ok(value.members.some(m=>m.pid===member.pid&&m.createdAt===member.createdAt));
+    assert.ok(postAbsenceRootScans>=4,'Require two complete stopped scans after disappearance');
+  }});
+  assert.ok(published);assert.ok(p.linuxStopIsGone(receipt));
+});
+
+for(const kind of ['root-absent','nonroot-EACCES','nonroot-EIO','nonroot-reused'])test(`Linux freeze rejects fresh ${kind} identity uncertainty`,pidfd,async t=>{
+  const [root,launcher,member]=await children(t,3),target=kind==='root-absent'?root:member;
+  let reads=0,published=false,kills=0;
+  mockBuiltin(t,'readFileSync',original=>function(path,...args){
+    if(path===`/proc/${target.pid}/stat`&&++reads>=3){
+      if(kind==='nonroot-reused'){
+        const text=original.call(this,path,...args),at=text.lastIndexOf(')')+2,fields=text.slice(at).split(' ');fields[19]=String(BigInt(fields[19])+1n);return text.slice(0,at)+fields.join(' ');
+      }
+      throw Object.assign(new Error('injected identity observation failure'),{code:kind==='root-absent'?'ENOENT':kind.slice(8)});
+    }
+    return original.call(this,path,...args);
+  });
+  const execute=cp.execFileSync;
+  cp.execFileSync=function(command,args,options){if(command==='python3'&&JSON.parse(options.input).operation==='SIGKILL')kills++;return execute.call(this,command,args,options)};
+  syncBuiltinESMExports();t.after(()=>{cp.execFileSync=execute;syncBuiltinESMExports()});
+  assert.throws(()=>p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[member],timeoutMs:3000,publish(){published=true}}),/Identity changed|roots disappeared|observation/);
+  assert.equal(published,false);assert.equal(kills,0);
+});
