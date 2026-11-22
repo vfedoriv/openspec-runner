@@ -61,6 +61,8 @@ export interface HarnessCapabilities {
     exactResume: boolean;
     effort: boolean;
     structuredActivity?: boolean;
+    /** CLI can deny writes while granting scoped Store context/skill reads. */
+    storeReadPermissions?: boolean;
   };
 }
 

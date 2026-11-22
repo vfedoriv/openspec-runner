@@ -18,11 +18,14 @@ async function discover(t, { kind = "file", sdk = true, windows = false, discove
   cpSync(dist, join(root, "dist"), { recursive: true });
   if (uncertain) writeFileSync(join(root,"dist/dashboard-action-runner.js"), `export async function dashboardChild(){${uncertain === "interrupt" ? `process.emit(${JSON.stringify(interruptSignal)});` : ""}throw new Error("Action cancelled; process termination is uncertain; secret-provider-detail");}`);
   writeFileSync(join(root, "package.json"), '{"type":"module"}');
-  const executable = join(bin, windows ? "copilot.cmd" : "copilot");
+  const executable = join(bin, windows ? "copilot.cmd" : process.platform === "win32" ? "copilot.exe" : "copilot");
   const worker = join(root, "worker-launched"), calls = join(root, "sdk-calls");
   if (kind !== "missing") {
     const target = kind === "symlink" ? join(bin, "real CLI") : executable;
     writeFileSync(target, `#!${process.execPath}\nimport { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(worker)}, 'launched');\n`, { mode: 0o755 });
+    // The SDK accepts a native executable, not the Node/script wrapper produced
+    // by resolving a shebang fixture on Windows. The fake SDK never executes it.
+    if (process.platform === "win32" && !windows) cpSync(process.execPath, target);
     if (kind === "symlink") symlinkSync(target, executable);
     if (windows) writeFileSync(executable, '@echo off\nset REQUIRED=1\nother.exe %*\n');
   }

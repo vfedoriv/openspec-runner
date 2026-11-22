@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 const worker = await import("../dist/harnesses/copilot-supervisor.js").catch(() => ({}));
+test("Store launch rejects hosts without scoped write-denial support before dispatch", async () => {
+  const { getHarness } = await import("../dist/harnesses/registry.js");
+  const { superviseWorker } = await import("../dist/worker.js");
+  const harness = getHarness("copilot"), original = harness.capabilities;
+  harness.capabilities = async () => ({ supported: true, features: { storeReadPermissions: false }, reasons: [] });
+  try {
+    await assert.rejects(superviseWorker({ agent: "copilot", path: process.cwd(), settings: { model: "auto" } }, process.cwd(), "prompt", () => {}, undefined, {}), /Store workers require --deny-tool/);
+  } finally { harness.capabilities = original; }
+});
 test("editor launcher success cannot finish a worker before report and stop", () => {
   assert.equal(typeof worker.copilotDecision, "function");
   assert.equal(worker.copilotDecision(undefined, 0, true), undefined);

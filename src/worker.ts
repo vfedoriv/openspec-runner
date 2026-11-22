@@ -27,6 +27,8 @@ export async function superviseWorker(
   const capabilities = await harness.capabilities(a.path, a.settings);
   if (!capabilities.supported)
     throw new Error(`${harness.displayName} is not ready: ${capabilities.reasons.join("; ")}`);
+  if (store && a.agent === "copilot" && !capabilities.features.storeReadPermissions)
+    throw new Error("Copilot Store workers require --deny-tool support for bundled skill read permissions");
   if (harness.lifecycle?.ownership === "hook") {
     if (!a.id || !evidence) throw new Error("Copilot supervision requires durable attempt evidence");
     return superviseCopilot({ ...a, id: a.id }, common, prompt, started, evidence, store);

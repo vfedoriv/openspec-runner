@@ -37,10 +37,13 @@ selector/effort, actual startup invocation and independently observed setting
 before effort can be enabled. Historical omitted-effort records keep their
 meaning; CLI help alone does not authorize adding effort fields.
 
-Store-linked Copilot remains UNSUPPORTED by the current schema. A separate design
-must cover old Codex/Claude records, authority and approval hashing, import/context
-protection, retirement/replacement, review/repair, submission receipts and
-mixed-version readers. An SDK upgrade does not expand shared authority.
+Store-linked Copilot CLI and VS Code Copilot are accepted by coordination
+contracts as of `6d42102`. Windows simulated implementation/review/repair and
+integration pass with Store-scoped hooks and runtime. This does not establish
+native host access, recovery, receipts or cross-version compatibility. See the
+[Store implementation record](verification/2026-11-22-copilot-store.md) and
+subsequent Windows live verification results before treating a particular host
+as verified. An SDK upgrade alone does not expand shared authority.
 
 The optional VS Code discovery bridge remains DEFERRED. It requires exact
 profile/extension-host identity, consent granted and denied, requested versus

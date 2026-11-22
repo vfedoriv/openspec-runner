@@ -31,7 +31,7 @@ export async function storeFeatureFixture(t, harness = "codex") {
   });
   executable(join(bin, harness === "copilot-vscode" ? "code" : harness), `
 const args = process.argv.slice(2);
-if(args.includes('--help')) { console.log('--add-dir --model --cd --json --trust-folder --prompt --allow-tool --mode --new-window'); process.exit(0); }
+if(args.includes('--help')) { console.log('--add-dir --model --cd --json --trust-folder --prompt --allow-tool --deny-tool --mode --new-window'); process.exit(0); }
 if(args.includes('--version')) { console.log('test-cli'); process.exit(0); }
 if(args.includes('--list-extensions')) { console.log('github.copilot-chat'); process.exit(0); }
 if(${JSON.stringify(harness)}==='copilot-vscode' && (args[0]!=='chat'||args.length===3)) process.exit(0);

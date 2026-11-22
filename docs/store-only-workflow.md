@@ -73,6 +73,8 @@ Run these from the API checkout or add `--root API`. Import seals pinned plannin
 
 Copilot CLI and VS Code Copilot Store workers create disposable, ignored hook files in their assigned linked worktrees. VS Code also uses an ignored per-attempt agent file to select the model. Existing tracked or conflicting runner hook files are rejected for inspection; user files are preserved. Hook callbacks carry explicit Store assignment selection and revalidate the imported binding before recording session evidence. Leases, accepted reports and recovery evidence use the component's Store runtime. Do not run code-local init to repair a Store worker; inspect its scoped assignment and diagnostic instead. VS Code exact chat resume remains unsupported. Native host verification is separate from simulated lifecycle tests; see the dated Copilot Store verification record.
 
+On Windows, the editor and its integrated terminal must run as a standard user without backup/restore privileges; an Administrator editor can read context but is rejected by runner protection checks. Complete native trust/tool confirmations while the supervised attempt is still active. If the supervisor deadline expires, pending begin/report commands belong to that expired attempt; inspect its state and use a fresh approved retry rather than treating late commands as continuation. Current live CLI checks also found denied bundled skill paths outside the granted worktree/runtime. A completed task alone does not establish a fully verified review/repair lifecycle; see [Windows live findings](verification/2026-11-22-windows-live-store.md).
+
 Execution commands use explicit scope:
 
 ```sh

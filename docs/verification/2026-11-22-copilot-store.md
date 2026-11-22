@@ -1,5 +1,7 @@
 # Copilot Store implementation — 2026-11-22
 
+Subsequent real Windows/OpenSpec checks and test-fixture corrections are recorded in [Windows live verification](2026-11-22-windows-live-store.md). The original results below remain historical; consult the later record for native passes, blockers and final revised-suite results.
+
 Implementation is on the existing dev checkout with user authorization. SDK installation was restored to the already locked @microsoft/copilot-sdk 2.0.1. Existing untracked IDE configuration was preserved.
 
 ## Changes

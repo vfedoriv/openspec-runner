@@ -28,7 +28,13 @@ test("bounded process observes nonzero, timeout, signal readiness and descendant
   const failed = await boundedChild(process.execPath, ["-e", "process.exit(7)"], { timeoutMs: 500 });
   assert.equal(failed.evidence.exitCode, 7);
   const timeout = await boundedChild(process.execPath, ["-e", "setInterval(()=>{},1000)"], { timeoutMs: 100 });
-  assert.equal(timeout.evidence.timedOut, true); assert.equal(timeout.evidence.signal, "SIGKILL");
+  assert.equal(timeout.evidence.timedOut, true);
+  if (process.platform === "win32") {
+    // Windows reports a numeric termination status instead of a POSIX signal.
+    assert.equal(timeout.evidence.signal, null);
+    assert.notEqual(timeout.evidence.exitCode, 0);
+    assert.equal(timeout.evidence.processObservationSupported, false);
+  } else assert.equal(timeout.evidence.signal, "SIGKILL");
   if (process.platform === "linux") {
     const interrupted = await boundedChild(process.execPath, ["-e", 'require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});setInterval(()=>{},1000)'], { interrupt: true, timeoutMs: 1000 });
     assert.equal(interrupted.evidence.readinessObserved, true); assert.equal(interrupted.evidence.signal, "SIGINT");
@@ -76,7 +82,7 @@ test("catalog rejects tainted metadata instead of retaining arbitrary JSON", asy
   }
 });
 
-test("partial stdout before actual SIGINT cannot satisfy interrupted acceptance", async () => {
+test("partial stdout before actual SIGINT cannot satisfy interrupted acceptance", { skip: process.platform !== "linux" && "Actual POSIX signal readiness requires Linux process observation" }, async () => {
   const result = await boundedChild(process.execPath,["-e",'process.on("SIGINT",()=>process.exit(130));process.stdout.write("partial{");require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});setInterval(()=>{},1000)'],{interrupt:true,timeoutMs:1000});
   assert.equal(result.evidence.exitCode,130); assert.equal(result.evidence.stdoutEmpty,false);
   assert.equal(discoverySucceeded({interruptionRequested:true,scopes:[result.evidence]}),false);
@@ -92,12 +98,14 @@ test("stale owned identities cannot seed descendant adoption or signal an unrela
   assert.ok(current);
   const stale = { pid: sentinel.pid, started: `${current.createdAt}-stale` };
   const owned = new Map([[stale.pid, stale]]);
-  const rows = [{ pid: stale.pid, started: current.createdAt, ppid: 1, state: "S" }, { pid: 2147483646, started: String(BigInt(current.createdAt) + 1n), ppid: stale.pid, state: "S" }];
+  // Synthetic ancestry uses Linux /proc tokens; the real sentinel below keeps
+  // the host's actual creation identity (an ISO timestamp on Windows).
+  const rows = [{ pid: stale.pid, started: "100", ppid: 1, state: "S" }, { pid: 2147483646, started: "101", ppid: stale.pid, state: "S" }];
   assert.deepEqual(ownedProcessRows(rows, { pid: 2147483647, started: "old-root" }, owned), []);
   assert.equal(owned.has(2147483646), false);
   assert.deepEqual(ownedProcessRows(rows, stale, new Map()), []);
   const liveOwned = new Map();
-  assert.deepEqual(ownedProcessRows(rows, { pid: stale.pid, started: current.createdAt }, liveOwned).map(row => row.pid), [2147483646]);
+  assert.deepEqual(ownedProcessRows(rows, { pid: stale.pid, started: "100" }, liveOwned).map(row => row.pid), [2147483646]);
   assert.equal(signalOwnedIdentity(stale, "SIGKILL"), false);
   assert.equal(observeProcess(sentinel.pid)?.createdAt, current.createdAt);
 });
@@ -164,7 +172,7 @@ test("discovery retains provider label separately from selectors and unobserved 
   assert.equal(result.requestedModel,null);assert.equal(result.observedModel,null);assert.equal(result.inferenceStarted,false);
 });
 
-test("bounded child delivers explicit SIGTERM after descendant readiness", async () => {
+test("bounded child delivers explicit SIGTERM after descendant readiness", { skip: process.platform !== "linux" && "Actual POSIX signal readiness requires Linux process observation" }, async () => {
   const result=await boundedChild(process.execPath,["-e",'require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});setInterval(()=>{},1000)'],{interrupt:true,interruptSignal:"SIGTERM",timeoutMs:1000});
   assert.equal(result.evidence.readinessObserved,true);
   assert.equal(result.evidence.signal,"SIGTERM");

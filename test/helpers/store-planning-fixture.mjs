@@ -5,8 +5,8 @@ import { git } from "./feature-fixture.mjs";
 
 export { git };
 
-export function storePlanningFixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), "runner-store-planning-"));
+export function storePlanningFixture(t, { prefix = "runner-store-planning-" } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const storeRoot = join(dir, "store"), code = join(dir, "code");
   for (const root of [storeRoot, code]) {

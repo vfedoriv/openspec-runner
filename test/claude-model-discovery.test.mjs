@@ -26,7 +26,15 @@ ${timeout ? 'setInterval(()=>{},1000);' : split ? 'for (const byte of bytes) {pr
 process.exitCode=${exitCode};
 `, { mode: 0o755 });
   writeFileSync(join(root, "probe.mjs"), `
-${timeout ? 'const original=AbortSignal.timeout;AbortSignal.timeout=()=>original(250);' : ''}
+${timeout ? `import {existsSync} from 'node:fs';
+AbortSignal.timeout=()=>{
+  const controller=new AbortController();
+  const deadline=Date.now()+5000;
+  const timer=setInterval(()=>{
+    if(existsSync(${JSON.stringify(record)})||Date.now()>=deadline){clearInterval(timer);controller.abort();}
+  },20);
+  return controller.signal;
+};` : ''}
 const {modelCatalog}=await import('./dist/model-catalog.js');
 console.log(JSON.stringify(await modelCatalog('claude',${JSON.stringify(cwd)},${JSON.stringify(configured)},${hidden})));
 `);

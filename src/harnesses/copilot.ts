@@ -6,6 +6,14 @@ import { resolveCommand } from "../platform-command.js";
 import { copilotRules, copilotRulesFile, resolveCopilotSettings } from "./copilot-settings.js";
 import type { HarnessAdapter, HarnessCapabilities } from "./types.js";
 
+function storeSkillArgs(): string[] {
+  return ["implement", "review", "repair"].flatMap(role => {
+    const directory = fileURLToPath(new URL(`../../skills/openspec-runner-${role}`, import.meta.url));
+    return ["--add-dir", directory, "--allow-tool", `read(${resolve(directory, "SKILL.md")})`,
+      "--deny-tool", `write(${resolve(directory, "**")})`];
+  });
+}
+
 // The SDK checks this path directly, rather than resolving a command through PATH.
 function copilotExecutable(cwd: string): string {
   const command = resolveCommand({ executable: "copilot", args: [], cwd });
@@ -27,7 +35,7 @@ export async function copilotCapabilities(cwd = process.cwd()): Promise<HarnessC
   try {
     const version = run("copilot", ["--version"], cwd, 10000), help = run("copilot", ["--help"], cwd, 10000);
     const missing = ["--model", "--trust-folder", "--prompt", "--add-dir", "--allow-tool"].filter(flag => !help.includes(flag));
-    return { harness: "copilot", installed: true, version, supported: !missing.length, reasons: missing.map(flag => `Copilot lacks ${flag}`), features: { ...features, exactResume: !missing.length && help.includes("--resume") } };
+    return { harness: "copilot", installed: true, version, supported: !missing.length, reasons: missing.map(flag => `Copilot lacks ${flag}`), features: { ...features, storeReadPermissions: help.includes("--deny-tool"), exactResume: !missing.length && help.includes("--resume") } };
   } catch (error) { return { harness: "copilot", installed: false, supported: false, reasons: [String(error)], features }; }
 }
 export const copilotHarness: HarnessAdapter = {
@@ -73,12 +81,13 @@ export const copilotHarness: HarnessAdapter = {
   initialInvocation(settings, cwd, common, prompt, _session, store) {
     return { executable: "copilot", args: ["--model", settings.model, "--trust-folder", "-p", prompt, "--add-dir", common,
       "--add-dir", store?.runtimeDir ?? resolve(dirname(cwd), "reports"),
+      ...(store ? storeSkillArgs() : []),
       ...((settings.options?.allowedTools as string[] | undefined) ?? []).flatMap(t => ["--allow-tool", t])], cwd };
   },
   resumeInvocation(settings, cwd, _common, session, store) {
     if (!/^[a-zA-Z0-9_-]+$/.test(session)) throw new Error("Invalid Copilot session ID");
     return { executable: "copilot", args: ["--resume", session, "--model", settings.model,
-      ...(store ? ["--add-dir", store.runtimeDir] : [])], cwd };
+      ...(store ? ["--add-dir", store.runtimeDir, ...storeSkillArgs()] : [])], cwd };
   },
   planningRules: (r, c) => copilotRules("copilot", r, c),
 };

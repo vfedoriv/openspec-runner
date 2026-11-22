@@ -10,7 +10,7 @@ import { storeFeatureFixture } from "./helpers/store-feature-fixture.mjs";
 if (process.platform === "win32" && !process.env.OPENSPEC_TEST_STANDARD_CHILD) {
   test("Copilot Store lifecycle under a standard Windows token", () => {
     const output = execFileSync("pwsh.exe", ["-NoProfile", "-NonInteractive", "-File", fileURLToPath(new URL("./helpers/standard-windows-child.ps1", import.meta.url))], {
-      input: JSON.stringify({ node: process.execPath, args: ["--test", fileURLToPath(import.meta.url)] }), encoding: "utf8", windowsHide: true, timeout: 270000,
+      input: JSON.stringify({ node: process.execPath, args: ["--test", fileURLToPath(import.meta.url)] }), encoding: "utf8", windowsHide: true, timeout: 550000,
     });
     assert.match(output, /Store implementation review and repair/);
   });

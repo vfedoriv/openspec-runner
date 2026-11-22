@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "nod
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { getHarness } from "../dist/harnesses/registry.js";
 import { prepareStoreCopilotHooks } from "../dist/harnesses/copilot-store-hooks.js";
 import { armHookLease, recordHook } from "../dist/harnesses/copilot-hooks.js";
@@ -47,11 +48,19 @@ test("Store hooks are disposable, preserve user files and bind only scoped root 
 });
 
 test("Copilot CLI grants the selected Store runtime on launch and resume", () => {
-  const scope = { root: resolve("store"), common: resolve("store/.git"), runtimeDir: resolve("store/.openspec-runner/owner/runtime"), contextPaths: [] };
+  const scope = { root: resolve("store"), common: resolve("store/.git"), runtimeDir: resolve("store/.openspec-runner/owner/runtime"), contextPaths: [resolve("store/.openspec-runner/owner/runtime/context")] };
   const harness = getHarness("copilot"), settings = { model: "auto" };
   for (const invocation of [harness.initialInvocation(settings, resolve("worker"), resolve("code/.git"), "prompt", "", scope), harness.resumeInvocation(settings, resolve("worker"), resolve("code/.git"), "session", scope)]) {
     assert.ok(invocation.args.includes(scope.runtimeDir));
     assert.ok(!invocation.args.includes(scope.root));
+    for (const role of ["implement", "review", "repair"]) {
+      const directory = fileURLToPath(new URL(`../skills/openspec-runner-${role}/`, import.meta.url)).replace(/[\\/]$/, "");
+      assert.ok(invocation.args.includes(directory), `missing ${role} skill directory`);
+      assert.ok(invocation.args.includes(`read(${join(directory, "SKILL.md")})`));
+      assert.ok(invocation.args.includes(`write(${join(directory, "**")})`));
+      assert.equal(invocation.args[invocation.args.indexOf(`read(${join(directory, "SKILL.md")})`) - 1], "--allow-tool");
+      assert.equal(invocation.args[invocation.args.indexOf(`write(${join(directory, "**")})`) - 1], "--deny-tool");
+    }
   }
 });
 

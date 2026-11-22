@@ -15,7 +15,11 @@ const timeout = Number(process.env.OPENSPEC_TEST_TIMEOUT_MS ?? 300000);
 if (!Number.isSafeInteger(timeout) || timeout <= 0) throw new Error("OPENSPEC_TEST_TIMEOUT_MS must be a positive integer");
 // Three protected code-clone imports plus supervised work, dependent assignment,
 // delivery and Store archival form one sequential integration fixture.
-const integrationTimeouts = new Map([[fileURLToPath(new URL("../store-only-multi-repo.test.mjs", import.meta.url)), 600000]]);
+// The Copilot Store fixture runs implementation/review/repair for both surfaces.
+const integrationTimeouts = new Map([
+  [fileURLToPath(new URL("../store-only-multi-repo.test.mjs", import.meta.url)), 600000],
+  [fileURLToPath(new URL("../copilot-store-lifecycle.test.mjs", import.meta.url)), 600000],
+]);
 const fileSet = new Set(files), timers = new Map();
 const controller = new AbortController();
 const abort = () => { process.exitCode = 1; controller.abort(new Error("Test run interrupted")); };

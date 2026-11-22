@@ -65,14 +65,20 @@ test("invalid-model acceptance requires model rejection rather than unrelated st
 test("hooks-disabled scenario accepts exact early launch rejection without any worker", async () => {
   const { runLifecycle } = await import("./live/lifecycle-acceptance.mjs");
   const result = await runLifecycle({ agent: "copilot", scenario: "hooks-disabled", model: "auto", infer: true, timeoutMs: 30000 });
-  assert.equal(result.status, "PASS");
-  assert.equal(result.receipt.diagnostic, "required-hooks-missing-before-worker");
-  assert.equal(result.receipt.attempts.length, 1);
-  assert.equal(result.receipt.attempts[0].worker.pid, undefined);
-  assert.equal(result.receipt.attempts[0].worker.launcher, undefined);
-  assert.equal(result.receipt.attempts[0].worker.exitCode, null);
-  assert.equal(result.receipt.attempts[0].report, null);
-  assert.equal(result.receipt.workerStarted, false);
+  if (process.platform !== "linux") {
+    assert.equal(result.status, "BLOCKED");
+    assert.equal(result.child.exitCode, 0);
+    assert.equal(result.child.processObservationSupported, false);
+    assert.match(result.reason, /process observation unavailable/i);
+  } else assert.equal(result.status, "PASS");
+  const receipt = result.receipt ?? JSON.parse(readFileSync(join(result.root, "receipt.json"), "utf8"));
+  assert.equal(receipt.diagnostic, "required-hooks-missing-before-worker");
+  assert.equal(receipt.attempts.length, 1);
+  assert.equal(receipt.attempts[0].worker.pid, undefined);
+  assert.equal(receipt.attempts[0].worker.launcher, undefined);
+  assert.equal(receipt.attempts[0].worker.exitCode, null);
+  assert.equal(receipt.attempts[0].report, null);
+  assert.equal(receipt.workerStarted, false);
 });
 
 test("extension scenarios require matching explicit approval and interruption opt-ins", async () => {
