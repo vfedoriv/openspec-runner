@@ -223,3 +223,42 @@ test("termination sends no further signal after a late observed group failure",p
   finally{fs.readdirSync=read;cp.execFileSync=execute;syncBuiltinESMExports()}
   assert.equal(failed,true);assert.equal(signalsAfterFailure,0);
 });
+
+test("Linux preparation freezes a running leader before thread churn census",pidfd,async t=>{
+  const churn=spawn('python3',['-I','-S','-c','import threading,time\nwhile True:\n t=threading.Thread(target=lambda: time.sleep(0.0001));t.start();t.join()\n'],{stdio:'ignore'});
+  await once(churn,'spawn');t.after(()=>{try{churn.kill('SIGKILL')}catch{}});
+  const [launcher]=await children(t,1);
+  await new Promise(resolve=>setTimeout(resolve,40));
+  const root=p.observeProcess(churn.pid);assert.ok(root);
+  let taskReads=0,published=false;
+  mockBuiltin(t,'readdirSync',original=>function(path,...args){
+    let rows=original.call(this,path,...args);
+    if(path===`/proc/${root.pid}/task`){
+      taskReads++;
+      if(!['T','Z'].includes(p.observeProcess(root.pid)?.state)){
+        // Widen a real scheduling race; never fabricate procfs values.
+        const deadline=Date.now()+1000;
+        while(rows.length===1&&Date.now()<deadline)rows=original.call(this,path,...args);
+        assert.ok(rows.length>1,'Require a genuine ephemeral thread');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
+      }
+    }
+    return rows;
+  });
+  const receipt=p.prepareLinuxStop({provenance:p.linuxProvenance(),roots:[root,launcher],retained:[],timeoutMs:3000,publish(){published=true}});
+  assert.ok(published);assert.ok(taskReads>=4,'Require two complete task-group scans');assert.ok(p.linuxStopIsGone(receipt));
+});
+
+for(const code of ['EACCES','EIO'])test(`Linux freeze rejects ${code} task census without publishing or killing`,pidfd,async t=>{
+  const roots=await children(t);let published=false,kills=0;
+  mockBuiltin(t,'readdirSync',original=>function(path,...args){
+    if(path===`/proc/${roots[0].pid}/task`)throw Object.assign(new Error('unreadable task group'),{code});
+    return original.call(this,path,...args);
+  });
+  const execute=cp.execFileSync;
+  cp.execFileSync=function(command,args,options){if(command==='python3'&&JSON.parse(options.input).operation==='SIGKILL')kills++;return execute.call(this,command,args,options)};
+  syncBuiltinESMExports();t.after(()=>{cp.execFileSync=execute;syncBuiltinESMExports()});
+  assert.throws(()=>p.prepareLinuxStop({provenance:p.linuxProvenance(),roots,retained:[],timeoutMs:3000,publish(){published=true}}),/Incomplete Linux thread-group observation/);
+  assert.equal(published,false);assert.equal(kills,0);
+  assert.ok(roots.every(r=>p.observeProcess(r.pid)?.createdAt===r.createdAt));
+});

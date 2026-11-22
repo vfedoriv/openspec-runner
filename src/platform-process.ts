@@ -191,6 +191,19 @@ export function prepareLinuxStop(input: {
         if (Date.now() >= deadline) throw new Error("Linux freeze deadline expired");
         const current = rows.find(r => r.pid === member.pid);
         if (!current) continue;
+        // A running leader cannot establish a stopped group. Freeze its exact
+        // identity first so ordinary thread churn cannot invalidate the census.
+        // Caller-stopped, zombie and tracing leaders retain strict group checks.
+        if (["R", "S", "D", "I"].includes(current.state ?? "")) {
+          const fresh = observeProcess(member.pid);
+          if (fresh?.createdAt !== member.createdAt) throw new Error("Identity changed before freeze");
+          if (["R", "S", "D", "I"].includes(fresh.state ?? "")) {
+            signalLinuxIdentity(member, input.provenance, "SIGSTOP", deadline - Date.now());
+            introduced.set(member.pid, member);
+            allStopped = false;
+            continue;
+          }
+        }
         const group = linuxGroupState(member);
         if (!group) throw new Error("Incomplete Linux thread-group observation");
         groupKeys.push(group.key);
